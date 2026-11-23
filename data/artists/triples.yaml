@@ -1,0 +1,199 @@
+id: triples
+name: tripleS
+cosmoArtistName: tripleS
+isPrimary: true
+accentColor: "#22AEFF"
+debutDate: "2023-02-13"
+members:
+  - id: triples-seoyeon
+    code: S1
+    memberOrder: 1
+    name: SeoYeon
+    fullName: Yoon SeoYeon
+    cosmoName: SeoYeon
+    hexColor: "#22AEFF"
+    revealDate: "2022-05-01"
+  - id: triples-hyerin
+    code: S2
+    memberOrder: 2
+    name: HyeRin
+    fullName: Jeong HyeRin
+    cosmoName: HyeRin
+    hexColor: "#9200FF"
+    revealDate: "2022-05-17"
+  - id: triples-jiwoo
+    code: S3
+    memberOrder: 3
+    name: JiWoo
+    fullName: Lee JiWoo
+    cosmoName: JiWoo
+    hexColor: "#FFF800"
+    revealDate: "2022-06-01"
+  - id: triples-chaeyeon
+    code: S4
+    memberOrder: 4
+    name: ChaeYeon
+    fullName: Kim ChaeYeon
+    cosmoName: ChaeYeon
+    hexColor: "#98F21D"
+    revealDate: "2022-06-22"
+  - id: triples-yooyeon
+    code: S5
+    memberOrder: 5
+    name: YooYeon
+    fullName: Kim YooYeon
+    cosmoName: YooYeon
+    hexColor: "#DB0C74"
+    revealDate: "2022-07-15"
+  - id: triples-soomin
+    code: S6
+    memberOrder: 6
+    name: SooMin
+    fullName: Kim SooMin
+    cosmoName: SooMin
+    hexColor: "#FC83A4"
+    revealDate: "2022-08-08"
+  - id: triples-nakyoung
+    code: S7
+    memberOrder: 7
+    name: NaKyoung
+    fullName: Kim NaKyoung
+    cosmoName: NaKyoung
+    hexColor: "#6799A0"
+    revealDate: "2022-08-22"
+  - id: triples-yubin
+    code: S8
+    memberOrder: 8
+    name: YuBin
+    fullName: Gong YuBin
+    cosmoName: YuBin
+    hexColor: "#FFE3E2"
+    revealDate: "2022-09-09"
+  - id: triples-kaede
+    code: S9
+    memberOrder: 9
+    name: Kaede
+    fullName: Yamada Kaede
+    cosmoName: Kaede
+    hexColor: "#FFC935"
+    revealDate: "2022-11-09"
+  - id: triples-dahyun
+    code: S10
+    memberOrder: 10
+    name: DaHyun
+    fullName: Seo DaHyun
+    cosmoName: DaHyun
+    hexColor: "#FF9AD6"
+    revealDate: "2022-12-09"
+  - id: triples-kotone
+    code: S11
+    memberOrder: 11
+    name: Kotone
+    fullName: Kamimoto Kotone
+    cosmoName: Kotone
+    hexColor: "#FFDE00"
+    revealDate: "2023-01-02"
+  - id: triples-yeonji
+    code: S12
+    memberOrder: 12
+    name: YeonJi
+    fullName: Kwak YeonJi
+    cosmoName: YeonJi
+    hexColor: "#5974FF"
+    revealDate: "2023-01-18"
+  - id: triples-nien
+    code: S13
+    memberOrder: 13
+    name: Nien
+    fullName: Nien
+    cosmoName: Nien
+    hexColor: "#FF953F"
+    revealDate: "2023-03-20"
+  - id: triples-sohyun
+    code: S14
+    memberOrder: 14
+    name: SoHyun
+    fullName: Park SoHyun
+    cosmoName: SoHyun
+    hexColor: "#1222B5"
+    revealDate: "2023-04-14"
+  - id: triples-xinyu
+    code: S15
+    memberOrder: 15
+    name: Xinyu
+    fullName: Zhou Xinyu
+    cosmoName: Xinyu
+    hexColor: "#D51313"
+    revealDate: "2023-07-02"
+  - id: triples-mayu
+    code: S16
+    memberOrder: 16
+    name: Mayu
+    fullName: Koma Mayu
+    cosmoName: Mayu
+    hexColor: "#FE8E76"
+    revealDate: "2023-07-19"
+  - id: triples-lynn
+    code: S17
+    memberOrder: 17
+    name: Lynn
+    fullName: Kawakami Lynn
+    cosmoName: Lynn
+    hexColor: "#AC62B7"
+    revealDate: "2023-12-26"
+  - id: triples-joobin
+    code: S18
+    memberOrder: 18
+    name: JooBin
+    fullName: JooBin
+    cosmoName: JooBin
+    hexColor: "#B7F54C"
+    revealDate: "2023-12-27"
+  - id: triples-hayeon
+    code: S19
+    memberOrder: 19
+    name: HaYeon
+    fullName: Jeong HaYeon
+    cosmoName: HaYeon
+    hexColor: "#52D9BB"
+    revealDate: "2023-12-28"
+  - id: triples-shion
+    code: S20
+    memberOrder: 20
+    name: ShiOn
+    fullName: Park ShiOn
+    cosmoName: ShiOn
+    hexColor: "#FF428A"
+    revealDate: "2023-12-29"
+  - id: triples-chaewon
+    code: S21
+    memberOrder: 21
+    name: ChaeWon
+    fullName: Kim ChaeWon
+    cosmoName: ChaeWon
+    hexColor: "#C7A3E0"
+    revealDate: "2024-04-01"
+  - id: triples-sullin
+    code: S22
+    memberOrder: 22
+    name: Sullin
+    fullName: Pirada Bunraksa
+    cosmoName: Sullin
+    hexColor: "#7BBA8D"
+    revealDate: "2024-04-02"
+  - id: triples-seoah
+    code: S23
+    memberOrder: 23
+    name: SeoAh
+    fullName: Jeong SeoAh
+    cosmoName: SeoAh
+    hexColor: "#CFF3FF"
+    revealDate: "2024-04-03"
+  - id: triples-jiyeon
+    code: S24
+    memberOrder: 24
+    name: JiYeon
+    fullName: Ji SeoYeon
+    cosmoName: JiYeon
+    hexColor: "#FFAB62"
+    revealDate: "2024-04-04"

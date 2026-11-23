@@ -1,0 +1,29 @@
+artistId: artms
+events:
+  - id: artms-oec-version-up
+    eventDate: "2023-07-12"
+    category: subunit
+    title: "ODD EYE CIRCLE — Version Up (Air Force One)"
+    summary: "Kim Lip, JinSoul, and Choerry return under Modhaus with Version Up."
+    members: ["artms-kimlip", "artms-jinsoul", "artms-choerry"]
+
+  - id: artms-heejin-k
+    eventDate: "2023-10-31"
+    category: comeback
+    title: "HeeJin Solo Mini Album — K (Algorithm)"
+    summary: "HeeJin releases solo mini album K under Modhaus."
+    members: ["artms-heejin"]
+
+  - id: artms-dall-debut
+    eventDate: "2024-05-31"
+    category: comeback
+    title: "ARTMS Debut Studio Album — DALL (Virtual Angel)"
+    summary: "Full 5-member ARTMS re-debut with 'Virtual Angel'."
+    members: []
+
+  - id: artms-cosmo-abstract-migration
+    eventDate: "2025-04-18"
+    category: gravity
+    title: "COSMO Blockchain Migration (Polygon → Abstract)"
+    summary: "Modhaus migrates COSMO Objekts, COMO, and Gravity from Polygon to Abstract L2."
+    members: []

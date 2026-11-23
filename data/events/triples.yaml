@@ -1,0 +1,87 @@
+artistId: triples
+events:
+  - id: triples-s1-reveal
+    eventDate: "2022-05-01"
+    category: reveal
+    title: "S1 Yoon SeoYeon Revealed"
+    summary: "First tripleS member revealed and Atom01 COSMO era begins."
+    members: ["triples-seoyeon"]
+
+  - id: triples-aaa-debut
+    eventDate: "2022-10-28"
+    category: subunit
+    title: "Acid Angel from Asia Debut (Generation)"
+    summary: "First fan-voted DIMENSION sub-unit debuts with viral hit 'Generation'."
+    members: ["triples-hyerin", "triples-yooyeon", "triples-nakyoung", "triples-yubin"]
+
+  - id: triples-assemble-debut
+    eventDate: "2023-02-13"
+    category: comeback
+    title: "ASSEMBLE Full 10-Member Debut (Rising)"
+    summary: "First OT10 full-group mini album ASSEMBLE with title track 'Rising'."
+    members: []
+
+  - id: triples-kre-debut
+    eventDate: "2023-05-04"
+    category: subunit
+    title: "+(KR)ystal Eyes Debut (Cherry Talk)"
+    summary: "Second DIMENSION sub-unit releases AESTHETIC."
+    members: ["triples-seoyeon", "triples-jiwoo", "triples-chaeyeon", "triples-soomin"]
+
+  - id: triples-lovelution-debut
+    eventDate: "2023-08-17"
+    category: subunit
+    title: "LOVElution Debut (Girls' Capitalism)"
+    summary: "8-member DIMENSION releases ↀ with title track 'Girls' Capitalism'."
+    members: ["triples-seoyeon", "triples-hyerin", "triples-yubin", "triples-kaede", "triples-dahyun", "triples-nien", "triples-sohyun", "triples-xinyu"]
+
+  - id: triples-evolution-debut
+    eventDate: "2023-10-11"
+    category: subunit
+    title: "EVOLution Debut (Invincible)"
+    summary: "8-member DIMENSION releases ⟡ with title track 'Invincible'."
+    members: ["triples-jiwoo", "triples-chaeyeon", "triples-yooyeon", "triples-soomin", "triples-nakyoung", "triples-kotone", "triples-yeonji", "triples-mayu"]
+
+  - id: triples-nxt-reveal
+    eventDate: "2023-12-26"
+    endDate: "2023-12-29"
+    category: reveal
+    title: "NXT Members S17–S20 Revealed"
+    summary: "Lynn, JooBin, HaYeon, and ShiOn revealed across four consecutive days."
+    members: ["triples-lynn", "triples-joobin", "triples-hayeon", "triples-shion"]
+
+  - id: triples-glow-reveal
+    eventDate: "2024-04-01"
+    endDate: "2024-04-04"
+    category: reveal
+    title: "Glow Members S21–S24 Revealed (Complete OT24)"
+    summary: "ChaeWon, Sullin, SeoAh, and JiYeon complete the 24-member tripleS lineup."
+    members: ["triples-chaewon", "triples-sullin", "triples-seoah", "triples-jiyeon"]
+
+  - id: triples-assemble24-debut
+    eventDate: "2024-05-08"
+    category: comeback
+    title: "ASSEMBLE24 Full 24-Member Comeback (Girls Never Die)"
+    summary: "First full OT24 studio album and breakout music show wins for 'Girls Never Die'."
+    members: []
+
+  - id: triples-vv-debut
+    eventDate: "2024-10-23"
+    category: subunit
+    title: "Visionary Vision Debut (Hit the Floor)"
+    summary: "12-member dance-focused DIMENSION releases Performante."
+    members: ["triples-hyerin", "triples-yooyeon", "triples-nakyoung", "triples-yubin", "triples-kaede", "triples-kotone", "triples-yeonji", "triples-nien", "triples-sohyun", "triples-xinyu", "triples-lynn", "triples-jiyeon"]
+
+  - id: triples-cosmo-abstract-migration
+    eventDate: "2025-04-18"
+    category: gravity
+    title: "COSMO Blockchain Migration (Polygon → Abstract)"
+    summary: "Modhaus migrates COSMO Objekts, COMO, and Gravity from Polygon to Abstract L2."
+    members: []
+
+  - id: triples-assemble25-comeback
+    eventDate: "2025-05-12"
+    category: comeback
+    title: "ASSEMBLE25 OT24 Comeback (Are You Alive)"
+    summary: "Second full 24-member studio comeback."
+    members: []

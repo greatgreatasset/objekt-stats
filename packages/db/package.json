@@ -1,0 +1,27 @@
+{
+  "name": "@objekt-stats/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./curation": "./src/curation/schemas.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:seed-sql": "tsx src/seed-sql.ts",
+    "validate:data": "tsx src/curation/validate.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.41.0",
+    "yaml": "^2.7.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250401.0",
+    "@types/node": "^22.14.0",
+    "drizzle-kit": "^0.30.6"
+  }
+}

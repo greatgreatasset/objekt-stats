@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "objekt-stats",
+  "main": "@tanstack/react-start/server-entry",
+  "compatibility_date": "2026-11-23",
+  "observability": {
+    "enabled": true,
+    "traces": {
+      "enabled": true
+    }
+  },
+  "routes": [
+    {
+      "pattern": "objektstats.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.objektstats.com",
+      "custom_domain": true
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "objekt-stats-db",
+      "database_id": "21a85620-d9f3-4f27-aebf-2298dfcf0b35",
+      "migrations_dir": "../../packages/db/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SNAPSHOTS",
+      "bucket_name": "objekt-stats-snapshots"
+    }
+  ]
+}

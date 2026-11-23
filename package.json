@@ -1,0 +1,28 @@
+{
+  "name": "objekt-stats",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@objekt-stats/web",
+    "build": "npm run build --workspace=@objekt-stats/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "validate:data": "npm run validate:data --workspace=@objekt-stats/db",
+    "db:generate": "npm run db:generate --workspace=@objekt-stats/db",
+    "db:seed-sql": "npm run db:seed-sql --workspace=@objekt-stats/db",
+    "db:migrate:local": "npm run db:migrate:local --workspace=@objekt-stats/web",
+    "db:seed:local": "npm run db:seed:local --workspace=@objekt-stats/web"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.1.1"
+  }
+}

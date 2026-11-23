@@ -1,0 +1,40 @@
+{
+  "name": "@objekt-stats/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && wrangler deploy",
+    "cf-typegen": "wrangler types",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply objekt-stats-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply objekt-stats-db --remote",
+    "db:seed:local": "wrangler d1 execute objekt-stats-db --local --file=../../packages/db/generated/seed-curation.sql",
+    "db:seed:remote": "wrangler d1 execute objekt-stats-db --remote --file=../../packages/db/generated/seed-curation.sql"
+  },
+  "dependencies": {
+    "@objekt-stats/db": "*",
+    "@objekt-stats/stats": "*",
+    "@tanstack/react-router": "^1.132.0",
+    "@tanstack/react-start": "^1.132.0",
+    "drizzle-orm": "^0.41.0",
+    "lucide-react": "^0.511.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.12.0",
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.8.2",
+    "vite": "^8.0.0",
+    "wrangler": "^4.164.0"
+  }
+}

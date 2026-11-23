@@ -1,0 +1,47 @@
+id: artms
+name: ARTMS
+cosmoArtistName: ARTMS
+isPrimary: false
+accentColor: "#ED0090"
+debutDate: "2024-05-31"
+members:
+  - id: artms-heejin
+    code: A1
+    memberOrder: 1
+    name: HeeJin
+    fullName: Jeon HeeJin
+    cosmoName: HeeJin
+    hexColor: "#ED0090"
+    revealDate: "2016-10-05"
+  - id: artms-haseul
+    code: A2
+    memberOrder: 2
+    name: HaSeul
+    fullName: Jo HaSeul
+    cosmoName: HaSeul
+    hexColor: "#00A652"
+    revealDate: "2016-12-15"
+  - id: artms-kimlip
+    code: A3
+    memberOrder: 3
+    name: Kim Lip
+    fullName: Kim JungEun
+    cosmoName: KimLip
+    hexColor: "#EF1841"
+    revealDate: "2017-05-23"
+  - id: artms-jinsoul
+    code: A4
+    memberOrder: 4
+    name: JinSoul
+    fullName: Jung JinSol
+    cosmoName: JinSoul
+    hexColor: "#1724A7"
+    revealDate: "2017-06-26"
+  - id: artms-choerry
+    code: A5
+    memberOrder: 5
+    name: Choerry
+    fullName: Choi YeRim
+    cosmoName: Choerry
+    hexColor: "#7C2E87"
+    revealDate: "2017-07-28"
