@@ -58,6 +58,10 @@ export interface AnomalyThresholds {
   minRankDelta: number;
   minRelativeIndexPctChange: number;
   minZScoreShift: number;
+  /** Minimum roster-normalized percentile shift (0..1) for rank-percentile alerts. */
+  minPercentileShift: number;
+  /** Minimum participating members in a round before updating baselines or flagging anomalies (excludes 2–5 member subunit drops). */
+  minParticipatingMembers: number;
   /** Minimum total unique buyers across a round before anomalies are flagged (filters tiny promo/noise drops). */
   minRoundUniqueBuyers: number;
 }
@@ -65,14 +69,18 @@ export interface AnomalyThresholds {
 export const DEFAULT_THRESHOLDS_BY_ARTIST: Record<string, AnomalyThresholds> = {
   triples: {
     minRankDelta: 5,
-    minRelativeIndexPctChange: 0.3,
+    minRelativeIndexPctChange: 0.25,
     minZScoreShift: 1.5,
+    minPercentileShift: 0.35,
+    minParticipatingMembers: 6,
     minRoundUniqueBuyers: 150,
   },
   artms: {
     minRankDelta: 2,
-    minRelativeIndexPctChange: 0.25,
-    minZScoreShift: 1.35,
+    minRelativeIndexPctChange: 0.22,
+    minZScoreShift: 1.4,
+    minPercentileShift: 0.45,
+    minParticipatingMembers: 4,
     minRoundUniqueBuyers: 50,
   },
 };
@@ -214,6 +222,7 @@ export function computeArtistSeriesStats(
 
   interface HistoryPoint {
     rank: number;
+    percentile: number;
     relativeIndex: number;
     zScore: number;
   }
@@ -230,12 +239,20 @@ export function computeArtistSeriesStats(
       ...customThresholds,
     };
 
-    // Gate anomaly detection & baselines on meaningful round volume (filters tiny promo/stray mints)
+    // Gate anomaly detection & baselines on meaningful round volume and comparable roster size
+    // (filters tiny promo/stray mints AND 2–5 member subunit drops whose raw ranks cannot be compared to 24-member rounds)
     const roundBuyerVolume = baseStats.reduce((sum, s) => sum + s.uniqueBuyers, 0);
-    const meetsVolumeThreshold = roundBuyerVolume >= thresholds.minRoundUniqueBuyers;
+    const participatingCount = baseStats.length;
+    const meetsVolumeThreshold =
+      roundBuyerVolume >= thresholds.minRoundUniqueBuyers &&
+      participatingCount >= thresholds.minParticipatingMembers;
 
     for (const stat of baseStats) {
       const history = memberHistory.get(stat.memberId) ?? [];
+      const percentile =
+        participatingCount > 1
+          ? (participatingCount - stat.uniqueBuyersRank) / (participatingCount - 1)
+          : 0.5;
 
       if (round.includeInPopularity && meetsVolumeThreshold) {
         const prev = history[history.length - 1];
@@ -246,39 +263,64 @@ export function computeArtistSeriesStats(
         if (history.length >= 2) {
           const prior5 = history.slice(-5);
           const baselineRank = meanOf(prior5.map((h) => h.rank));
+          const baselinePct = meanOf(prior5.map((h) => h.percentile));
           const baselineRelIdx = meanOf(prior5.map((h) => h.relativeIndex));
           const baselineZ = meanOf(prior5.map((h) => h.zScore));
 
           const rankShift = baselineRank - stat.uniqueBuyersRank;
+          const pctShift = percentile - baselinePct;
           const relIdxPctShift =
             baselineRelIdx > 0
               ? (stat.uniqueBuyersRelativeIndex - baselineRelIdx) / baselineRelIdx
               : 0;
           const zShift = stat.zScore - baselineZ;
 
-          const reasons: string[] = [];
-          if (Math.abs(rankShift) >= thresholds.minRankDelta) {
-            reasons.push(
-              `Buyers rank ${rankShift > 0 ? "jumped" : "dropped"} ${Math.abs(rankShift).toFixed(1)} spots vs 5-round avg`,
-            );
-          }
-          if (Math.abs(relIdxPctShift) >= thresholds.minRelativeIndexPctChange) {
-            reasons.push(
-              `Buyer share ${relIdxPctShift > 0 ? "surged" : "fell"} ${Math.round(Math.abs(relIdxPctShift) * 100)}% vs baseline`,
-            );
-          }
-          if (Math.abs(zShift) >= thresholds.minZScoreShift) {
-            reasons.push(
-              `Z-score shifted ${zShift > 0 ? "+" : ""}${zShift.toFixed(2)}σ`,
-            );
-          }
+          // Require directional agreement across standardized buyer share + Z-score + roster-normalized percentile
+          const isSurge =
+            (relIdxPctShift >= thresholds.minRelativeIndexPctChange &&
+              zShift >= thresholds.minZScoreShift) ||
+            (zShift >= thresholds.minZScoreShift + 0.65 && relIdxPctShift >= 0.12) ||
+            (pctShift >= thresholds.minPercentileShift &&
+              relIdxPctShift >= 0.18 &&
+              zShift >= 1.1);
 
-          if (reasons.length > 0) {
-            stat.isAnomaly = true;
-            const netSignal =
-              Math.abs(relIdxPctShift) >= 0.05 ? relIdxPctShift : rankShift;
-            stat.anomalyDirection = netSignal >= 0 ? "surge" : "drop";
-            stat.anomalyReason = reasons.join("; ");
+          const isDrop =
+            (relIdxPctShift <= -thresholds.minRelativeIndexPctChange &&
+              zShift <= -thresholds.minZScoreShift) ||
+            (zShift <= -(thresholds.minZScoreShift + 0.65) && relIdxPctShift <= -0.12) ||
+            (pctShift <= -thresholds.minPercentileShift &&
+              relIdxPctShift <= -0.18 &&
+              zShift <= -1.1);
+
+          if (isSurge || isDrop) {
+            const direction: "surge" | "drop" = isSurge ? "surge" : "drop";
+            const sign = direction === "surge" ? 1 : -1;
+            const reasons: string[] = [];
+
+            if (sign * relIdxPctShift >= 0.12) {
+              reasons.push(
+                `Buyer share ${direction === "surge" ? "surged" : "fell"} ${Math.round(Math.abs(relIdxPctShift) * 100)}% vs 5-round baseline`,
+              );
+            }
+            if (sign * zShift >= 1.1) {
+              reasons.push(
+                `Z-score shifted ${zShift > 0 ? "+" : ""}${zShift.toFixed(2)}σ`,
+              );
+            }
+            if (
+              sign * pctShift >= thresholds.minPercentileShift &&
+              sign * rankShift >= thresholds.minRankDelta
+            ) {
+              reasons.push(
+                `Buyers rank ${direction === "surge" ? "jumped" : "dropped"} ${Math.abs(rankShift).toFixed(1)} spots`,
+              );
+            }
+
+            if (reasons.length > 0) {
+              stat.isAnomaly = true;
+              stat.anomalyDirection = direction;
+              stat.anomalyReason = reasons.join("; ");
+            }
           }
         }
 
@@ -286,6 +328,7 @@ export function computeArtistSeriesStats(
           ...history,
           {
             rank: stat.uniqueBuyersRank,
+            percentile,
             relativeIndex: stat.uniqueBuyersRelativeIndex,
             zScore: stat.zScore,
           },

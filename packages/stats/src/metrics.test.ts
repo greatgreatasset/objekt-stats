@@ -211,6 +211,53 @@ describe("computeArtistSeriesStats", () => {
       series.get("r3-whale")?.find((s) => s.memberId === "triples-joobin")?.isAnomaly,
     ).toBe(false);
   });
+
+  it("excludes small 2-4 member subunit drops from full-roster anomaly baselines and never emits contradictory direction badges", () => {
+    const makeFull24 = (slug: string, startAt: string, sohyunBuyers = 300): SaleRoundInput => ({
+      slug,
+      artistId: "triples",
+      startAt,
+      includeInPopularity: true,
+      memberMints: Array.from({ length: 24 }, (_, i) => ({
+        memberId: i === 10 ? "triples-sohyun" : `triples-m${i + 1}`,
+        mintCount: i === 10 ? sohyunBuyers * 2 : (420 - i * 10) * 2,
+        uniqueBuyers: i === 10 ? sohyunBuyers : 420 - i * 10,
+      })),
+    });
+
+    const tinySubunit4: SaleRoundInput = {
+      slug: "subunit-4",
+      artistId: "triples",
+      startAt: "2025-03-01T00:00:00Z",
+      includeInPopularity: true,
+      memberMints: [
+        { memberId: "triples-m1", mintCount: 1000, uniqueBuyers: 500 },
+        { memberId: "triples-m2", mintCount: 950, uniqueBuyers: 480 },
+        { memberId: "triples-m3", mintCount: 900, uniqueBuyers: 460 },
+        { memberId: "triples-sohyun", mintCount: 700, uniqueBuyers: 350 },
+      ],
+    };
+
+    const series = computeArtistSeriesStats([
+      makeFull24("r1", "2025-01-01T00:00:00Z", 300),
+      makeFull24("r2", "2025-02-01T00:00:00Z", 305),
+      tinySubunit4,
+      makeFull24("r3", "2025-04-01T00:00:00Z", 300),
+      makeFull24("r4-surge", "2025-05-01T00:00:00Z", 580),
+    ]);
+
+    // 4-member subunit drop must NOT flag fake rank jump or pollute baseline
+    expect(series.get("subunit-4")?.every((s) => !s.isAnomaly)).toBe(true);
+    // Normal r3 after subunit drop must NOT flag fake rank drop
+    expect(
+      series.get("r3")?.find((s) => s.memberId === "triples-sohyun")?.isAnomaly,
+    ).toBe(false);
+    // True surge must have consistent "surge" direction and upward-only reasons
+    const surge = series.get("r4-surge")?.find((s) => s.memberId === "triples-sohyun")!;
+    expect(surge.isAnomaly).toBe(true);
+    expect(surge.anomalyDirection).toBe("surge");
+    expect(surge.anomalyReason).not.toMatch(/dropped|fell/i);
+  });
 });
 
 describe("correlateEventsForMemberRound", () => {
