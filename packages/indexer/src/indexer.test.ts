@@ -7,6 +7,11 @@ import {
   inferAutoRoundGroup,
   normalizeMemberLookupKey,
 } from "./aggregate.js";
+import {
+  turboSyncPolygonArchive,
+  turboSyncPolygonRpc,
+} from "./chains/polygon.js";
+import { ERC721_TRANSFER_TOPIC, ZERO_TOPIC } from "./constants.js";
 import { normalizeMetadataV3 } from "./cosmo-metadata.js";
 import { IndexerStore } from "./store.js";
 
@@ -278,6 +283,166 @@ describe("aggregateAndEmitSql trade isolation", () => {
         { fromBlock: 50, toBlock: 99 },
         { fromBlock: 301, toBlock: 399 },
         { fromBlock: 501, toBlock: 600 },
+      ]);
+    } finally {
+      store.close();
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("paginates SQD Polygon Portal responses strictly by lastReturnedBlock + 1 without skipping blocks", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "objekt-stats-sqd-"));
+    const store = new IndexerStore(join(workDir, "test.sqlite"));
+    try {
+      const requestedFromBlocks: number[] = [];
+      const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { fromBlock: number; toBlock: number };
+        requestedFromBlocks.push(body.fromBlock);
+
+        if (body.fromBlock === 1000) {
+          // SQD Portal caps response at block 1199 even though toBlock was 1500
+          const ndjson = [
+            JSON.stringify({
+              header: { number: 1050, timestamp: 1700000000 },
+              logs: [
+                {
+                  logIndex: 0,
+                  transactionHash: "0x" + "a".repeat(64),
+                  topics: [
+                    ERC721_TRANSFER_TOPIC,
+                    ZERO_TOPIC,
+                    "0x0000000000000000000000001111111111111111111111111111111111111111",
+                    "0x0000000000000000000000000000000000000000000000000000000000000001",
+                  ],
+                },
+              ],
+            }),
+            JSON.stringify({ header: { number: 1199, timestamp: 1700000300 } }),
+          ].join("\n");
+          return new Response(ndjson, { status: 200 });
+        }
+
+        const ndjson = [
+          JSON.stringify({
+            header: { number: 1350, timestamp: 1700000600 },
+            logs: [
+              {
+                logIndex: 1,
+                transactionHash: "0x" + "b".repeat(64),
+                topics: [
+                  ERC721_TRANSFER_TOPIC,
+                  ZERO_TOPIC,
+                  "0x0000000000000000000000002222222222222222222222222222222222222222",
+                  "0x0000000000000000000000000000000000000000000000000000000000000002",
+                ],
+              },
+            ],
+          }),
+          JSON.stringify({ header: { number: 1500, timestamp: 1700000900 } }),
+        ].join("\n");
+        return new Response(ndjson, { status: 200 });
+      }) as typeof fetch;
+
+      const res = await turboSyncPolygonArchive(store, {
+        fromBlock: 1000,
+        toBlock: 1500,
+        chunkSize: 100_000,
+        includeSpins: false,
+        fetchImpl: mockFetch,
+      });
+
+      expect(requestedFromBlocks).toEqual([1000, 1200]);
+      expect(res.totalMints).toBe(2);
+      expect(res.blocksSynced).toBe(501);
+      expect(store.getMergedSyncedRanges("polygon", "mints")).toEqual([
+        { fromBlock: 1000, toBlock: 1500 },
+      ]);
+      expect(store.getSummaryCounts().mints).toBe(2);
+    } finally {
+      store.close();
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("binary-splits dense Polygon RPC ranges on >20000 results error and retries 429 cleanly", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "objekt-stats-polyrpc-"));
+    const store = new IndexerStore(join(workDir, "test.sqlite"));
+    try {
+      let saw429Once = false;
+      const seenRanges: Array<[number, number]> = [];
+      const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          method: string;
+          params: Array<{ fromBlock: string; toBlock: string }>;
+        };
+        const from = Number(BigInt(body.params[0]!.fromBlock));
+        const to = Number(BigInt(body.params[0]!.toBlock));
+        seenRanges.push([from, to]);
+
+        if (!saw429Once) {
+          saw429Once = true;
+          return new Response("rate limited", { status: 429 });
+        }
+
+        if (to - from + 1 > 5) {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              error: {
+                code: -32602,
+                message: "invalid params",
+                data: "Query returned more than 20000 results.",
+              },
+            }),
+            { status: 200 },
+          );
+        }
+
+        const tokenId = from === 1000 ? 10 : 20;
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: [
+              {
+                blockNumber: "0x" + from.toString(16),
+                blockTimestamp: "0x661d1416",
+                transactionHash: "0x" + String(tokenId).padStart(64, "0"),
+                logIndex: "0x0",
+                topics: [
+                  ERC721_TRANSFER_TOPIC,
+                  ZERO_TOPIC,
+                  "0x0000000000000000000000003333333333333333333333333333333333333333",
+                  "0x" + tokenId.toString(16).padStart(64, "0"),
+                ],
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }) as typeof fetch;
+
+      const res = await turboSyncPolygonRpc(store, {
+        fromBlock: 1000,
+        toBlock: 1009,
+        chunkSize: 10,
+        parallelism: 1,
+        includeSpins: false,
+        fetchImpl: mockFetch,
+        retryDelayMs: 5,
+      });
+
+      expect(seenRanges).toEqual([
+        [1000, 1009], // 429
+        [1000, 1009], // -32602 -> split!
+        [1000, 1004], // left half
+        [1005, 1009], // right half
+      ]);
+      expect(res.totalMints).toBe(2);
+      expect(res.blocksSynced).toBe(10);
+      expect(store.getMergedSyncedRanges("polygon", "mints")).toEqual([
+        { fromBlock: 1000, toBlock: 1009 },
       ]);
     } finally {
       store.close();

@@ -16,6 +16,7 @@ import {
 import {
   syncPolygonArchive,
   turboSyncPolygonArchive,
+  turboSyncPolygonRpc,
 } from "./chains/polygon.js";
 import {
   ABSTRACT_START_BLOCK,
@@ -440,7 +441,9 @@ function exportRoundsDraftYaml(store: IndexerStore, rootDir: string) {
 async function main() {
   const { command, args } = parseArgs(process.argv.slice(2));
   const rootDir = resolve(import.meta.dirname, "../../..");
-  const dbPath = args.get("db") ?? resolve(rootDir, "data/raw/indexer.sqlite");
+  const dbPath = args.get("db")
+    ? resolve(rootDir, args.get("db")!)
+    : resolve(rootDir, "data/raw/indexer.sqlite");
 
   if (command === "aggregate-trades") {
     const roDb = new DatabaseSync(dbPath, { readOnly: true });
@@ -550,32 +553,74 @@ async function main() {
     if (command === "turbo-sync-polygon") {
       const fromBlock = Number(args.get("from") ?? String(POLYGON_START_BLOCK));
       const toBlock = Number(args.get("to") ?? String(POLYGON_END_BLOCK));
-      const chunkSize = Number(args.get("chunk") ?? "100000");
+      const source = args.get("source") === "sqd" ? "sqd" : "rpc";
       const includeSpins = args.get("spins") !== "false";
 
+      if (source === "sqd") {
+        const chunkSize = Number(args.get("chunk") ?? "100000");
+        console.log(
+          `Turbo Polygon SQD archive sync (tripleS + ARTMS): ${fromBlock.toLocaleString()} → ${toBlock.toLocaleString()} (chunk=${chunkSize.toLocaleString()}, spins=${includeSpins})`,
+        );
+        const res = await turboSyncPolygonArchive(store, {
+          fromBlock,
+          toBlock,
+          chunkSize,
+          includeSpins,
+          onProgress: ({
+            block,
+            blocksSynced,
+            totalBlocks,
+            mintsAdded,
+            spinsAdded,
+            chunkSize: cs,
+          }) => {
+            const pct = ((blocksSynced / Math.max(1, totalBlocks)) * 100).toFixed(1);
+            console.log(
+              `  [polygon-sqd] ${pct}% @ block ${block.toLocaleString()} (chunk=${cs.toLocaleString()}) | +${mintsAdded.toLocaleString()} mints, +${spinsAdded.toLocaleString()} spins`,
+            );
+          },
+        });
+        console.log("✓ Turbo Polygon SQD archive sync complete:", res);
+        return;
+      }
+
+      const chunkSize = Number(args.get("chunk") ?? "15000");
+      const parallelism = Number(args.get("parallel") ?? "6");
+      const direction =
+        args.get("direction") === "newest-first" ? "newest-first" : "oldest-first";
+      const rpcUrl = args.get("rpc");
+
       console.log(
-        `Turbo Polygon SQD archive sync (tripleS + ARTMS): ${fromBlock.toLocaleString()} → ${toBlock.toLocaleString()} (chunk=${chunkSize.toLocaleString()}, spins=${includeSpins})`,
+        `Turbo Polygon Archive RPC sync (tripleS + ARTMS): ${fromBlock.toLocaleString()} → ${toBlock.toLocaleString()} (parallel=${parallelism}, chunk=${chunkSize.toLocaleString()}, spins=${includeSpins}, dir=${direction})`,
       );
-      const res = await turboSyncPolygonArchive(store, {
+      const res = await turboSyncPolygonRpc(store, {
         fromBlock,
         toBlock,
         chunkSize,
+        parallelism,
         includeSpins,
+        direction,
+        rpcUrl,
         onProgress: ({
-          block,
+          doneChunks,
+          totalChunks,
           blocksSynced,
           totalBlocks,
           mintsAdded,
           spinsAdded,
-          chunkSize: cs,
+          blocksPerSec,
         }) => {
           const pct = ((blocksSynced / Math.max(1, totalBlocks)) * 100).toFixed(1);
+          const etaMin =
+            blocksPerSec > 0
+              ? (((totalBlocks - blocksSynced) / blocksPerSec) / 60).toFixed(1)
+              : "?";
           console.log(
-            `  [polygon] ${pct}% @ block ${block.toLocaleString()} (chunk=${cs.toLocaleString()}) | +${mintsAdded.toLocaleString()} mints, +${spinsAdded.toLocaleString()} spins`,
+            `  [polygon-rpc] ${pct}% (${doneChunks}/${totalChunks}) | ${blocksPerSec.toLocaleString()} blk/s | +${mintsAdded.toLocaleString()} mints, +${spinsAdded.toLocaleString()} spins | ETA ${etaMin}m`,
           );
         },
       });
-      console.log("✓ Turbo Polygon archive sync complete:", res);
+      console.log("✓ Turbo Polygon RPC sync complete:", res);
       return;
     }
 

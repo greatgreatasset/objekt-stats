@@ -35,6 +35,8 @@ export const POLYGON_ADDRESSES = {
 export const DEFAULT_ENDPOINTS = {
   cosmoApi: "https://api.cosmo.fans",
   abstractRpc: process.env.ABSTRACT_RPC_URL ?? "https://api.mainnet.abs.xyz",
+  polygonRpc:
+    process.env.POLYGON_RPC_URL ?? "https://polygon.gateway.tenderly.co",
   sqdPolygonArchive:
     process.env.SQD_POLYGON_ARCHIVE_URL ??
     "https://portal.sqd.dev/datasets/polygon-mainnet/stream",
