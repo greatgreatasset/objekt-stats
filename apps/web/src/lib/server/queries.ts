@@ -20,13 +20,27 @@ import {
   classifyGridRewardSco,
   computeEditionGridSupply,
   correlateEventsForMemberRound,
+  toApolloSlug,
   type GridEditionId,
 } from "@objekt-stats/stats";
+import {
+  getRoundApolloSupply,
+  type RoundApolloSupplySummary,
+} from "./apollo-service";
 
 export type ArtistSlug = "triples" | "artms";
 
 function normalizeArtist(input?: string): ArtistSlug {
   return input === "artms" ? "artms" : "triples";
+}
+
+/**
+ * Minimum unique buyers required for a paid round to count in career member
+ * popularity averages & trend lines — prevents 10-buyer stray/promo drops
+ * from carrying the same weight as 20,000-buyer main sale rounds.
+ */
+function minLeaderboardBuyers(artistId: ArtistSlug): number {
+  return artistId === "artms" ? 50 : 150;
 }
 
 async function loadArtistEventsWithMembers(
@@ -132,6 +146,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       }
     }
 
+    const minBuyers = minLeaderboardBuyers(artistId);
     const memberTotalsRows = await db
       .select({
         memberId: saleRoundMemberStats.memberId,
@@ -151,7 +166,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         eq(saleRounds.slug, saleRoundMemberStats.roundSlug),
       )
       .where(
-        sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1`,
+        sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1 AND ${saleRounds.uniqueBuyers} >= ${minBuyers}`,
       )
       .groupBy(saleRoundMemberStats.memberId);
 
@@ -377,6 +392,11 @@ export const getRoundDetail = createServerFn({ method: "GET" })
       .select({
         slug: collections.slug,
         collectionId: collections.collectionId,
+        artistId: collections.artistId,
+        season: collections.season,
+        rawMemberName: collections.rawMemberName,
+        objektClass: collections.objektClass,
+        onOffline: collections.onOffline,
         memberId: collections.memberId,
         collectionNo: collections.collectionNo,
         totalMints: collections.totalMints,
@@ -454,10 +474,79 @@ export const getRoundDetail = createServerFn({ method: "GET" })
       }
     }
 
+    const apolloSupply: RoundApolloSupplySummary = await getRoundApolloSupply(
+      db,
+      env.DB,
+      linkedCols,
+      12,
+    ).catch((): RoundApolloSupplySummary => ({
+      matchedCollections: 0,
+      totalCollections: linkedCols.length,
+      totalCopies: 0,
+      transferableCopies: 0,
+      transferablePct: null,
+      medianMarketPriceUsd: null,
+      totalListings: 0,
+      byCollectionSlug: {},
+    }));
+
+    const apolloByMemberId = new Map<
+      string,
+      {
+        apolloSlug: string;
+        totalCopies: number;
+        transferableCopies: number;
+        transferablePct: number;
+        medianPriceUsd: number | null;
+        listingCount: number | null;
+      }
+    >();
+    for (const c of linkedCols) {
+      if (!c.memberId) continue;
+      const stats = apolloSupply.byCollectionSlug[c.slug];
+      if (!stats) continue;
+      const prev = apolloByMemberId.get(c.memberId);
+      if (!prev) {
+        apolloByMemberId.set(c.memberId, {
+          apolloSlug: stats.apolloSlug,
+          totalCopies: stats.totalCopies,
+          transferableCopies: stats.transferableCopies,
+          transferablePct: stats.transferablePct,
+          medianPriceUsd: stats.medianPriceUsd,
+          listingCount: stats.listingCount,
+        });
+      } else {
+        const totalCopies = prev.totalCopies + stats.totalCopies;
+        const transferableCopies =
+          prev.transferableCopies + stats.transferableCopies;
+        apolloByMemberId.set(c.memberId, {
+          apolloSlug: prev.apolloSlug,
+          totalCopies,
+          transferableCopies,
+          transferablePct:
+            totalCopies > 0
+              ? Math.round((transferableCopies / totalCopies) * 10000) / 100
+              : 0,
+          medianPriceUsd: prev.medianPriceUsd ?? stats.medianPriceUsd,
+          listingCount: (prev.listingCount ?? 0) + (stats.listingCount ?? 0),
+        });
+      }
+    }
+
     return {
       round,
+      apolloSupply: {
+        matchedCollections: apolloSupply.matchedCollections,
+        totalCollections: apolloSupply.totalCollections,
+        totalCopies: apolloSupply.totalCopies,
+        transferableCopies: apolloSupply.transferableCopies,
+        transferablePct: apolloSupply.transferablePct,
+        medianMarketPriceUsd: apolloSupply.medianMarketPriceUsd,
+        totalListings: apolloSupply.totalListings,
+      },
       leaderboard: statRows.map((s) => {
         const m = memberById.get(s.memberId);
+        const apollo = apolloByMemberId.get(s.memberId) ?? null;
         return {
           ...s,
           memberCode: m?.code ?? "",
@@ -465,9 +554,23 @@ export const getRoundDetail = createServerFn({ method: "GET" })
           memberFullName: m?.fullName ?? "",
           hexColor: m?.hexColor ?? "#22AEFF",
           previewImageUrl: previewByMember.get(s.memberId) ?? null,
+          apollo,
         };
       }),
-      collections: linkedCols.slice(0, 48),
+      collections: linkedCols.slice(0, 48).map((c) => {
+        const apollo = apolloSupply.byCollectionSlug[c.slug] ?? null;
+        return {
+          ...c,
+          apolloSlug:
+            apollo?.apolloSlug ??
+            toApolloSlug(c.season, c.rawMemberName, c.collectionNo),
+          apolloTotalCopies: apollo?.totalCopies ?? null,
+          apolloTransferableCopies: apollo?.transferableCopies ?? null,
+          apolloTransferablePct: apollo?.transferablePct ?? null,
+          apolloMedianPriceUsd: apollo?.medianPriceUsd ?? null,
+          apolloListingCount: apollo?.listingCount ?? null,
+        };
+      }),
       dailyCurve,
       correlatedEvents: correlated,
     };
@@ -490,11 +593,12 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
       .where(eq(members.artistId, artistId))
       .orderBy(asc(members.memberOrder));
 
+    const minBuyers = minLeaderboardBuyers(artistId);
     const popRounds = await db
       .select()
       .from(saleRounds)
       .where(
-        sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1`,
+        sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1 AND ${saleRounds.uniqueBuyers} >= ${minBuyers}`,
       )
       .orderBy(asc(saleRounds.startAt));
 
@@ -532,7 +636,7 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
               eq(saleRounds.slug, saleRoundMemberStats.roundSlug),
             )
             .where(
-              sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1`,
+              sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1 AND ${saleRounds.uniqueBuyers} >= ${minBuyers}`,
             )
         : [];
 
@@ -676,6 +780,7 @@ export const getMemberDetail = createServerFn({ method: "GET" })
         includeInPopularity: saleRounds.includeInPopularity,
         participatingMembers: saleRounds.participatingMembers,
         roundTotalMints: saleRounds.totalMints,
+        roundUniqueBuyers: saleRounds.uniqueBuyers,
         mintCount: saleRoundMemberStats.mintCount,
         uniqueBuyers: saleRoundMemberStats.uniqueBuyers,
         mintsPerBuyer: saleRoundMemberStats.mintsPerBuyer,
@@ -714,8 +819,9 @@ export const getMemberDetail = createServerFn({ method: "GET" })
         relSum: number;
       }
     >();
+    const minBuyers = minLeaderboardBuyers(normalizeArtist(member.artistId));
     for (const r of roundHistory) {
-      if (!r.includeInPopularity) continue;
+      if (!r.includeInPopularity || r.roundUniqueBuyers < minBuyers) continue;
       const prev = classMap.get(r.objektClass) ?? {
         objektClass: r.objektClass,
         rounds: 0,

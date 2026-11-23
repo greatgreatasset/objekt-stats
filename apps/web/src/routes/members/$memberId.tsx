@@ -58,8 +58,9 @@ function MemberDetailPage() {
     events,
     gridSummary,
   } = data;
+  const minBuyers = member.artistId === "artms" ? 50 : 150;
   const popHistory = [...roundHistory]
-    .filter((r) => r.includeInPopularity)
+    .filter((r) => r.includeInPopularity && r.roundUniqueBuyers >= minBuyers)
     .reverse(); // chronological for trajectory chart
   const totalMints = collections.reduce((s, c) => s + c.totalMints, 0);
   const popMintsSum = popHistory.reduce((s, r) => s + r.mintCount, 0);

@@ -293,8 +293,8 @@ export function OverviewView({
                 </h2>
                 <p className="text-xs text-zinc-400">
                   {boardMetric === "buyers"
-                    ? "Ranked by Unique Purchasers Relative Index (1.00× = average fanbase breadth)."
-                    : "Ranked by Total Mints Relative Index (1.00× = average total volume)."}
+                    ? `Ranked by Unique Purchasers Relative Index across major paid rounds (≥${isArtms ? 50 : 150} unique buyers; 1.00× = average).`
+                    : `Ranked by Total Mints Relative Index across major paid rounds (≥${isArtms ? 50 : 150} unique buyers; 1.00× = average).`}
                 </p>
               </div>
               <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5 text-xs">
