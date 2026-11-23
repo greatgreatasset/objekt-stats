@@ -69,7 +69,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .from(saleRounds)
       .where(eq(saleRounds.artistId, artistId))
       .orderBy(desc(saleRounds.startAt), desc(saleRounds.totalMints))
-      .limit(150);
+      .limit(1200);
 
     const roundTopByMints = new Map<
       string,

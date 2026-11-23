@@ -244,7 +244,11 @@ async function fetchMetaV3(tokenId: number): Promise<ParsedMeta | null> {
  * directly from D1's `collections` table so edge cron sync stays 100% consistent.
  * Preserves existing curated (non-auto-detected) round titles/mechanics if present.
  */
-export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database) {
+export async function recomputeSaleRoundsInD1(
+  db: AppDatabase,
+  rawD1: D1Database,
+  dirtyRounds?: Set<string>,
+) {
   const allMembers = await db.select().from(members);
   const memberTotalsByArtist = new Map<string, number>();
   for (const m of allMembers) {
@@ -254,13 +258,30 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
     );
   }
 
-  const allCols = await db.select().from(collections);
   const existingRounds = await db.select().from(saleRounds);
   const curatedMetaBySlug = new Map(
     existingRounds
       .filter((r) => !r.isAutoDetected)
       .map((r) => [r.slug, r]),
   );
+
+  // When live-sync touches only 1-5 active rounds, skip loading all 20k historical collections
+  const dirtySeasons = new Set<string>();
+  const existingRoundBySlug = new Map(existingRounds.map((r) => [r.slug, r]));
+  if (dirtyRounds && dirtyRounds.size > 0) {
+    for (const slug of dirtyRounds) {
+      const ex = existingRoundBySlug.get(slug);
+      if (ex) dirtySeasons.add(ex.season);
+    }
+  }
+
+  const allCols =
+    dirtyRounds && dirtyRounds.size > 0 && dirtySeasons.size > 0 && dirtySeasons.size <= 10
+      ? await db
+          .select()
+          .from(collections)
+          .where(inArray(collections.season, Array.from(dirtySeasons)))
+      : await db.select().from(collections);
 
   interface RoundAcc {
     slug: string;
@@ -284,7 +305,13 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
   const rounds = new Map<string, RoundAcc>();
 
   // Preserve exact deduplicated unique buyers & top-wallet share from deep indexer where available
-  const existingRoundStats = await db.select().from(saleRoundMemberStats);
+  const existingRoundStats =
+    dirtyRounds && dirtyRounds.size > 0 && dirtyRounds.size <= 40
+      ? await db
+          .select()
+          .from(saleRoundMemberStats)
+          .where(inArray(saleRoundMemberStats.roundSlug, Array.from(dirtyRounds)))
+      : await db.select().from(saleRoundMemberStats);
   const existingStatByKey = new Map(
     existingRoundStats.map((s) => [`${s.roundSlug}|${s.memberId}`, s]),
   );
@@ -347,7 +374,7 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
   }
 
   const validRounds = Array.from(rounds.values()).filter(
-    (r) => r.memberMints.size >= 2,
+    (r) => r.memberMints.size >= 2 && (!dirtyRounds || dirtyRounds.size === 0 || dirtyRounds.has(r.slug)),
   );
 
   for (const r of validRounds) {
@@ -402,25 +429,40 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
     }
   }
 
-  // Batch statements in chunks of 80 for D1 efficiency
-  const stmts: D1PreparedStatement[] = [
-    rawD1.prepare("DELETE FROM sale_round_member_stats"),
-    rawD1.prepare("DELETE FROM sale_round_collections"),
-    rawD1.prepare("DELETE FROM sale_rounds"),
-  ];
+  // Zero-downtime incremental UPSERT (NEVER wipe sale_rounds live on Cron ticks!)
+  const stmts: D1PreparedStatement[] = [];
 
-  const insertRound = rawD1.prepare(
-    `INSERT OR REPLACE INTO sale_rounds
+  const upsertRound = rawD1.prepare(
+    `INSERT INTO sale_rounds
       (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, unique_buyers, participating_members, include_in_popularity, is_auto_detected, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(slug) DO UPDATE SET
+       title = excluded.title,
+       start_at = MIN(sale_rounds.start_at, excluded.start_at),
+       end_at = MAX(COALESCE(sale_rounds.end_at, excluded.end_at), excluded.end_at),
+       total_mints = excluded.total_mints,
+       unique_buyers = MAX(sale_rounds.unique_buyers, excluded.unique_buyers),
+       participating_members = excluded.participating_members`,
   );
   const insertRoundCol = rawD1.prepare(
     `INSERT OR IGNORE INTO sale_round_collections (round_slug, collection_slug) VALUES (?, ?)`,
   );
-  const insertStat = rawD1.prepare(
-    `INSERT OR REPLACE INTO sale_round_member_stats
+  const upsertStat = rawD1.prepare(
+    `INSERT INTO sale_round_member_stats
       (round_slug, member_id, mint_count, unique_buyers, mints_per_buyer, top_buyer_share_pct, rank, unique_buyers_rank, share_pct, unique_buyers_share_pct, relative_index, unique_buyers_relative_index, z_score, rank_delta_prev, rolling5_rank, rolling10_rank, rolling5_relative_index, rolling10_relative_index, is_anomaly, anomaly_direction, anomaly_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(round_slug, member_id) DO UPDATE SET
+       mint_count = excluded.mint_count,
+       unique_buyers = MAX(sale_round_member_stats.unique_buyers, excluded.unique_buyers),
+       mints_per_buyer = excluded.mints_per_buyer,
+       top_buyer_share_pct = COALESCE(excluded.top_buyer_share_pct, sale_round_member_stats.top_buyer_share_pct),
+       rank = excluded.rank,
+       unique_buyers_rank = excluded.unique_buyers_rank,
+       share_pct = excluded.share_pct,
+       unique_buyers_share_pct = excluded.unique_buyers_share_pct,
+       relative_index = excluded.relative_index,
+       unique_buyers_relative_index = excluded.unique_buyers_relative_index,
+       z_score = excluded.z_score`,
   );
 
   for (const r of validRounds) {
@@ -437,7 +479,7 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
       maxMemberBuyers,
     );
     stmts.push(
-      insertRound.bind(
+      upsertRound.bind(
         r.slug,
         r.artistId,
         r.title,
@@ -461,7 +503,7 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
     }
     for (const s of statsByRound.get(r.slug) ?? []) {
       stmts.push(
-        insertStat.bind(
+        upsertStat.bind(
           s.roundSlug,
           s.memberId,
           s.mintCount,
@@ -488,8 +530,8 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
     }
   }
 
-  for (let i = 0; i < stmts.length; i += 100) {
-    await rawD1.batch(stmts.slice(i, i + 100));
+  for (let i = 0; i < stmts.length; i += 80) {
+    await rawD1.batch(stmts.slice(i, i + 80));
   }
 
   return { roundsUpdated: validRounds.length };
@@ -1548,7 +1590,18 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
 
   let roundsUpdated = 0;
   if (trackedMintsAdded > 0) {
-    const rec = await recomputeSaleRoundsInD1(db, env.DB);
+    const dirtyRoundSlugs = new Set<string>();
+    for (const d of colDeltas.values()) {
+      const auto = inferAutoRoundGroup(
+        d.meta.artistId,
+        d.meta.season,
+        d.meta.objektClass,
+        d.meta.collectionNo,
+        d.meta.onOffline,
+      );
+      dirtyRoundSlugs.add(auto.slug);
+    }
+    const rec = await recomputeSaleRoundsInD1(db, env.DB, dirtyRoundSlugs);
     roundsUpdated = rec.roundsUpdated;
   }
 
