@@ -453,6 +453,45 @@ export class IndexerStore {
     }
   }
 
+  insertTransfersAndRange(
+    chain: "polygon" | "abstract",
+    fromBlock: number,
+    toBlock: number,
+    transfers: RawTransferRow[],
+  ): void {
+    const transferStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO raw_transfers (
+        tx_hash, log_index, token_id, chain, block_number, transferred_at, from_addr, to_addr
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const rangeStmt = this.db.prepare(`
+      INSERT OR REPLACE INTO synced_ranges (chain, kind, from_block, to_block, synced_at)
+      VALUES (?, 'transfers', ?, ?, ?)
+    `);
+    const now = new Date().toISOString();
+
+    this.db.exec("BEGIN");
+    try {
+      for (const t of transfers) {
+        transferStmt.run(
+          t.txHash.toLowerCase(),
+          t.logIndex,
+          t.tokenId,
+          t.chain,
+          t.blockNumber,
+          t.transferredAt,
+          t.fromAddr.toLowerCase(),
+          t.toAddr.toLowerCase(),
+        );
+      }
+      rangeStmt.run(chain, fromBlock, toBlock, now);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
   insertSpins(spins: RawSpinRow[]): number {
     if (spins.length === 0) return 0;
     const stmt = this.db.prepare(`

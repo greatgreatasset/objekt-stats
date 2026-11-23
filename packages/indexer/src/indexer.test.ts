@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   aggregateAndEmitSql,
+  aggregateTradesAndEmitSql,
   inferAutoRoundGroup,
   normalizeMemberLookupKey,
 } from "./aggregate.js";
@@ -14,6 +15,7 @@ import {
 import { ERC721_TRANSFER_TOPIC, ZERO_TOPIC } from "./constants.js";
 import { normalizeMetadataV3 } from "./cosmo-metadata.js";
 import { IndexerStore } from "./store.js";
+import { aggregateTradesStreaming } from "./trades-backfill.js";
 
 describe("normalizeMetadataV3", () => {
   it("parses live COSMO v3 payload into normalized collection metadata", () => {
@@ -446,6 +448,153 @@ describe("aggregateAndEmitSql trade isolation", () => {
       ]);
     } finally {
       store.close();
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("streaming trade aggregator produces 100% identical counts to global in-memory aggregation across window boundaries", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "objekt-stats-streamtrades-"));
+    const metaStore = new IndexerStore(join(workDir, "meta.sqlite"));
+    const tradesStore = new IndexerStore(join(workDir, "trades.sqlite"));
+    const dataRoot = resolve(import.meta.dirname, "../../../data");
+    try {
+      const metaBatch = [
+        {
+          tokenId: 1001,
+          slug: "triples-ever01-seoyeon-101z",
+          collectionId: "Ever01 SeoYeon 101Z",
+          artistId: "triples",
+          rawArtist: "tripleS",
+          rawMember: "SeoYeon",
+          season: "Ever01",
+          objektClass: "First",
+          collectionNo: "101Z",
+          onOffline: "online" as const,
+          imageUrl: "https://example.com/1001.png",
+          backgroundColor: "#22AEFF",
+        },
+        {
+          tokenId: 1002,
+          slug: "triples-ever01-yooyeon-101z",
+          collectionId: "Ever01 YooYeon 101Z",
+          artistId: "triples",
+          rawArtist: "tripleS",
+          rawMember: "YooYeon",
+          season: "Ever01",
+          objektClass: "First",
+          collectionNo: "101Z",
+          onOffline: "online" as const,
+          imageUrl: "https://example.com/1002.png",
+          backgroundColor: "#CC097E",
+        },
+        {
+          tokenId: 1003,
+          slug: "triples-ever01-sohyun-101z",
+          collectionId: "Ever01 SoHyun 101Z",
+          artistId: "triples",
+          rawArtist: "tripleS",
+          rawMember: "SoHyun",
+          season: "Ever01",
+          objektClass: "First",
+          collectionNo: "101Z",
+          onOffline: "online" as const,
+          imageUrl: "https://example.com/1003.png",
+          backgroundColor: "#1222B5",
+        },
+      ];
+      metaStore.upsertMetadataBatch(metaBatch);
+      tradesStore.upsertMetadataBatch(metaBatch);
+
+      // Trade 1 straddles a 1-hour window boundary (starts 09:50, finishes 10:05!)
+      // Trade 2 happens cleanly inside a later window (14:00 -> 14:02)
+      const transfers = [
+        {
+          txHash: "0x" + "1".repeat(64),
+          logIndex: 0,
+          tokenId: 1001,
+          chain: "abstract" as const,
+          blockNumber: 100,
+          transferredAt: "2026-11-23T09:50:00.000Z",
+          fromAddr: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          toAddr: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+        {
+          txHash: "0x" + "2".repeat(64),
+          logIndex: 0,
+          tokenId: 1003,
+          chain: "abstract" as const,
+          blockNumber: 105,
+          transferredAt: "2026-11-23T09:55:00.000Z",
+          fromAddr: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          toAddr: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        },
+        {
+          txHash: "0x" + "3".repeat(64),
+          logIndex: 0,
+          tokenId: 1002,
+          chain: "abstract" as const,
+          blockNumber: 120,
+          transferredAt: "2026-11-23T10:05:00.000Z",
+          fromAddr: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          toAddr: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        {
+          txHash: "0x" + "4".repeat(64),
+          logIndex: 0,
+          tokenId: 1001,
+          chain: "polygon" as const,
+          blockNumber: 500,
+          transferredAt: "2026-11-23T14:00:00.000Z",
+          fromAddr: "0xcccccccccccccccccccccccccccccccccccccccc",
+          toAddr: "0xdddddddddddddddddddddddddddddddddddddddd",
+        },
+        {
+          txHash: "0x" + "5".repeat(64),
+          logIndex: 0,
+          tokenId: 1003,
+          chain: "polygon" as const,
+          blockNumber: 510,
+          transferredAt: "2026-11-23T14:02:00.000Z",
+          fromAddr: "0xdddddddddddddddddddddddddddddddddddddddd",
+          toAddr: "0xcccccccccccccccccccccccccccccccccccccccc",
+        },
+      ];
+      tradesStore.insertTransfers(transfers);
+
+      const globalOut = join(workDir, "global.sql");
+      const streamOut = join(workDir, "stream.sql");
+      const now = "2026-11-23T18:00:00.000Z";
+
+      const globalSum = aggregateTradesAndEmitSql(tradesStore.db, {
+        dataRoot,
+        tradesOutFile: globalOut,
+        now,
+      });
+
+      // Force tiny 1-hour windows with 2-hour padding so Trade 1 straddles window boundary
+      const streamSum = aggregateTradesStreaming(tradesStore.db, {
+        dataRoot,
+        metadataDbPath: metaStore.dbPath,
+        tradesOutFile: streamOut,
+        now,
+        windowMs: 3600 * 1000,
+        padMs: 2 * 3600 * 1000,
+      });
+
+      expect(streamSum.confirmedTradesCount).toBe(globalSum.confirmedTradesCount);
+      expect(streamSum.asymmetricTradesCount).toBe(globalSum.asymmetricTradesCount);
+      expect(streamSum.confirmedTradedObjekts).toBe(globalSum.confirmedTradedObjekts);
+      expect(streamSum.directP2PTransfersCount).toBe(globalSum.directP2PTransfersCount);
+      expect(streamSum.tradeCollectionsCount).toBe(globalSum.tradeCollectionsCount);
+      expect(streamSum.confirmedTradesCount).toBe(2);
+      expect(streamSum.confirmedTradedObjekts).toBe(5);
+
+      const streamSql = readFileSync(streamOut, "utf8");
+      expect(streamSql).toContain("'triples-yooyeon', 'triples', 1, 1, 1, 2, 1");
+      expect(streamSql).toContain("'triples-sohyun', 'triples', 2, 2, 2, 4, 1");
+    } finally {
+      metaStore.close();
+      tradesStore.close();
       rmSync(workDir, { recursive: true, force: true });
     }
   });

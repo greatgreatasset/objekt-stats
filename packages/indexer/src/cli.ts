@@ -29,6 +29,10 @@ import {
   type NormalizedTokenMetadata,
 } from "./cosmo-metadata.js";
 import { IndexerStore } from "./store.js";
+import {
+  aggregateTradesStreaming,
+  turboSyncTransfersRpc,
+} from "./trades-backfill.js";
 
 function parseArgs(argv: string[]) {
   const args = new Map<string, string>();
@@ -459,6 +463,37 @@ async function main() {
     return;
   }
 
+  if (command === "aggregate-trades-streaming") {
+    const roDb = new DatabaseSync(dbPath, { readOnly: true });
+    const metaDbArg = args.get("meta-db");
+    const windowDays = Number(args.get("window-days") ?? "7");
+    try {
+      const summary = aggregateTradesStreaming(roDb, {
+        dataRoot: resolve(rootDir, "data"),
+        metadataDbPath: metaDbArg ? resolve(rootDir, metaDbArg) : undefined,
+        tradesOutFile: resolve(rootDir, "packages/db/generated/sync-trades.sql"),
+        windowMs: windowDays * 24 * 3600 * 1000,
+        onProgress: ({
+          windowIndex,
+          totalWindows,
+          windowStart,
+          confirmedTradesSoFar,
+          directTransfersSoFar,
+        }) => {
+          if (windowIndex % 10 === 0 || windowIndex === totalWindows) {
+            console.log(
+              `  [trades-agg] window ${windowIndex}/${totalWindows} (${windowStart.slice(0, 10)}) | ${confirmedTradesSoFar.toLocaleString()} confirmed trades, ${directTransfersSoFar.toLocaleString()} P2P transfers`,
+            );
+          }
+        },
+      });
+      console.log("✓ Streaming full-history trade aggregation complete:", summary);
+    } finally {
+      roDb.close();
+    }
+    return;
+  }
+
   const store = new IndexerStore(dbPath);
 
   try {
@@ -636,6 +671,63 @@ async function main() {
         chain:
           chainArg === "polygon" || chainArg === "abstract" ? chainArg : undefined,
       });
+      return;
+    }
+
+    if (command === "turbo-sync-trades") {
+      const chainArg = args.get("chain") === "polygon" ? "polygon" : "abstract";
+      const toBlock =
+        args.get("to") !== undefined
+          ? Number(args.get("to"))
+          : chainArg === "polygon"
+            ? POLYGON_END_BLOCK
+            : await getAbstractHeadBlock();
+      const fromBlock =
+        args.get("from") !== undefined
+          ? Number(args.get("from"))
+          : chainArg === "polygon"
+            ? POLYGON_START_BLOCK
+            : ABSTRACT_START_BLOCK;
+      const chunkSize = Number(
+        args.get("chunk") ?? (chainArg === "polygon" ? "10000" : "5000"),
+      );
+      const parallelism = Number(
+        args.get("parallel") ?? (chainArg === "polygon" ? "6" : "8"),
+      );
+      const direction =
+        args.get("direction") === "newest-first" ? "newest-first" : "oldest-first";
+      const rpcUrl = args.get("rpc");
+
+      console.log(
+        `Turbo ${chainArg} P2P transfers sync: ${fromBlock.toLocaleString()} → ${toBlock.toLocaleString()} (parallel=${parallelism}, chunk=${chunkSize.toLocaleString()}, dir=${direction})`,
+      );
+      const res = await turboSyncTransfersRpc(store, {
+        chain: chainArg,
+        fromBlock,
+        toBlock,
+        chunkSize,
+        parallelism,
+        direction,
+        rpcUrl,
+        onProgress: ({
+          doneChunks,
+          totalChunks,
+          blocksSynced,
+          totalBlocks,
+          transfersAdded,
+          blocksPerSec,
+        }) => {
+          const pct = ((blocksSynced / Math.max(1, totalBlocks)) * 100).toFixed(1);
+          const etaMin =
+            blocksPerSec > 0
+              ? (((totalBlocks - blocksSynced) / blocksPerSec) / 60).toFixed(1)
+              : "?";
+          console.log(
+            `  [${chainArg}-trades] ${pct}% (${doneChunks}/${totalChunks}) | ${blocksPerSec.toLocaleString()} blk/s | +${transfersAdded.toLocaleString()} P2P transfers | ETA ${etaMin}m`,
+          );
+        },
+      });
+      console.log(`✓ Turbo ${chainArg} P2P transfers sync complete:`, res);
       return;
     }
 
