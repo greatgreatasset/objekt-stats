@@ -9,6 +9,7 @@ import {
   eventMembers,
   events,
   members,
+  roundDailyMints,
   saleRoundCollections,
   saleRoundMemberStats,
   saleRounds,
@@ -392,27 +393,46 @@ export const getRoundDetail = createServerFn({ method: "GET" })
       .where(eq(saleRoundCollections.roundSlug, slug))
       .orderBy(desc(collections.totalMints));
 
-    const dailyRows = await db
+    const roundDailyRows = await db
       .select({
-        mintDate: collectionDailyMints.mintDate,
-        mintCount: sql<number>`sum(${collectionDailyMints.mintCount})`,
+        mintDate: roundDailyMints.mintDate,
+        mintCount: roundDailyMints.mintCount,
+        uniqueBuyers: roundDailyMints.uniqueBuyers,
       })
-      .from(collectionDailyMints)
-      .innerJoin(
-        saleRoundCollections,
-        eq(
-          saleRoundCollections.collectionSlug,
-          collectionDailyMints.collectionSlug,
-        ),
-      )
-      .where(eq(saleRoundCollections.roundSlug, slug))
-      .groupBy(collectionDailyMints.mintDate)
-      .orderBy(asc(collectionDailyMints.mintDate));
+      .from(roundDailyMints)
+      .where(eq(roundDailyMints.roundSlug, slug))
+      .orderBy(asc(roundDailyMints.mintDate))
+      .catch(() => []);
 
-    const dailyCurve = dailyRows.map((d) => ({
-      mintDate: d.mintDate,
-      mintCount: Number(d.mintCount),
-    }));
+    const dailyCurve =
+      roundDailyRows.length > 0
+        ? roundDailyRows.map((d) => ({
+            mintDate: d.mintDate,
+            mintCount: Number(d.mintCount),
+            uniqueBuyers: Number(d.uniqueBuyers),
+          }))
+        : (
+            await db
+              .select({
+                mintDate: collectionDailyMints.mintDate,
+                mintCount: sql<number>`sum(${collectionDailyMints.mintCount})`,
+              })
+              .from(collectionDailyMints)
+              .innerJoin(
+                saleRoundCollections,
+                eq(
+                  saleRoundCollections.collectionSlug,
+                  collectionDailyMints.collectionSlug,
+                ),
+              )
+              .where(eq(saleRoundCollections.roundSlug, slug))
+              .groupBy(collectionDailyMints.mintDate)
+              .orderBy(asc(collectionDailyMints.mintDate))
+          ).map((d) => ({
+            mintDate: d.mintDate,
+            mintCount: Number(d.mintCount),
+            uniqueBuyers: 0,
+          }));
 
     const eventsWithMembers = await loadArtistEventsWithMembers(
       db,

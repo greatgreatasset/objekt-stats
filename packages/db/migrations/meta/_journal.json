@@ -57,6 +57,13 @@
       "when": 1795451312264,
       "tag": "0007_quick_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1795453797917,
+      "tag": "0008_married_blindfold",
+      "breakpoints": true
     }
   ]
 }

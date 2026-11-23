@@ -58,18 +58,22 @@ export interface AnomalyThresholds {
   minRankDelta: number;
   minRelativeIndexPctChange: number;
   minZScoreShift: number;
+  /** Minimum total unique buyers across a round before anomalies are flagged (filters tiny promo/noise drops). */
+  minRoundUniqueBuyers: number;
 }
 
 export const DEFAULT_THRESHOLDS_BY_ARTIST: Record<string, AnomalyThresholds> = {
   triples: {
-    minRankDelta: 4,
-    minRelativeIndexPctChange: 0.25,
-    minZScoreShift: 1.25,
+    minRankDelta: 5,
+    minRelativeIndexPctChange: 0.3,
+    minZScoreShift: 1.5,
+    minRoundUniqueBuyers: 150,
   },
   artms: {
     minRankDelta: 2,
-    minRelativeIndexPctChange: 0.2,
-    minZScoreShift: 1.15,
+    minRelativeIndexPctChange: 0.25,
+    minZScoreShift: 1.35,
+    minRoundUniqueBuyers: 50,
   },
 };
 
@@ -107,6 +111,9 @@ export function computeSingleRoundMetrics(
 
   const totalUniqueSum = entries.reduce((sum, e) => sum + e.uniqueBuyers, 0);
   const meanUnique = totalUniqueSum / n;
+  const varianceUnique =
+    entries.reduce((sum, e) => sum + (e.uniqueBuyers - meanUnique) ** 2, 0) / n;
+  const stdDevUnique = Math.sqrt(varianceUnique);
 
   // Competition rank for unique buyers
   const byUnique = [...entries].sort((a, b) =>
@@ -142,7 +149,12 @@ export function computeSingleRoundMetrics(
 
     const sharePct = totalMints > 0 ? (entry.mintCount / totalMints) * 100 : 0;
     const relativeIndex = mean > 0 ? entry.mintCount / mean : 1;
-    const zScore = stdDev > 0 ? (entry.mintCount - mean) / stdDev : 0;
+    const zScore =
+      stdDevUnique > 0
+        ? (entry.uniqueBuyers - meanUnique) / stdDevUnique
+        : stdDev > 0
+          ? (entry.mintCount - mean) / stdDev
+          : 0;
 
     const uniqueBuyersSharePct =
       totalUniqueSum > 0 ? (entry.uniqueBuyers / totalUniqueSum) * 100 : 0;
@@ -218,13 +230,17 @@ export function computeArtistSeriesStats(
       ...customThresholds,
     };
 
+    // Gate anomaly detection & baselines on meaningful round volume (filters tiny promo/stray mints)
+    const roundBuyerVolume = baseStats.reduce((sum, s) => sum + s.uniqueBuyers, 0);
+    const meetsVolumeThreshold = roundBuyerVolume >= thresholds.minRoundUniqueBuyers;
+
     for (const stat of baseStats) {
       const history = memberHistory.get(stat.memberId) ?? [];
 
-      if (round.includeInPopularity) {
+      if (round.includeInPopularity && meetsVolumeThreshold) {
         const prev = history[history.length - 1];
         if (prev) {
-          stat.rankDeltaPrev = prev.rank - stat.rank;
+          stat.rankDeltaPrev = prev.rank - stat.uniqueBuyersRank;
         }
 
         if (history.length >= 2) {
@@ -233,22 +249,22 @@ export function computeArtistSeriesStats(
           const baselineRelIdx = meanOf(prior5.map((h) => h.relativeIndex));
           const baselineZ = meanOf(prior5.map((h) => h.zScore));
 
-          const rankShift = baselineRank - stat.rank;
+          const rankShift = baselineRank - stat.uniqueBuyersRank;
           const relIdxPctShift =
             baselineRelIdx > 0
-              ? (stat.relativeIndex - baselineRelIdx) / baselineRelIdx
+              ? (stat.uniqueBuyersRelativeIndex - baselineRelIdx) / baselineRelIdx
               : 0;
           const zShift = stat.zScore - baselineZ;
 
           const reasons: string[] = [];
           if (Math.abs(rankShift) >= thresholds.minRankDelta) {
             reasons.push(
-              `Rank ${rankShift > 0 ? "jumped" : "dropped"} ${Math.abs(rankShift).toFixed(1)} spots vs 5-round avg`,
+              `Buyers rank ${rankShift > 0 ? "jumped" : "dropped"} ${Math.abs(rankShift).toFixed(1)} spots vs 5-round avg`,
             );
           }
           if (Math.abs(relIdxPctShift) >= thresholds.minRelativeIndexPctChange) {
             reasons.push(
-              `Relative share ${relIdxPctShift > 0 ? "surged" : "fell"} ${Math.round(Math.abs(relIdxPctShift) * 100)}% vs baseline`,
+              `Buyer share ${relIdxPctShift > 0 ? "surged" : "fell"} ${Math.round(Math.abs(relIdxPctShift) * 100)}% vs baseline`,
             );
           }
           if (Math.abs(zShift) >= thresholds.minZScoreShift) {
@@ -269,8 +285,8 @@ export function computeArtistSeriesStats(
         const updatedHistory = [
           ...history,
           {
-            rank: stat.rank,
-            relativeIndex: stat.relativeIndex,
+            rank: stat.uniqueBuyersRank,
+            relativeIndex: stat.uniqueBuyersRelativeIndex,
             zScore: stat.zScore,
           },
         ];

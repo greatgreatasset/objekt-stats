@@ -93,6 +93,22 @@ export const collectionDailyMints = sqliteTable(
   ],
 );
 
+export const roundDailyMints = sqliteTable(
+  "round_daily_mints",
+  {
+    roundSlug: text("round_slug")
+      .notNull()
+      .references(() => saleRounds.slug, { onDelete: "cascade" }),
+    mintDate: text("mint_date").notNull(), // YYYY-MM-DD (UTC)
+    mintCount: integer("mint_count").notNull().default(0),
+    uniqueBuyers: integer("unique_buyers").notNull().default(0),
+  },
+  (t) => [
+    primaryKey({ columns: [t.roundSlug, t.mintDate] }),
+    index("idx_round_daily_date").on(t.mintDate),
+  ],
+);
+
 export const saleRounds = sqliteTable(
   "sale_rounds",
   {

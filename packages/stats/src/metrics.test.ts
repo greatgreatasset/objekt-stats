@@ -164,6 +164,53 @@ describe("computeArtistSeriesStats", () => {
     expect(summary.worstRank).toBe(6);
     expect(summary.anomalyCount).toBe(1);
   });
+
+  it("ignores tiny low-volume rounds and single-whale mint spikes for anomaly detection", () => {
+    const makeBigRound = (slug: string, startAt: string, joobinMints = 200, joobinBuyers = 100): SaleRoundInput => ({
+      slug,
+      artistId: "triples",
+      startAt,
+      includeInPopularity: true,
+      memberMints: [
+        { memberId: "triples-yooyeon", mintCount: 600, uniqueBuyers: 300 },
+        { memberId: "triples-sohyun", mintCount: 500, uniqueBuyers: 250 },
+        { memberId: "triples-seoyeon", mintCount: 400, uniqueBuyers: 200 },
+        { memberId: "triples-nakyoung", mintCount: 300, uniqueBuyers: 150 },
+        { memberId: "triples-kotone", mintCount: 250, uniqueBuyers: 125 },
+        { memberId: "triples-joobin", mintCount: joobinMints, uniqueBuyers: joobinBuyers },
+      ],
+    });
+
+    const tinyPromoRound: SaleRoundInput = {
+      slug: "tiny-promo",
+      artistId: "triples",
+      startAt: "2024-03-01T00:00:00Z",
+      includeInPopularity: true,
+      memberMints: [
+        { memberId: "triples-joobin", mintCount: 20, uniqueBuyers: 10 },
+        { memberId: "triples-yooyeon", mintCount: 5, uniqueBuyers: 4 },
+        { memberId: "triples-sohyun", mintCount: 5, uniqueBuyers: 4 },
+        { memberId: "triples-seoyeon", mintCount: 4, uniqueBuyers: 3 },
+        { memberId: "triples-nakyoung", mintCount: 3, uniqueBuyers: 2 },
+        { memberId: "triples-kotone", mintCount: 2, uniqueBuyers: 2 },
+      ],
+    };
+
+    const series = computeArtistSeriesStats([
+      makeBigRound("r1", "2024-01-01T00:00:00Z"),
+      makeBigRound("r2", "2024-02-01T00:00:00Z"),
+      tinyPromoRound,
+      // Single whale buys 2,000 copies of JooBin, but unique buyers stays flat at 100!
+      makeBigRound("r3-whale", "2024-04-01T00:00:00Z", 2200, 100),
+    ]);
+
+    // Tiny promo round (< 150 buyers) must NOT flag anomaly
+    expect(series.get("tiny-promo")?.every((s) => !s.isAnomaly)).toBe(true);
+    // Whale spike with flat unique buyers must NOT flag anomaly
+    expect(
+      series.get("r3-whale")?.find((s) => s.memberId === "triples-joobin")?.isAnomaly,
+    ).toBe(false);
+  });
 });
 
 describe("correlateEventsForMemberRound", () => {

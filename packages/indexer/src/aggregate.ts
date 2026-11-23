@@ -288,31 +288,7 @@ export function aggregateAndEmitSql(
       spun_count: spinCountsByColId.get(c.col_id) ?? 0,
     }));
 
-  // 2. Daily mints per collection (only tracked artists)
-  const dailyRows = store.db
-    .prepare(
-      `SELECT
-        cc.slug AS collection_slug,
-        substr(rm.minted_at, 1, 10) AS mint_date,
-        COUNT(*) AS mint_count,
-        COUNT(DISTINCT rm.minter) AS unique_minters
-      FROM collection_catalog cc
-      JOIN token_collections tc ON tc.col_id = cc.col_id
-      JOIN raw_mints rm ON rm.token_id = tc.token_id
-      WHERE cc.artist_id IN ('triples', 'artms')
-      GROUP BY cc.col_id, substr(rm.minted_at, 1, 10)`,
-    )
-    .all() as Array<{
-    collection_slug: string;
-    mint_date: string;
-    mint_count: number;
-    unique_minters: number;
-  }>;
-
-  const validSlugs = new Set(filteredCollections.map((c) => c.slug));
-  const filteredDaily = dailyRows.filter((d) => validSlugs.has(d.collection_slug));
-
-  // 3. Group collections into Sale Rounds + compute TRUE deduplicated unique buyers & top-wallet share IN SQLITE
+  // 2. Group collections into Sale Rounds + compute TRUE deduplicated unique buyers, top-wallet share, and round daily curves IN SQLITE
   interface RoundAccumulator {
     slug: string;
     artistId: string;
@@ -479,10 +455,35 @@ export function aggregateAndEmitSql(
     acc.memberUniqueBuyers.set(row.member_id, row.unique_buyers);
     acc.memberTopBuyerMints.set(row.member_id, row.top_buyer_mints);
   }
+
+  // Compact per-round daily mint curve (175x smaller than per-collection daily rows for 31M+ full history)
+  const roundDailyRows = store.db
+    .prepare(
+      `SELECT
+         rc.round_slug AS round_slug,
+         substr(rm.minted_at, 1, 10) AS mint_date,
+         COUNT(*) AS mint_count,
+         COUNT(DISTINCT rm.minter) AS unique_buyers
+       FROM temp._round_cols rc
+       JOIN token_collections tc ON tc.col_id = rc.col_id
+       JOIN raw_mints rm ON rm.token_id = tc.token_id
+       GROUP BY rc.round_slug, substr(rm.minted_at, 1, 10)`,
+    )
+    .all() as Array<{
+    round_slug: string;
+    mint_date: string;
+    mint_count: number;
+    unique_buyers: number;
+  }>;
+
   store.db.exec("DROP TABLE IF EXISTS temp._round_cols;");
 
   const validRounds = Array.from(rounds.values()).filter(
     (r) => r.memberMints.size >= 2,
+  );
+  const validRoundSlugSet = new Set(validRounds.map((r) => r.slug));
+  const filteredDaily = roundDailyRows.filter((d) =>
+    validRoundSlugSet.has(d.round_slug),
   );
 
   for (const r of validRounds) {
@@ -534,6 +535,8 @@ export function aggregateAndEmitSql(
   const lines: string[] = [
     `-- Auto-generated on-chain aggregates (${now})`,
     "",
+    "DELETE FROM collection_daily_mints;",
+    "DELETE FROM round_daily_mints;",
     "DELETE FROM sale_round_member_stats;",
     "DELETE FROM sale_round_collections;",
     "DELETE FROM sale_rounds;",
@@ -557,18 +560,6 @@ export function aggregateAndEmitSql(
     "INSERT OR REPLACE INTO collections (slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, como_amount, total_mints, max_serial, spun_count, unique_minters, first_mint_at, last_mint_at, front_image_url, thumbnail_image_url, accent_color, background_color, text_color, is_unobtainable, updated_at)",
     colTuples,
     25,
-  );
-
-  lines.push("");
-  const dailyTuples = filteredDaily.map(
-    (d) =>
-      `(${sqlStr(d.collection_slug)}, ${sqlStr(d.mint_date)}, ${d.mint_count}, ${d.unique_minters}, 0)`,
-  );
-  pushBatchedInserts(
-    lines,
-    "INSERT OR REPLACE INTO collection_daily_mints (collection_slug, mint_date, mint_count, unique_minters, spin_count)",
-    dailyTuples,
-    60,
   );
 
   lines.push("");
@@ -616,6 +607,18 @@ export function aggregateAndEmitSql(
     "INSERT OR REPLACE INTO sale_round_member_stats (round_slug, member_id, mint_count, unique_buyers, mints_per_buyer, top_buyer_share_pct, rank, unique_buyers_rank, share_pct, unique_buyers_share_pct, relative_index, unique_buyers_relative_index, z_score, rank_delta_prev, rolling5_rank, rolling10_rank, rolling5_relative_index, rolling10_relative_index, is_anomaly, anomaly_direction, anomaly_reason)",
     statTuples,
     25,
+  );
+
+  lines.push("");
+  const roundDailyTuples = filteredDaily.map(
+    (d) =>
+      `(${sqlStr(d.round_slug)}, ${sqlStr(d.mint_date)}, ${d.mint_count}, ${d.unique_buyers})`,
+  );
+  pushBatchedInserts(
+    lines,
+    "INSERT OR REPLACE INTO round_daily_mints (round_slug, mint_date, mint_count, unique_buyers)",
+    roundDailyTuples,
+    60,
   );
 
   // Update sync_state cursors
