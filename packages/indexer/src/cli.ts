@@ -743,7 +743,7 @@ async function main() {
       try {
         store.db.exec(`
           INSERT INTO raw_mints (token_id, chain, block_number, minted_at, minter, tx_hash)
-          SELECT token_id, chain, block_number, minted_at, minter, tx_hash FROM src.raw_mints
+          SELECT token_id, chain, block_number, minted_at, minter, tx_hash FROM src.raw_mints WHERE 1=1
           ON CONFLICT(token_id) DO UPDATE SET
             chain        = CASE WHEN excluded.minted_at < raw_mints.minted_at THEN excluded.chain        ELSE raw_mints.chain END,
             block_number = CASE WHEN excluded.minted_at < raw_mints.minted_at THEN excluded.block_number ELSE raw_mints.block_number END,
