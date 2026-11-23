@@ -396,11 +396,10 @@ async function fetchAbstractRangeLogsRecursive(
       throw err;
     }
     const mid = Math.floor((fromBlock + toBlock) / 2);
-    const [left, right] = await Promise.all([
-      fetchAbstractRangeLogsRecursive(rpcUrl, fromBlock, mid, topics),
-      fetchAbstractRangeLogsRecursive(rpcUrl, mid + 1, toBlock, topics),
-    ]);
-    return [...left, ...right];
+    const left = await fetchAbstractRangeLogsRecursive(rpcUrl, fromBlock, mid, topics);
+    const right = await fetchAbstractRangeLogsRecursive(rpcUrl, mid + 1, toBlock, topics);
+    for (const item of right) left.push(item);
+    return left;
   }
 }
 
