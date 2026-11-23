@@ -15,7 +15,8 @@
     "db:generate": "npm run db:generate --workspace=@objekt-stats/db",
     "db:seed-sql": "npm run db:seed-sql --workspace=@objekt-stats/db",
     "db:migrate:local": "npm run db:migrate:local --workspace=@objekt-stats/web",
-    "db:seed:local": "npm run db:seed:local --workspace=@objekt-stats/web"
+    "db:seed:local": "npm run db:seed:local --workspace=@objekt-stats/web",
+    "indexer": "npm run cli --workspace=@objekt-stats/indexer --"
   },
   "engines": {
     "node": ">=22.0.0"

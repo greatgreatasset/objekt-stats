@@ -6,6 +6,7 @@ import {
   Database,
   Layers,
   Sparkles,
+  Trophy,
   Users,
 } from "lucide-react";
 
@@ -24,6 +25,13 @@ export interface OverviewData {
     fullName: string;
     hexColor: string;
     revealDate: string;
+    stats: {
+      totalMints: number;
+      roundsCount: number;
+      avgRank: number | null;
+      avgRelativeIndex: number | null;
+      bestRank: number | null;
+    } | null;
   }>;
   rounds: Array<{
     slug: string;
@@ -34,6 +42,12 @@ export interface OverviewData {
     startAt: string;
     totalMints: number;
     participatingMembers: number;
+    includeInPopularity: boolean;
+    topSeller: {
+      memberId: string;
+      mintCount: number;
+      sharePct: number;
+    } | null;
   }>;
   events: Array<{
     id: string;
@@ -44,8 +58,16 @@ export interface OverviewData {
     summary: string;
     memberIds: string[];
   }>;
+  syncState: Array<{
+    chain: string;
+    lastIndexedBlock: number;
+    lastIndexedTimestamp: string | null;
+    totalTokensIndexed: number;
+  }>;
   totals: {
     roundCount: number;
+    popularityRoundCount: number;
+    collectionCount: number;
     totalMints: number;
   };
 }
@@ -71,6 +93,23 @@ export function OverviewView({
   const memberById = new Map(data.members.map((m) => [m.id, m]));
   const searchParam = isArtms ? { artist: "artms" as const } : {};
 
+  const rankedMembers = [...data.members]
+    .filter((m) => m.stats && m.stats.totalMints > 0)
+    .sort(
+      (a, b) =>
+        (b.stats?.avgRelativeIndex ?? 0) - (a.stats?.avgRelativeIndex ?? 0),
+    );
+  const maxRelIdx = Math.max(
+    1.5,
+    ...rankedMembers.map((m) => m.stats?.avgRelativeIndex ?? 1),
+  );
+
+  const featuredRounds = data.rounds
+    .filter((r) => r.includeInPopularity)
+    .slice(0, 6);
+  const displayRounds =
+    featuredRounds.length > 0 ? featuredRounds : data.rounds.slice(0, 6);
+
   return (
     <div className="space-y-10">
       {/* Hero */}
@@ -81,7 +120,7 @@ export function OverviewView({
         />
         <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-2xl space-y-3">
-            <div className="inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/80 px-3 py-1 text-xs font-mono text-zinc-300">
+            <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/80 px-3 py-1 text-xs font-mono text-zinc-300">
               <span
                 className="h-2 w-2 rounded-full animate-pulse"
                 style={{ backgroundColor: accent }}
@@ -90,7 +129,16 @@ export function OverviewView({
                 {isArtms ? "ARTMS Secondary Tracker" : "tripleS Primary Tracker"}
               </span>
               <span className="text-zinc-600">•</span>
-              <span className="text-zinc-400">Polygon + Abstract On-Chain</span>
+              <span className="text-zinc-400">
+                {data.syncState.length > 0
+                  ? data.syncState
+                      .map(
+                        (s) =>
+                          `${s.chain} #${s.lastIndexedBlock.toLocaleString()}`,
+                      )
+                      .join(" + ")
+                  : "Polygon + Abstract On-Chain"}
+              </span>
             </div>
 
             <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
@@ -99,10 +147,10 @@ export function OverviewView({
             </h1>
 
             <p className="text-sm leading-relaxed text-zinc-400 sm:text-base">
-              Tracking every public Modhaus COSMO Objekt release across Polygon
-              (2022–2025) and Abstract (2025–present). Compare member rank
-              trajectories, roster-normalized demand shares, rolling averages,
-              and correlate major surges or drops with real-world milestones.
+              Tracking Modhaus COSMO Objekt releases across Polygon (2022–2025)
+              and Abstract (2025–present). Compare member rank trajectories,
+              roster-normalized demand shares, rolling averages, and correlate
+              surges or drops with real-world milestones.
             </p>
           </div>
 
@@ -116,10 +164,11 @@ export function OverviewView({
               Browse Sale Rounds
             </Link>
             <Link
-              to="/methodology"
+              to="/members"
+              search={searchParam}
               className="inline-flex items-center gap-2 rounded-xl border border-zinc-700/80 bg-zinc-900/70 px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:text-white"
             >
-              How Rankings Work
+              Popularity Matrix
               <ArrowUpRight className="h-4 w-4" />
             </Link>
           </div>
@@ -138,17 +187,13 @@ export function OverviewView({
           icon={<Layers className="h-4 w-4 text-zinc-400" />}
           label="Indexed Sale Rounds"
           value={data.totals.roundCount.toLocaleString()}
-          subtext={
-            data.totals.roundCount === 0
-              ? "Phase 2 backfill queued"
-              : "Member-select & pack drops"
-          }
+          subtext={`${data.totals.popularityRoundCount} popularity-ranked rounds`}
         />
         <KpiCard
           icon={<Activity className="h-4 w-4 text-zinc-400" />}
-          label="Objekts Counted"
+          label="On-Chain Mints Indexed"
           value={data.totals.totalMints.toLocaleString()}
-          subtext="Includes Polygon pre-spin supply"
+          subtext={`${data.totals.collectionCount.toLocaleString()} unique collections`}
         />
         <KpiCard
           icon={<Calendar className="h-4 w-4 text-zinc-400" />}
@@ -158,32 +203,163 @@ export function OverviewView({
         />
       </section>
 
-      {/* Pipeline Status Notice when no rounds indexed yet */}
-      {data.rounds.length === 0 && (
-        <section className="rounded-2xl border border-amber-500/25 bg-amber-500/5 p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-start gap-3">
-              <Database className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" />
-              <div className="space-y-1">
-                <h2 className="text-sm font-semibold text-amber-200">
-                  Phase 1 Live on Cloudflare Edge — Phase 2 On-Chain Backfill Next
+      {/* Live Popularity Leaderboard Preview + Recent Sale Rounds */}
+      {rankedMembers.length > 0 ? (
+        <section className="grid gap-6 lg:grid-cols-5">
+          <div className="lg:col-span-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
+            <div className="flex items-end justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                  <Trophy className="h-4 w-4 text-amber-400" />
+                  Demand Index Leaderboard (Indexed Popularity Rounds)
                 </h2>
-                <p className="text-xs leading-relaxed text-zinc-400">
-                  The Cloudflare Workers app, D1 database, member rosters, and
-                  statistical ranking engine are live on{" "}
-                  <span className="font-mono text-zinc-200">objektstats.com</span>
-                  . Next up: running the Polygon (May 2022 – Apr 18, 2025) +
-                  Abstract (Apr 18, 2025 – present) historical backfill to
-                  populate every COSMO sale round and member trend chart.
+                <p className="text-xs text-zinc-400">
+                  Average Relative Share Index (1.00× = exact round average).
                 </p>
               </div>
+              <Link
+                to="/members"
+                search={searchParam}
+                className="text-xs font-medium text-zinc-400 hover:text-white"
+              >
+                Compare all →
+              </Link>
             </div>
-            <Link
-              to="/methodology"
-              className="shrink-0 self-start rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-amber-500/20 sm:self-center"
-            >
-              Read Pipeline Spec
-            </Link>
+
+            <div className="space-y-2.5">
+              {rankedMembers.slice(0, 10).map((m, i) => {
+                const rel = m.stats?.avgRelativeIndex ?? 1;
+                const widthPct = Math.max(8, Math.min(100, (rel / maxRelIdx) * 100));
+                return (
+                  <Link
+                    key={m.id}
+                    to="/members/$memberId"
+                    params={{ memberId: m.id }}
+                    className="group block space-y-1 rounded-lg p-1.5 transition hover:bg-zinc-900/80"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 font-mono text-zinc-500">
+                          #{i + 1}
+                        </span>
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: m.hexColor }}
+                        />
+                        <span className="font-semibold text-zinc-100 group-hover:text-white">
+                          {m.name}
+                        </span>
+                        <span className="font-mono text-[10px] text-zinc-500">
+                          {m.code}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 font-mono tabular-nums">
+                        <span className="text-zinc-400">
+                          {m.stats?.totalMints.toLocaleString()} mints
+                        </span>
+                        <span className="w-12 text-right font-semibold text-white">
+                          {rel.toFixed(2)}×
+                        </span>
+                      </div>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-950">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${widthPct}%`,
+                          backgroundColor: m.hexColor,
+                        }}
+                      />
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="lg:col-span-2 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
+            <div className="flex items-end justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-white">
+                  Recent Sale Rounds
+                </h2>
+                <p className="text-xs text-zinc-400">
+                  Click any round for full member breakdown.
+                </p>
+              </div>
+              <Link
+                to="/rounds"
+                search={searchParam}
+                className="text-xs font-medium text-zinc-400 hover:text-white"
+              >
+                All rounds →
+              </Link>
+            </div>
+
+            <div className="space-y-2.5">
+              {displayRounds.map((r) => {
+                const topMember = r.topSeller
+                  ? memberById.get(r.topSeller.memberId)
+                  : null;
+                return (
+                  <Link
+                    key={r.slug}
+                    to="/rounds/$slug"
+                    params={{ slug: r.slug }}
+                    className="block rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3.5 transition hover:border-zinc-600 hover:bg-zinc-900/70"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-white">
+                          {r.title}
+                        </p>
+                        <p className="font-mono text-[11px] text-zinc-500">
+                          {r.startAt.slice(0, 10)} • {r.participatingMembers}{" "}
+                          members
+                        </p>
+                      </div>
+                      <span className="font-mono text-xs font-semibold text-zinc-200 tabular-nums">
+                        {r.totalMints.toLocaleString()}
+                      </span>
+                    </div>
+                    {topMember && r.topSeller && (
+                      <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-400">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="text-amber-400 font-mono">#1</span>
+                          <span
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: topMember.hexColor }}
+                          />
+                          <span className="text-zinc-200 font-medium">
+                            {topMember.name}
+                          </span>
+                        </span>
+                        <span className="font-mono tabular-nums">
+                          {r.topSeller.mintCount.toLocaleString()} (
+                          {r.topSeller.sharePct.toFixed(1)}%)
+                        </span>
+                      </div>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className="rounded-2xl border border-amber-500/25 bg-amber-500/5 p-5">
+          <div className="flex items-start gap-3">
+            <Database className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" />
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-amber-200">
+                Waiting for On-Chain Backfill Data
+              </h2>
+              <p className="text-xs leading-relaxed text-zinc-400">
+                No indexed sale rounds found for this artist yet. Run the
+                indexer sync to populate on-chain Polygon + Abstract mints into
+                Cloudflare D1.
+              </p>
+            </div>
           </div>
         </section>
       )}
@@ -196,8 +372,8 @@ export function OverviewView({
               {isArtms ? "ARTMS Members" : "tripleS S1–S24 Roster"}
             </h2>
             <p className="text-xs text-zinc-400">
-              Loaded live from Cloudflare D1 with official representative colors
-              and reveal chronology.
+              Click any member to inspect their round history and indexed
+              Objekts.
             </p>
           </div>
           <Link
@@ -211,9 +387,11 @@ export function OverviewView({
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
           {data.members.map((m) => (
-            <div
+            <Link
               key={m.id}
-              className="group relative overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3.5 transition hover:border-zinc-700 hover:bg-zinc-900"
+              to="/members/$memberId"
+              params={{ memberId: m.id }}
+              className="group relative overflow-hidden rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3.5 transition hover:border-zinc-600 hover:bg-zinc-900"
             >
               <div
                 className="absolute inset-x-0 top-0 h-1"
@@ -230,13 +408,20 @@ export function OverviewView({
                 />
               </div>
               <div className="mt-2">
-                <p className="font-semibold text-white text-sm">{m.name}</p>
+                <p className="font-semibold text-white text-sm group-hover:text-sky-200 transition-colors">
+                  {m.name}
+                </p>
                 <p className="text-[11px] text-zinc-500 truncate">{m.fullName}</p>
               </div>
-              <p className="mt-2 font-mono text-[10px] text-zinc-500">
-                {m.revealDate}
-              </p>
-            </div>
+              <div className="mt-2 flex items-center justify-between font-mono text-[10px] text-zinc-500">
+                <span>{m.revealDate}</span>
+                {m.stats?.avgRank !== null && m.stats?.avgRank !== undefined && (
+                  <span className="text-zinc-300">
+                    avg #{m.stats.avgRank.toFixed(1)}
+                  </span>
+                )}
+              </div>
+            </Link>
           ))}
         </div>
       </section>

@@ -12,10 +12,12 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ArtmsRouteImport } from './routes/artms'
 import { Route as EventsRouteImport } from './routes/events'
-import { Route as MembersRouteImport } from './routes/members'
 import { Route as MethodologyRouteImport } from './routes/methodology'
-import { Route as RoundsRouteImport } from './routes/rounds'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
+import { Route as MembersIndexRouteImport } from './routes/members/index'
+import { Route as MembersMemberIdRouteImport } from './routes/members/$memberId'
+import { Route as RoundsIndexRouteImport } from './routes/rounds/index'
+import { Route as RoundsSlugRouteImport } from './routes/rounds/$slug'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -32,19 +34,9 @@ const EventsRoute = EventsRouteImport.update({
   path: '/events',
   getParentRoute: () => rootRouteImport,
 } as any)
-const MembersRoute = MembersRouteImport.update({
-  id: '/members',
-  path: '/members',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const MethodologyRoute = MethodologyRouteImport.update({
   id: '/methodology',
   path: '/methodology',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RoundsRoute = RoundsRouteImport.update({
-  id: '/rounds',
-  path: '/rounds',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -52,34 +44,60 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MembersIndexRoute = MembersIndexRouteImport.update({
+  id: '/members/',
+  path: '/members/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MembersMemberIdRoute = MembersMemberIdRouteImport.update({
+  id: '/members/$memberId',
+  path: '/members/$memberId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RoundsIndexRoute = RoundsIndexRouteImport.update({
+  id: '/rounds/',
+  path: '/rounds/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RoundsSlugRoute = RoundsSlugRouteImport.update({
+  id: '/rounds/$slug',
+  path: '/rounds/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/artms': typeof ArtmsRoute
   '/events': typeof EventsRoute
-  '/members': typeof MembersRoute
   '/methodology': typeof MethodologyRoute
-  '/rounds': typeof RoundsRoute
   '/api/health': typeof ApiHealthRoute
+  '/members/$memberId': typeof MembersMemberIdRoute
+  '/rounds/$slug': typeof RoundsSlugRoute
+  '/members/': typeof MembersIndexRoute
+  '/rounds/': typeof RoundsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/artms': typeof ArtmsRoute
   '/events': typeof EventsRoute
-  '/members': typeof MembersRoute
   '/methodology': typeof MethodologyRoute
-  '/rounds': typeof RoundsRoute
   '/api/health': typeof ApiHealthRoute
+  '/members/$memberId': typeof MembersMemberIdRoute
+  '/rounds/$slug': typeof RoundsSlugRoute
+  '/members': typeof MembersIndexRoute
+  '/rounds': typeof RoundsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/artms': typeof ArtmsRoute
   '/events': typeof EventsRoute
-  '/members': typeof MembersRoute
   '/methodology': typeof MethodologyRoute
-  '/rounds': typeof RoundsRoute
   '/api/health': typeof ApiHealthRoute
+  '/members/$memberId': typeof MembersMemberIdRoute
+  '/rounds/$slug': typeof RoundsSlugRoute
+  '/members/': typeof MembersIndexRoute
+  '/rounds/': typeof RoundsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -87,38 +105,46 @@ export interface FileRouteTypes {
     | '/'
     | '/artms'
     | '/events'
-    | '/members'
     | '/methodology'
-    | '/rounds'
     | '/api/health'
+    | '/members/$memberId'
+    | '/rounds/$slug'
+    | '/members/'
+    | '/rounds/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/artms'
     | '/events'
-    | '/members'
     | '/methodology'
-    | '/rounds'
     | '/api/health'
+    | '/members/$memberId'
+    | '/rounds/$slug'
+    | '/members'
+    | '/rounds'
   id:
     | '__root__'
     | '/'
     | '/artms'
     | '/events'
-    | '/members'
     | '/methodology'
-    | '/rounds'
     | '/api/health'
+    | '/members/$memberId'
+    | '/rounds/$slug'
+    | '/members/'
+    | '/rounds/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ArtmsRoute: typeof ArtmsRoute
   EventsRoute: typeof EventsRoute
-  MembersRoute: typeof MembersRoute
   MethodologyRoute: typeof MethodologyRoute
-  RoundsRoute: typeof RoundsRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  MembersMemberIdRoute: typeof MembersMemberIdRoute
+  RoundsSlugRoute: typeof RoundsSlugRoute
+  MembersIndexRoute: typeof MembersIndexRoute
+  RoundsIndexRoute: typeof RoundsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -144,25 +170,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EventsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/members': {
-      id: '/members'
-      path: '/members'
-      fullPath: '/members'
-      preLoaderRoute: typeof MembersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/methodology': {
       id: '/methodology'
       path: '/methodology'
       fullPath: '/methodology'
       preLoaderRoute: typeof MethodologyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/rounds': {
-      id: '/rounds'
-      path: '/rounds'
-      fullPath: '/rounds'
-      preLoaderRoute: typeof RoundsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/health': {
@@ -172,6 +184,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/members/': {
+      id: '/members/'
+      path: '/members'
+      fullPath: '/members/'
+      preLoaderRoute: typeof MembersIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/members/$memberId': {
+      id: '/members/$memberId'
+      path: '/members/$memberId'
+      fullPath: '/members/$memberId'
+      preLoaderRoute: typeof MembersMemberIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rounds/': {
+      id: '/rounds/'
+      path: '/rounds'
+      fullPath: '/rounds/'
+      preLoaderRoute: typeof RoundsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rounds/$slug': {
+      id: '/rounds/$slug'
+      path: '/rounds/$slug'
+      fullPath: '/rounds/$slug'
+      preLoaderRoute: typeof RoundsSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -179,10 +219,12 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ArtmsRoute: ArtmsRoute,
   EventsRoute: EventsRoute,
-  MembersRoute: MembersRoute,
   MethodologyRoute: MethodologyRoute,
-  RoundsRoute: RoundsRoute,
   ApiHealthRoute: ApiHealthRoute,
+  MembersMemberIdRoute: MembersMemberIdRoute,
+  RoundsSlugRoute: RoundsSlugRoute,
+  MembersIndexRoute: MembersIndexRoute,
+  RoundsIndexRoute: RoundsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
