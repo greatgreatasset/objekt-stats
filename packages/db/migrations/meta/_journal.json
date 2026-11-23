@@ -50,6 +50,13 @@
       "when": 1795449465247,
       "tag": "0006_aspiring_alice",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1795451312264,
+      "tag": "0007_quick_leader",
+      "breakpoints": true
     }
   ]
 }

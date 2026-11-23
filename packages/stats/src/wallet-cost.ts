@@ -1,3 +1,4 @@
+import { classifyGridRewardSco, type GridEditionId } from "./grids.js";
 import {
   COSMO_SPIN_ADDRESS,
   DEAD_ADDRESS,
@@ -155,12 +156,12 @@ export const DEFAULT_PRICING_RATES: PricingRates = {
   physicalDcoOma: 5.5, // OMA / physical album inclusion estimate
   physicalOther: 5.5, // Physical SCO / Unit / event merch QR
 
-  passPlus1: 4.99, // 1-Member Pass+ (~$3.99–$4.99 / ₩6,900)
-  passPlus2: 8.99, // 2-Member Pass+ (~$8.99 / ₩13,800)
-  passPlus4: 16.99, // 4-Member Pass+ (~$14.99–$19.99 / ₩27,600)
-  passPlus8: 34.99, // 8-Member Pass+ (~$29.99–$39.99 / ₩55,200)
-  passPlusAll24: 96.0, // tripleS All-Member Pass+ ($89.99 US base + tax ≈ $96/mo)
-  passPlusArtmsAll5: 19.99, // ARTMS All-Member Pass+ (5 members)
+  passPlus1: 4.89, // 1-Member Pass+ ($4.89 US App Store / ₩6,900 KR = $4.89/member)
+  passPlus2: 9.19, // 2-Member Pass+ (₩12,900 KR ≈ $9.19 = $4.60/member, -6% vs 1-Member)
+  passPlus4: 17.49, // 4-Member Pass+ (₩24,900 KR ≈ $17.49 = $4.37/member, -11% vs 1-Member)
+  passPlus8: 32.99, // 8-Member Pass+ (₩46,900 KR ≈ $32.99 = $4.12/member, -16% vs 1-Member)
+  passPlusAll24: 90.0, // tripleS All-Member Pass+ ($90.00 US Google Play pre-tax = $3.75/member, -23% vs 1-Member; ~$98.78 post-tax)
+  passPlusArtmsAll5: 19.99, // ARTMS All-Member Pass+ (5 members = $4.00/member, -18% vs 1-Member)
 
   otcP2pReceived: 2.5,
 };
@@ -228,6 +229,10 @@ export interface WalletActivityItem {
   receivedItems?: ActivityTokenItem[];
   retailValueGaveUsd?: number;
   retailValueReceivedUsd?: number;
+  // For COSMO Grid completion rewards (201Z-206Z / idntt 301Z-302Z)
+  isGridReward?: boolean;
+  gridEditionLabel?: string;
+  gridFcosLocked?: number;
 }
 
 export interface MonthlySpendPoint {
@@ -242,6 +247,7 @@ export interface MonthlySpendPoint {
   physicalScanCount: number;
   tradeCount: number;
   spinCount: number;
+  gridsCompleted: number;
 }
 
 export interface ClassBreakdownRow {
@@ -264,6 +270,7 @@ export interface MemberSpendRow {
   subscriptionCount: number;
   physicalScanCount: number;
   freeRewardCount: number;
+  gridsCompleted: number;
   tradedInCount: number;
   p2pInCount: number;
   currentlyHeldCount: number;
@@ -276,9 +283,25 @@ export interface ArtistSpendRow {
   paidMintCount: number;
   subscriptionCount: number;
   physicalScanCount: number;
+  gridsCompleted: number;
   totalAcquired: number;
   currentlyHeldCount: number;
   estimatedUsd: number;
+}
+
+export interface CompletedGridGroup {
+  key: string;
+  artistId: string;
+  artistLabel: string;
+  season: string;
+  editionId: GridEditionId;
+  editionLabel: string;
+  shortLabel: string;
+  gridSize: 4 | 8;
+  gridsCompleted: number;
+  fcosLocked: number;
+  uniqueMembers: number;
+  latestCompletedAt: string;
 }
 
 export interface DetectedSubscriptionMonth {
@@ -291,6 +314,7 @@ export interface DetectedSubscriptionMonth {
   tierLabel: string;
   memberCount: number;
   estimatedUsd: number;
+  perMemberUsd: number;
   lowUsd: number;
   highUsd: number;
   isInferred: boolean;
@@ -321,6 +345,15 @@ export interface WalletCostSummary {
   detectedSubscriptionTier: string | null;
   physicalScans: number;
   freeRewards: number;
+  gridsCompleted: number;
+  gridsCompletedAbstract: number;
+  gridsCompletedPolygon: number;
+  migratedGridScosCount: number;
+  gridFcosLocked: number;
+  gridsEd1Count: number;
+  gridsEd2Count: number;
+  gridsEd3Count: number;
+  heldScoCount: number;
   spinsSent: number;
   spinsReceived: number;
   confirmedTradeSwaps: number;
@@ -341,6 +374,7 @@ export interface WalletCostSummary {
 export interface WalletCostAnalysis {
   summary: WalletCostSummary;
   subscriptions: DetectedSubscriptionMonth[];
+  gridBreakdown: CompletedGridGroup[];
   monthlyTimeline: MonthlySpendPoint[];
   classBreakdown: ClassBreakdownRow[];
   memberBreakdown: MemberSpendRow[];
@@ -627,63 +661,134 @@ function deduceTalkPassTier(
 ): {
   tierLabel: string;
   usd: number;
+  perMemberUsd: number;
   lowUsd: number;
   highUsd: number;
 } {
-  if (artistId === "artms" && uniqueMemberCount >= 5) {
+  const count = Math.max(1, uniqueMemberCount);
+
+  if (artistId === "artms" && count >= 5) {
+    const usd = round2(rates.passPlusArtmsAll5);
     return {
       tierLabel: "ARTMS All-Member Pass+ (5)",
-      usd: round2(rates.passPlusArtmsAll5),
-      lowUsd: round2(Math.min(rates.passPlusArtmsAll5, 16.99)),
-      highUsd: round2(Math.max(rates.passPlusArtmsAll5, 22.99)),
+      usd,
+      perMemberUsd: round2(usd / count),
+      lowUsd: round2(Math.min(usd, 16.99)),
+      highUsd: round2(Math.max(usd, 22.99)),
     };
   }
-  if (uniqueMemberCount >= 20) {
+
+  const all24Usd = round2(rates.passPlusAll24);
+  const all24Low = round2(Math.min(all24Usd, 79.99));
+  const all24High = round2(Math.max(all24Usd, 98.78));
+
+  // Hiatus-safe All-Member (20..24 members)
+  if (count >= 20) {
     return {
       tierLabel: "All-Member Pass+ (24)",
-      usd: round2(rates.passPlusAll24),
-      lowUsd: round2(Math.min(rates.passPlusAll24, 89.99)),
-      highUsd: round2(Math.max(rates.passPlusAll24, 99.0)),
+      usd: all24Usd,
+      perMemberUsd: round2(all24Usd / count),
+      lowUsd: all24Low,
+      highUsd: all24High,
     };
   }
-  if (uniqueMemberCount >= 7) {
-    return {
-      tierLabel: "8-Member Pass+",
-      usd: round2(rates.passPlus8),
-      lowUsd: round2(Math.min(rates.passPlus8, 29.99)),
-      highUsd: round2(Math.max(rates.passPlus8, 41.99)),
-    };
-  }
-  if (uniqueMemberCount >= 4) {
-    return {
-      tierLabel: "4-Member Pass+",
-      usd: round2(rates.passPlus4),
-      lowUsd: round2(Math.min(rates.passPlus4, 14.99)),
-      highUsd: round2(Math.max(rates.passPlus4, 20.99)),
-    };
-  }
-  if (uniqueMemberCount === 3) {
-    const combo = round2(rates.passPlus2 + rates.passPlus1);
-    return {
-      tierLabel: "3-Member Pass+ (2+1)",
-      usd: combo,
-      lowUsd: round2(Math.min(combo, 12.98)),
-      highUsd: round2(Math.max(combo, 15.48)),
-    };
-  }
-  if (uniqueMemberCount === 2) {
-    return {
-      tierLabel: "2-Member Pass+",
+
+  // Exact single-tier options (monotonically more economical per member as tier grows)
+  const baseTiers: Array<{
+    size: number;
+    label: string;
+    usd: number;
+    low: number;
+    high: number;
+  }> = [
+    {
+      size: 1,
+      label: "1-Member Pass+",
+      usd: round2(rates.passPlus1),
+      low: round2(Math.min(rates.passPlus1, 3.99)),
+      high: round2(Math.max(rates.passPlus1, 5.49)),
+    },
+    {
+      size: 2,
+      label: "2-Member Pass+",
       usd: round2(rates.passPlus2),
-      lowUsd: round2(Math.min(rates.passPlus2, 7.99)),
-      highUsd: round2(Math.max(rates.passPlus2, 9.99)),
+      low: round2(Math.min(rates.passPlus2, 7.99)),
+      high: round2(Math.max(rates.passPlus2, 10.19)),
+    },
+    {
+      size: 4,
+      label: "4-Member Pass+",
+      usd: round2(rates.passPlus4),
+      low: round2(Math.min(rates.passPlus4, 14.99)),
+      high: round2(Math.max(rates.passPlus4, 19.49)),
+    },
+    {
+      size: 8,
+      label: "8-Member Pass+",
+      usd: round2(rates.passPlus8),
+      low: round2(Math.min(rates.passPlus8, 29.99)),
+      high: round2(Math.max(rates.passPlus8, 36.99)),
+    },
+  ];
+
+  const exactSingle = baseTiers.find((t) => t.size === count);
+  if (exactSingle) {
+    return {
+      tierLabel: exactSingle.label,
+      usd: exactSingle.usd,
+      perMemberUsd: round2(exactSingle.usd / count),
+      lowUsd: exactSingle.low,
+      highUsd: exactSingle.high,
     };
   }
+
+  // Minimum-cost stacked tier combination for intermediate counts (e.g. 3 = 2+1, 6 = 4+2, 12 = 8+4)
+  interface DpState {
+    usd: number;
+    low: number;
+    high: number;
+    parts: number[];
+  }
+  const dp: Array<DpState | null> = Array.from({ length: count + 1 }, () => null);
+  dp[0] = { usd: 0, low: 0, high: 0, parts: [] };
+
+  for (let n = 1; n <= count; n++) {
+    let best: DpState | null = null;
+    for (const t of baseTiers) {
+      if (t.size <= n && dp[n - t.size]) {
+        const prev = dp[n - t.size]!;
+        const candUsd = round2(prev.usd + t.usd);
+        if (!best || candUsd < best.usd) {
+          best = {
+            usd: candUsd,
+            low: round2(prev.low + t.low),
+            high: round2(prev.high + t.high),
+            parts: [...prev.parts, t.size],
+          };
+        }
+      }
+    }
+    dp[n] = best;
+  }
+
+  const bestStack = dp[count];
+  if (!bestStack || bestStack.usd >= all24Usd) {
+    return {
+      tierLabel: "All-Member Pass+ (24)",
+      usd: all24Usd,
+      perMemberUsd: round2(all24Usd / count),
+      lowUsd: all24Low,
+      highUsd: all24High,
+    };
+  }
+
+  const sortedParts = [...bestStack.parts].sort((a, b) => b - a);
   return {
-    tierLabel: "1-Member Pass+",
-    usd: round2(rates.passPlus1),
-    lowUsd: round2(Math.min(rates.passPlus1, 3.99)),
-    highUsd: round2(Math.max(rates.passPlus1, 5.49)),
+    tierLabel: `${count}-Member Pass+ (${sortedParts.join("+")})`,
+    usd: bestStack.usd,
+    perMemberUsd: round2(bestStack.usd / count),
+    lowUsd: bestStack.low,
+    highUsd: bestStack.high,
   };
 }
 
@@ -908,6 +1013,15 @@ export function analyzeWalletCost(
   let subscriptionObjekts = 0;
   let physicalScans = 0;
   let freeRewards = 0;
+  let gridsCompleted = 0;
+  let gridsCompletedAbstract = 0;
+  let gridsCompletedPolygon = 0;
+  let migratedGridScosCount = 0;
+  let gridFcosLocked = 0;
+  let gridsEd1Count = 0;
+  let gridsEd2Count = 0;
+  let gridsEd3Count = 0;
+  let heldScoCount = 0;
   let spinsSent = 0;
   let spinsReceived = 0;
   let confirmedTradeSwaps = 0;
@@ -922,6 +1036,23 @@ export function analyzeWalletCost(
   const classMap = new Map<string, ClassBreakdownRow>();
   const memberMap = new Map<string, MemberSpendRow>();
   const artistMap = new Map<string, ArtistSpendRow>();
+  const gridGroupMap = new Map<
+    string,
+    {
+      key: string;
+      artistId: string;
+      artistLabel: string;
+      season: string;
+      editionId: GridEditionId;
+      editionLabel: string;
+      shortLabel: string;
+      gridSize: 4 | 8;
+      gridsCompleted: number;
+      fcosLocked: number;
+      members: Set<string>;
+      latestCompletedAt: string;
+    }
+  >();
 
   const getMonth = (iso: string): MonthlySpendPoint => {
     const month = iso.slice(0, 7);
@@ -939,6 +1070,7 @@ export function analyzeWalletCost(
         physicalScanCount: 0,
         tradeCount: 0,
         spinCount: 0,
+        gridsCompleted: 0,
       };
       monthlyMap.set(month, m);
     }
@@ -1004,6 +1136,7 @@ export function analyzeWalletCost(
         paidMintCount: 0,
         subscriptionCount: 0,
         physicalScanCount: 0,
+        gridsCompleted: 0,
         totalAcquired: 0,
         currentlyHeldCount: 0,
         estimatedUsd: 0,
@@ -1039,6 +1172,7 @@ export function analyzeWalletCost(
           subscriptionCount: 0,
           physicalScanCount: 0,
           freeRewardCount: 0,
+          gridsCompleted: 0,
           tradedInCount: 0,
           p2pInCount: 0,
           currentlyHeldCount: 0,
@@ -1072,10 +1206,16 @@ export function analyzeWalletCost(
     }
   };
 
-  // Count currently held per member and artist
+  // Count currently held per member and artist (plus held digital SCOs for monthly COMO)
   for (const tid of heldTokens) {
     const meta = metaMap.get(tid);
     if (!meta) continue;
+    if (
+      meta.objektClass.toLowerCase() === "special" &&
+      meta.onOffline === "online"
+    ) {
+      heldScoCount++;
+    }
     const artistId = meta.artistId;
     let aRow = artistMap.get(artistId);
     if (!aRow) {
@@ -1085,6 +1225,7 @@ export function analyzeWalletCost(
         paidMintCount: 0,
         subscriptionCount: 0,
         physicalScanCount: 0,
+        gridsCompleted: 0,
         totalAcquired: 0,
         currentlyHeldCount: 0,
         estimatedUsd: 0,
@@ -1104,6 +1245,7 @@ export function analyzeWalletCost(
           subscriptionCount: 0,
           physicalScanCount: 0,
           freeRewardCount: 0,
+          gridsCompleted: 0,
           tradedInCount: 0,
           p2pInCount: 0,
           currentlyHeldCount: 0,
@@ -1373,6 +1515,7 @@ export function analyzeWalletCost(
       tierLabel: tier.tierLabel,
       memberCount: grp.members.size || grp.logs.length,
       estimatedUsd: tier.usd,
+      perMemberUsd: tier.perMemberUsd,
       lowUsd: tier.lowUsd,
       highUsd: tier.highUsd,
       isInferred,
@@ -1387,7 +1530,7 @@ export function analyzeWalletCost(
       blockNumber: firstLog.blockNumber,
       txHash: firstLog.txHash,
       title: `COSMO Talk ${tier.tierLabel} (${grp.season} ${grp.collectionNo})`,
-      subtitle: `${billingLabel} · ${grp.logs.length} monthly Objekt${grp.logs.length === 1 ? "" : "s"} (${grp.members.size} member${grp.members.size === 1 ? "" : "s"})`,
+      subtitle: `${billingLabel} · ${grp.logs.length} monthly Objekt${grp.logs.length === 1 ? "" : "s"} (${formatUsdInline(tier.perMemberUsd)}/member)`,
       count: grp.logs.length,
       cashCostUsd: round2(effectiveSubUsd),
       lowUsd: config.includeSubscriptions ? tier.lowUsd : 0,
@@ -1411,6 +1554,9 @@ export function analyzeWalletCost(
     lowUsd: number;
     highUsd: number;
     basis: string;
+    isGridReward: boolean;
+    gridEditionLabel: string | null;
+    gridFcosLocked: number;
   }
 
   const mintBuckets = new Map<string, MintTxBucket>();
@@ -1456,6 +1602,17 @@ export function analyzeWalletCost(
 
       const monthPoint = getMonth(l.timestamp);
 
+      const gridInfo =
+        est.category === "free_reward" && meta
+          ? classifyGridRewardSco(
+              meta.artistId,
+              meta.season,
+              meta.objektClass,
+              meta.collectionNo,
+              meta.onOffline,
+            )
+          : null;
+
       if (est.category === "shop_mint") {
         paidDigitalMints++;
         digitalShopUsd = round2(digitalShopUsd + est.usd);
@@ -1475,9 +1632,53 @@ export function analyzeWalletCost(
       } else {
         freeRewards++;
         recordClassAndArtist(meta, "free_or_spin", 0, 0, 0);
+
+        if (gridInfo && meta) {
+          gridsCompleted++;
+          if (l.chain === "abstract") gridsCompletedAbstract++;
+          else gridsCompletedPolygon++;
+          gridFcosLocked += gridInfo.gridSize;
+          if (gridInfo.editionId === "ed1") gridsEd1Count++;
+          else if (gridInfo.editionId === "ed2") gridsEd2Count++;
+          else gridsEd3Count++;
+          monthPoint.gridsCompleted++;
+
+          const aRow = artistMap.get(meta.artistId);
+          if (aRow) aRow.gridsCompleted++;
+          if (meta.memberName && meta.memberName !== "Unknown") {
+            const mRow = memberMap.get(`${meta.artistId}|${meta.memberName}`);
+            if (mRow) mRow.gridsCompleted++;
+          }
+
+          const gKey = `${meta.artistId}|${meta.season}|${gridInfo.editionId}`;
+          let gRow = gridGroupMap.get(gKey);
+          if (!gRow) {
+            gRow = {
+              key: gKey,
+              artistId: meta.artistId,
+              artistLabel: formatArtistLabel(meta.artistId),
+              season: meta.season,
+              editionId: gridInfo.editionId,
+              editionLabel: gridInfo.editionLabel,
+              shortLabel: gridInfo.shortLabel,
+              gridSize: gridInfo.gridSize,
+              gridsCompleted: 0,
+              fcosLocked: 0,
+              members: new Set(),
+              latestCompletedAt: l.timestamp,
+            };
+            gridGroupMap.set(gKey, gRow);
+          }
+          gRow.gridsCompleted++;
+          gRow.fcosLocked += gridInfo.gridSize;
+          if (meta.memberName) gRow.members.add(meta.memberName);
+          if (l.timestamp > gRow.latestCompletedAt) {
+            gRow.latestCompletedAt = l.timestamp;
+          }
+        }
       }
 
-      const bucketKey = `${l.chain}:${l.txHash}:${est.category}`;
+      const bucketKey = `${l.chain}:${l.txHash}:${est.category}${gridInfo ? ":grid" : ""}`;
       let bucket = mintBuckets.get(bucketKey);
       if (!bucket) {
         bucket = {
@@ -1490,7 +1691,12 @@ export function analyzeWalletCost(
           totalUsd: 0,
           lowUsd: 0,
           highUsd: 0,
-          basis: est.basis,
+          basis: gridInfo
+            ? `COSMO Grid Completed (${gridInfo.editionLabel} • locks ${gridInfo.gridSize} FCOs)`
+            : est.basis,
+          isGridReward: gridInfo !== null,
+          gridEditionLabel: gridInfo?.editionLabel ?? null,
+          gridFcosLocked: 0,
         };
         mintBuckets.set(bucketKey, bucket);
       }
@@ -1498,6 +1704,9 @@ export function analyzeWalletCost(
       bucket.totalUsd = round2(bucket.totalUsd + est.usd);
       bucket.lowUsd = round2(bucket.lowUsd + est.lowUsd);
       bucket.highUsd = round2(bucket.highUsd + est.highUsd);
+      if (gridInfo) {
+        bucket.gridFcosLocked += gridInfo.gridSize;
+      }
       continue;
     }
 
@@ -1627,9 +1836,11 @@ export function analyzeWalletCost(
       title =
         bucket.category === "physical_scan"
           ? `Scanned ${first.collectionId}`
-          : bucket.category === "free_reward"
-            ? `Claimed ${first.collectionId}`
-            : `Minted ${first.collectionId}`;
+          : bucket.isGridReward
+            ? `Completed Grid · ${first.collectionId}`
+            : bucket.category === "free_reward"
+              ? `Claimed ${first.collectionId}`
+              : `Minted ${first.collectionId}`;
       subtitle = bucket.basis;
     } else {
       const memberSummary =
@@ -1642,10 +1853,14 @@ export function analyzeWalletCost(
       title =
         bucket.category === "physical_scan"
           ? `Scanned ${bucket.items.length}× ${seasonPrefix}${memberSummary} Physical`
-          : bucket.category === "free_reward"
-            ? `Claimed ${bucket.items.length}× ${seasonPrefix}${memberSummary} Rewards`
-            : `Bought ${bucket.items.length}-Pack ${seasonPrefix}${memberSummary}`;
-      subtitle = `${bucket.basis} • $${(bucket.totalUsd / bucket.items.length).toFixed(2)}/ea`;
+          : bucket.isGridReward
+            ? `Completed ${bucket.items.length}× ${seasonPrefix}${memberSummary} Grids`
+            : bucket.category === "free_reward"
+              ? `Claimed ${bucket.items.length}× ${seasonPrefix}${memberSummary} Rewards`
+              : `Bought ${bucket.items.length}-Pack ${seasonPrefix}${memberSummary}`;
+      subtitle = bucket.isGridReward
+        ? `${bucket.gridEditionLabel ?? "COSMO Grid"} • locks ${bucket.gridFcosLocked} FCOs ($0)`
+        : `${bucket.basis} • $${(bucket.totalUsd / bucket.items.length).toFixed(2)}/ea`;
     }
 
     const effectiveCost =
@@ -1654,7 +1869,7 @@ export function analyzeWalletCost(
         : bucket.totalUsd;
 
     activities.push({
-      id: `mint:${bucket.chain}:${bucket.txHash}:${bucket.category}`,
+      id: `mint:${bucket.chain}:${bucket.txHash}:${bucket.category}${bucket.isGridReward ? ":grid" : ""}`,
       category: bucket.category,
       chain: bucket.chain,
       timestamp: bucket.timestamp,
@@ -1674,6 +1889,9 @@ export function analyzeWalletCost(
           : bucket.highUsd,
       pricingBasis: bucket.basis,
       items: bucket.items,
+      isGridReward: bucket.isGridReward || undefined,
+      gridEditionLabel: bucket.gridEditionLabel ?? undefined,
+      gridFcosLocked: bucket.gridFcosLocked > 0 ? bucket.gridFcosLocked : undefined,
     });
   }
 
@@ -1686,6 +1904,19 @@ export function analyzeWalletCost(
 
     for (const ml of migrationLogs) {
       const meta = metaMap.get(ml.tokenId) ?? null;
+      if (
+        meta &&
+        !polygonSeenTokens.has(ml.tokenId) &&
+        classifyGridRewardSco(
+          meta.artistId,
+          meta.season,
+          meta.objektClass,
+          meta.collectionNo,
+          meta.onOffline,
+        ) !== null
+      ) {
+        migratedGridScosCount++;
+      }
       let uUsd = 0;
       let uLow = 0;
       let uHigh = 0;
@@ -1810,6 +2041,27 @@ export function analyzeWalletCost(
     logs[logs.length - 1]?.timestamp ??
     null;
 
+  const gridBreakdown: CompletedGridGroup[] = Array.from(gridGroupMap.values())
+    .map((g) => ({
+      key: g.key,
+      artistId: g.artistId,
+      artistLabel: g.artistLabel,
+      season: g.season,
+      editionId: g.editionId,
+      editionLabel: g.editionLabel,
+      shortLabel: g.shortLabel,
+      gridSize: g.gridSize,
+      gridsCompleted: g.gridsCompleted,
+      fcosLocked: g.fcosLocked,
+      uniqueMembers: g.members.size,
+      latestCompletedAt: g.latestCompletedAt,
+    }))
+    .sort(
+      (a, b) =>
+        b.latestCompletedAt.localeCompare(a.latestCompletedAt) ||
+        b.gridsCompleted - a.gridsCompleted,
+    );
+
   return {
     summary: {
       estimatedTotalUsd,
@@ -1836,6 +2088,15 @@ export function analyzeWalletCost(
       detectedSubscriptionTier: subscriptions[0]?.tierLabel ?? null,
       physicalScans,
       freeRewards,
+      gridsCompleted,
+      gridsCompletedAbstract,
+      gridsCompletedPolygon,
+      migratedGridScosCount,
+      gridFcosLocked,
+      gridsEd1Count,
+      gridsEd2Count,
+      gridsEd3Count,
+      heldScoCount,
       spinsSent,
       spinsReceived,
       confirmedTradeSwaps,
@@ -1853,6 +2114,7 @@ export function analyzeWalletCost(
       lastActivityAt,
     },
     subscriptions,
+    gridBreakdown,
     monthlyTimeline,
     classBreakdown,
     memberBreakdown,

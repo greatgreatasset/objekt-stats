@@ -1,3 +1,5 @@
+import { getSwapEditionKey, getSwapGridTier } from "./grids.js";
+
 /**
  * Pure TypeScript secondary trade detection engine for COSMO ERC-721 Objekt transfers.
  *
@@ -440,6 +442,8 @@ export interface CleanSoloLegMeta {
   objektClass?: string | null;
   onOffline?: string | null;
   memberId?: string | null;
+  season?: string | null;
+  collectionNo?: string | null;
 }
 
 /**
@@ -448,6 +452,9 @@ export interface CleanSoloLegMeta {
  * - Exactly 1 Objekt on the favorable (scarcer) side and 2..6 Objekts on the bulk side
  * - Both sides share the exact same Objekt Class (e.g. First <-> First)
  * - Both sides share the exact same format (Digital `Z` <-> Digital `Z`, or Physical `A` <-> `A`)
+ * - Grid-tier aware: when `collectionNo` is provided, Digital First Class **8-card grid**
+ *   cards (`101–116Z`) and **4-card grid** cards (`117–120Z`) are treated as distinct tiers
+ *   so fair 2× 1st/2nd-Ed -> 1× 3rd-Ed grid utility swaps are NOT miscounted as member overpays
  * - Not all bulk cards belong to the exact same member as the scarce card (cross-member demand)
  */
 export function isCleanSoloPremiumSwap(
@@ -465,17 +472,60 @@ export function isCleanSoloPremiumSwap(
   const prem = premiumSideMetas[0];
   if (!prem?.objektClass || !prem.onOffline) return false;
 
+  const premGridTier = prem.collectionNo
+    ? getSwapGridTier(prem.objektClass, prem.collectionNo, prem.onOffline)
+    : null;
+
   let hasOtherMember = false;
   for (const b of bulkSideMetas) {
     if (!b?.objektClass || !b.onOffline) return false;
     if (b.objektClass !== prem.objektClass) return false;
     if (b.onOffline !== prem.onOffline) return false;
+    if (premGridTier && b.collectionNo) {
+      const bulkGridTier = getSwapGridTier(b.objektClass, b.collectionNo, b.onOffline);
+      if (bulkGridTier !== premGridTier) return false;
+    }
     if (!prem.memberId || !b.memberId || b.memberId !== prem.memberId) {
       hasOtherMember = true;
     }
   }
 
   return hasOtherMember;
+}
+
+/**
+ * Ultra-strict variant of `isCleanSoloPremiumSwap` requiring every card on both sides
+ * to belong to the **exact same season and edition bucket** (e.g., Cream02 3rd Ed FCO
+ * for Cream02 3rd Ed FCO, or Cream02 DCO 353Z for Cream02 DCO 353Z).
+ */
+export function isSameEditionSoloSwap(
+  premiumSideMetas: readonly (CleanSoloLegMeta | null | undefined)[],
+  bulkSideMetas: readonly (CleanSoloLegMeta | null | undefined)[],
+): boolean {
+  if (!isCleanSoloPremiumSwap(premiumSideMetas, bulkSideMetas)) return false;
+  const prem = premiumSideMetas[0];
+  if (!prem?.season || !prem.objektClass || !prem.collectionNo || !prem.onOffline) {
+    return false;
+  }
+  const premEd = getSwapEditionKey(
+    prem.season,
+    prem.objektClass,
+    prem.collectionNo,
+    prem.onOffline,
+  );
+  for (const b of bulkSideMetas) {
+    if (!b?.season || !b.objektClass || !b.collectionNo || !b.onOffline) {
+      return false;
+    }
+    const bulkEd = getSwapEditionKey(
+      b.season,
+      b.objektClass,
+      b.collectionNo,
+      b.onOffline,
+    );
+    if (bulkEd !== premEd) return false;
+  }
+  return true;
 }
 
 export interface MemberTradeMetricInput {

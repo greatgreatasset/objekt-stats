@@ -22,6 +22,7 @@ import {
   isEligibleP2PTransfer,
   isRealisticAsymmetricSwap,
   isSameClassSwap,
+  isSameEditionSoloSwap,
   makeWalletPairKey,
   shortenAddress,
   type P2PTransferEvent,
@@ -612,6 +613,9 @@ async function settlePendingTradesInD1(
       cleanSolo2xCount: number;
       cleanSolo3xCount: number;
       overpayers: Set<string>;
+      sameEdition2xCount: number;
+      sameEdition3xCount: number;
+      sameEditionOverpayers: Set<string>;
       firstAt: string;
       lastAt: string;
     }
@@ -640,6 +644,10 @@ async function settlePendingTradesInD1(
       cleanSolo3xCount: number;
       cleanSoloBulkCount: number;
       overpayers: Set<string>;
+      sameEdition2xCount: number;
+      sameEdition3xCount: number;
+      sameEditionBulkCount: number;
+      sameEditionOverpayers: Set<string>;
       lastAt: string;
     }
   >();
@@ -668,6 +676,7 @@ async function settlePendingTradesInD1(
     isAsymmetric: boolean;
     isSameClass: boolean;
     isCleanSolo: boolean;
+    isSameEdition: boolean;
     ratioMultiple: number;
     walletAShort: string;
     walletBShort: string;
@@ -774,15 +783,18 @@ async function settlePendingTradesInD1(
           objektClass: m.objektClass,
           onOffline: m.onOffline,
           memberId,
+          season: m.season,
+          collectionNo: m.collectionNo,
         };
       };
+      const premCleanMetas = premSideLegs.map(toCleanMeta);
+      const bulkCleanMetas = bulkSideLegs.map(toCleanMeta);
       const isCleanSolo =
         realisticAsym &&
         sym.is2to1Plus &&
-        isCleanSoloPremiumSwap(
-          premSideLegs.map(toCleanMeta),
-          bulkSideLegs.map(toCleanMeta),
-        );
+        isCleanSoloPremiumSwap(premCleanMetas, bulkCleanMetas);
+      const isSameEdition =
+        isCleanSolo && isSameEditionSoloSwap(premCleanMetas, bulkCleanMetas);
 
       const applyDeltaAsym = (
         t: {
@@ -860,6 +872,9 @@ async function settlePendingTradesInD1(
               cleanSolo2xCount: 0,
               cleanSolo3xCount: 0,
               overpayers: new Set(),
+              sameEdition2xCount: 0,
+              sameEdition3xCount: 0,
+              sameEditionOverpayers: new Set(),
               firstAt: leg.transferredAt,
               lastAt: leg.transferredAt,
             };
@@ -902,6 +917,10 @@ async function settlePendingTradesInD1(
                 cleanSolo3xCount: 0,
                 cleanSoloBulkCount: 0,
                 overpayers: new Set(),
+                sameEdition2xCount: 0,
+                sameEdition3xCount: 0,
+                sameEditionBulkCount: 0,
+                sameEditionOverpayers: new Set(),
                 lastAt: leg.transferredAt,
               };
               memberTradeDeltas.set(memberId, mAcc);
@@ -947,6 +966,11 @@ async function settlePendingTradesInD1(
             col.cleanSolo2xCount++;
             if (sym.is3to1Plus) col.cleanSolo3xCount++;
             col.overpayers.add(overpayer);
+            if (isSameEdition) {
+              col.sameEdition2xCount++;
+              if (sym.is3to1Plus) col.sameEdition3xCount++;
+              col.sameEditionOverpayers.add(overpayer);
+            }
           }
           const memberId =
             memberLookup.get(
@@ -958,6 +982,11 @@ async function settlePendingTradesInD1(
               mAcc.cleanSolo2xCount++;
               if (sym.is3to1Plus) mAcc.cleanSolo3xCount++;
               mAcc.overpayers.add(overpayer);
+              if (isSameEdition) {
+                mAcc.sameEdition2xCount++;
+                if (sym.is3to1Plus) mAcc.sameEdition3xCount++;
+                mAcc.sameEditionOverpayers.add(overpayer);
+              }
             }
           }
         }
@@ -972,7 +1001,10 @@ async function settlePendingTradesInD1(
             ) ?? null;
           if (bMemberId) {
             const bmAcc = memberTradeDeltas.get(bMemberId);
-            if (bmAcc) bmAcc.cleanSoloBulkCount++;
+            if (bmAcc) {
+              bmAcc.cleanSoloBulkCount++;
+              if (isSameEdition) bmAcc.sameEditionBulkCount++;
+            }
           }
         }
       }
@@ -1046,6 +1078,7 @@ async function settlePendingTradesInD1(
           isAsymmetric: realisticAsym,
           isSameClass: sameClass,
           isCleanSolo,
+          isSameEdition,
           ratioMultiple: realisticAsym ? sym.ratioMultiple : 1,
           walletAShort: shortenAddress(trade.walletA),
           walletBShort: shortenAddress(trade.walletB),
@@ -1072,8 +1105,8 @@ async function settlePendingTradesInD1(
 
   const upsertColTrade = rawD1.prepare(
     `INSERT INTO collection_trade_stats
-      (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, unique_overpayers, first_trade_at, last_trade_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, unique_overpayers, same_edition_2x_count, same_edition_3x_count, same_edition_overpayers, first_trade_at, last_trade_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(collection_slug) DO UPDATE SET
        avg_exchange_rate = ROUND((collection_trade_stats.avg_exchange_rate * collection_trade_stats.traded_count + excluded.avg_exchange_rate * excluded.traded_count) / MAX(1, collection_trade_stats.traded_count + excluded.traded_count), 4),
        same_class_avg_rate = CASE WHEN collection_trade_stats.same_class_legs + excluded.same_class_legs > 0 THEN ROUND((collection_trade_stats.same_class_avg_rate * collection_trade_stats.same_class_legs + excluded.same_class_avg_rate * excluded.same_class_legs) / (collection_trade_stats.same_class_legs + excluded.same_class_legs), 4) ELSE 1 END,
@@ -1094,6 +1127,9 @@ async function settlePendingTradesInD1(
        clean_solo_2x_count = collection_trade_stats.clean_solo_2x_count + excluded.clean_solo_2x_count,
        clean_solo_3x_count = collection_trade_stats.clean_solo_3x_count + excluded.clean_solo_3x_count,
        unique_overpayers = collection_trade_stats.unique_overpayers + excluded.unique_overpayers,
+       same_edition_2x_count = collection_trade_stats.same_edition_2x_count + excluded.same_edition_2x_count,
+       same_edition_3x_count = collection_trade_stats.same_edition_3x_count + excluded.same_edition_3x_count,
+       same_edition_overpayers = collection_trade_stats.same_edition_overpayers + excluded.same_edition_overpayers,
        first_trade_at = CASE WHEN collection_trade_stats.first_trade_at IS NULL OR excluded.first_trade_at < collection_trade_stats.first_trade_at THEN excluded.first_trade_at ELSE collection_trade_stats.first_trade_at END,
        last_trade_at = CASE WHEN collection_trade_stats.last_trade_at IS NULL OR excluded.last_trade_at > collection_trade_stats.last_trade_at THEN excluded.last_trade_at ELSE collection_trade_stats.last_trade_at END,
        front_image_url = COALESCE(NULLIF(collection_trade_stats.front_image_url, ''), excluded.front_image_url),
@@ -1136,6 +1172,9 @@ async function settlePendingTradesInD1(
         d.cleanSolo2xCount,
         d.cleanSolo3xCount,
         d.overpayers.size,
+        d.sameEdition2xCount,
+        d.sameEdition3xCount,
+        d.sameEditionOverpayers.size,
         d.firstAt,
         d.lastAt,
         now,
@@ -1145,8 +1184,8 @@ async function settlePendingTradesInD1(
 
   const upsertMemberTrade = rawD1.prepare(
     `INSERT INTO member_trade_stats
-      (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, clean_solo_bulk_count, unique_overpayers, top_overpayer_share_pct, last_trade_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 0, 1, 999, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+      (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, clean_solo_bulk_count, unique_overpayers, top_overpayer_share_pct, same_edition_2x_count, same_edition_3x_count, same_edition_bulk_count, same_edition_overpayers, same_edition_top_share_pct, last_trade_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, 1, 999, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?)
      ON CONFLICT(member_id) DO UPDATE SET
        avg_exchange_rate = ROUND((member_trade_stats.avg_exchange_rate * member_trade_stats.traded_count + excluded.avg_exchange_rate * excluded.traded_count) / MAX(1, member_trade_stats.traded_count + excluded.traded_count), 4),
        same_class_avg_rate = CASE WHEN member_trade_stats.same_class_legs + excluded.same_class_legs > 0 THEN ROUND((member_trade_stats.same_class_avg_rate * member_trade_stats.same_class_legs + excluded.same_class_avg_rate * excluded.same_class_legs) / (member_trade_stats.same_class_legs + excluded.same_class_legs), 4) ELSE 1 END,
@@ -1167,6 +1206,10 @@ async function settlePendingTradesInD1(
        clean_solo_3x_count = member_trade_stats.clean_solo_3x_count + excluded.clean_solo_3x_count,
        clean_solo_bulk_count = member_trade_stats.clean_solo_bulk_count + excluded.clean_solo_bulk_count,
        unique_overpayers = member_trade_stats.unique_overpayers + excluded.unique_overpayers,
+       same_edition_2x_count = member_trade_stats.same_edition_2x_count + excluded.same_edition_2x_count,
+       same_edition_3x_count = member_trade_stats.same_edition_3x_count + excluded.same_edition_3x_count,
+       same_edition_bulk_count = member_trade_stats.same_edition_bulk_count + excluded.same_edition_bulk_count,
+       same_edition_overpayers = member_trade_stats.same_edition_overpayers + excluded.same_edition_overpayers,
        last_trade_at = CASE WHEN member_trade_stats.last_trade_at IS NULL OR excluded.last_trade_at > member_trade_stats.last_trade_at THEN excluded.last_trade_at ELSE member_trade_stats.last_trade_at END,
        updated_at = excluded.updated_at`,
   );
@@ -1198,6 +1241,10 @@ async function settlePendingTradesInD1(
         m.cleanSolo3xCount,
         m.cleanSoloBulkCount,
         m.overpayers.size,
+        m.sameEdition2xCount,
+        m.sameEdition3xCount,
+        m.sameEditionBulkCount,
+        m.sameEditionOverpayers.size,
         m.lastAt,
         now,
       ),
@@ -1236,8 +1283,8 @@ async function settlePendingTradesInD1(
 
   const insertRecent = rawD1.prepare(
     `INSERT OR REPLACE INTO recent_trades
-      (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, is_asymmetric, is_same_class, is_clean_solo, ratio_multiple, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, is_asymmetric, is_same_class, is_clean_solo, is_same_edition, ratio_multiple, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const rt of recentInserts) {
     stmts.push(
@@ -1252,6 +1299,7 @@ async function settlePendingTradesInD1(
         rt.isAsymmetric ? 1 : 0,
         rt.isSameClass ? 1 : 0,
         rt.isCleanSolo ? 1 : 0,
+        rt.isSameEdition ? 1 : 0,
         rt.ratioMultiple,
         rt.walletAShort,
         rt.walletBShort,

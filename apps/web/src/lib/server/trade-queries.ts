@@ -13,6 +13,13 @@ import {
   saleRoundMemberStats,
   saleRounds,
 } from "@objekt-stats/db";
+import {
+  classifyFcoGridEdition,
+  classifyGridRewardSco,
+  computeCardGridSupply,
+  computeEditionGridSupply,
+  type GridEditionId,
+} from "@objekt-stats/stats";
 import type { ArtistSlug } from "./queries";
 
 function normalizeArtist(input?: string): ArtistSlug {
@@ -28,6 +35,24 @@ export interface TradeLegSummary {
   hexColor: string;
   imageUrl: string | null;
   count: number;
+}
+
+export interface EditionGridMonitorRow {
+  key: string;
+  season: string;
+  editionId: GridEditionId;
+  editionLabel: string;
+  shortLabel: string;
+  gridSize: 4 | 8;
+  fcoMints: number;
+  gridsCompleted: number;
+  lockedFcos: number;
+  spunCount: number;
+  gridLockPct: number;
+  estTradableFloat: number;
+  estTradableFloatPerMemberSlot: number;
+  activeMembers: number;
+  latestMintAt: string;
 }
 
 function safeParseLegSummary(raw: string): TradeLegSummary[] {
@@ -91,6 +116,164 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
       });
     });
 
+    // Live COSMO Grid Supply & Lock computation directly from indexed digital First + Special collections
+    const gridSourceRows = await db
+      .select({
+        memberId: collections.memberId,
+        season: collections.season,
+        objektClass: collections.objektClass,
+        collectionNo: collections.collectionNo,
+        onOffline: collections.onOffline,
+        totalMints: collections.totalMints,
+        spunCount: collections.spunCount,
+        lastMintAt: collections.lastMintAt,
+      })
+      .from(collections)
+      .where(
+        sql`${collections.artistId} = ${artistId} AND ${collections.onOffline} = 'online' AND ${collections.objektClass} IN ('First', 'Special')`,
+      )
+      .catch(() => []);
+
+    const scoMintsByMemberSeasonEd = new Map<string, number>();
+    const totalGridsByMember = new Map<string, number>();
+    const editionAccMap = new Map<
+      string,
+      {
+        season: string;
+        editionId: GridEditionId;
+        editionLabel: string;
+        shortLabel: string;
+        gridSize: 4 | 8;
+        fcoMints: number;
+        scoMints: number;
+        spunCount: number;
+        members: Set<string>;
+        latestMintAt: string;
+      }
+    >();
+
+    for (const row of gridSourceRows) {
+      if (row.totalMints <= 0) continue;
+      if (row.objektClass === "Special") {
+        const scoInfo = classifyGridRewardSco(
+          artistId,
+          row.season,
+          row.objektClass,
+          row.collectionNo,
+          row.onOffline,
+        );
+        if (!scoInfo) continue;
+
+        if (row.memberId) {
+          const msKey = `${row.memberId}|${row.season}|${scoInfo.editionId}`;
+          scoMintsByMemberSeasonEd.set(
+            msKey,
+            (scoMintsByMemberSeasonEd.get(msKey) ?? 0) + row.totalMints,
+          );
+          totalGridsByMember.set(
+            row.memberId,
+            (totalGridsByMember.get(row.memberId) ?? 0) + row.totalMints,
+          );
+        }
+
+        const edKey = `${row.season}|${scoInfo.editionId}`;
+        let acc = editionAccMap.get(edKey);
+        if (!acc) {
+          acc = {
+            season: row.season,
+            editionId: scoInfo.editionId,
+            editionLabel: scoInfo.editionLabel,
+            shortLabel: scoInfo.shortLabel,
+            gridSize: scoInfo.gridSize,
+            fcoMints: 0,
+            scoMints: 0,
+            spunCount: 0,
+            members: new Set(),
+            latestMintAt: row.lastMintAt ?? "",
+          };
+          editionAccMap.set(edKey, acc);
+        }
+        acc.scoMints += row.totalMints;
+        if (row.lastMintAt && row.lastMintAt > acc.latestMintAt) {
+          acc.latestMintAt = row.lastMintAt;
+        }
+      } else if (row.objektClass === "First") {
+        const fcoInfo = classifyFcoGridEdition(
+          artistId,
+          row.season,
+          row.objektClass,
+          row.collectionNo,
+          row.onOffline,
+        );
+        if (!fcoInfo) continue;
+
+        const edKey = `${row.season}|${fcoInfo.editionId}`;
+        let acc = editionAccMap.get(edKey);
+        if (!acc) {
+          acc = {
+            season: row.season,
+            editionId: fcoInfo.editionId,
+            editionLabel: fcoInfo.editionLabel,
+            shortLabel: fcoInfo.shortLabel,
+            gridSize: fcoInfo.gridSize,
+            fcoMints: 0,
+            scoMints: 0,
+            spunCount: 0,
+            members: new Set(),
+            latestMintAt: row.lastMintAt ?? "",
+          };
+          editionAccMap.set(edKey, acc);
+        }
+        acc.fcoMints += row.totalMints;
+        acc.spunCount += row.spunCount ?? 0;
+        if (row.memberId) acc.members.add(row.memberId);
+        if (row.lastMintAt && row.lastMintAt > acc.latestMintAt) {
+          acc.latestMintAt = row.lastMintAt;
+        }
+      }
+    }
+
+    const editionGridSummary: EditionGridMonitorRow[] = Array.from(
+      editionAccMap.entries(),
+    )
+      .filter(([, a]) => a.fcoMints > 0)
+      .map(([key, a]) => {
+        const metrics = computeEditionGridSupply({
+          fcoMints: a.fcoMints,
+          scoMints: a.scoMints,
+          spunCount: a.spunCount,
+          gridSize: a.gridSize,
+          slotCount: a.gridSize * Math.max(1, a.members.size),
+        });
+        return {
+          key,
+          season: a.season,
+          editionId: a.editionId,
+          editionLabel: a.editionLabel,
+          shortLabel: a.shortLabel,
+          gridSize: a.gridSize,
+          fcoMints: a.fcoMints,
+          gridsCompleted: metrics.gridsCompleted,
+          lockedFcos: metrics.lockedFcos,
+          spunCount: a.spunCount,
+          gridLockPct: metrics.gridLockPct,
+          estTradableFloat: metrics.estTradableFloat,
+          estTradableFloatPerMemberSlot: metrics.estTradableFloatPerSlot,
+          activeMembers: a.members.size,
+          latestMintAt: a.latestMintAt,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.latestMintAt.localeCompare(a.latestMintAt) ||
+          b.fcoMints - a.fcoMints,
+      );
+
+    const totalGridsCompleted = editionGridSummary.reduce(
+      (sum, e) => sum + e.gridsCompleted,
+      0,
+    );
+
     // Gracefully handle empty/unmigrated trade tables
     const memberTradeRows = await db
       .select()
@@ -131,9 +314,13 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
         cleanSolo2xCount: collectionTradeStats.cleanSolo2xCount,
         cleanSolo3xCount: collectionTradeStats.cleanSolo3xCount,
         uniqueOverpayers: collectionTradeStats.uniqueOverpayers,
+        sameEdition2xCount: collectionTradeStats.sameEdition2xCount,
+        sameEdition3xCount: collectionTradeStats.sameEdition3xCount,
+        sameEditionOverpayers: collectionTradeStats.sameEditionOverpayers,
         firstTradeAt: collectionTradeStats.firstTradeAt,
         lastTradeAt: collectionTradeStats.lastTradeAt,
         primaryMints: collections.totalMints,
+        spunCount: collections.spunCount,
       })
       .from(collectionTradeStats)
       .leftJoin(
@@ -143,7 +330,7 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
       .where(eq(collectionTradeStats.artistId, artistId))
       .orderBy(
         desc(collectionTradeStats.tradedCount),
-        desc(collectionTradeStats.premium2xCount),
+        desc(collectionTradeStats.cleanSolo2xCount),
         desc(collectionTradeStats.directTransferCount),
       )
       .limit(400)
@@ -214,6 +401,7 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
     return {
       artist: artist ?? null,
       members: memberList,
+      editionGridSummary,
       memberLeaderboard: memberTradeRows.map((row) => {
         const m = memberById.get(row.memberId);
         const primary = primaryRankByMember.get(row.memberId) ?? null;
@@ -221,6 +409,11 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
         const cleanFavorablePct =
           cleanDenom > 0
             ? Number(((row.cleanSolo2xCount / cleanDenom) * 100).toFixed(1))
+            : null;
+        const sameEdDenom = row.sameEdition2xCount + row.sameEditionBulkCount;
+        const sameEditionFavorablePct =
+          sameEdDenom > 0
+            ? Number(((row.sameEdition2xCount / sameEdDenom) * 100).toFixed(1))
             : null;
         return {
           ...row,
@@ -235,6 +428,8 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
               ? primary.rank - row.tradeRank
               : null,
           cleanFavorablePct,
+          sameEditionFavorablePct,
+          totalGridsCompleted: totalGridsByMember.get(row.memberId) ?? 0,
         };
       }),
       collections: collectionTradeRows.map((c) => {
@@ -243,17 +438,57 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
           c.primaryMints !== null && c.primaryMints !== undefined
             ? Number(c.primaryMints)
             : null;
+        const spunCount = Number(c.spunCount ?? 0);
         const turnoverPct =
           primaryMints && primaryMints > 0
             ? Number(((c.tradedCount / primaryMints) * 100).toFixed(1))
             : null;
+
+        const fcoGrid = classifyFcoGridEdition(
+          c.artistId,
+          c.season,
+          c.objektClass,
+          c.collectionNo,
+          c.onOffline,
+        );
+        let gridSize: 4 | 8 | null = null;
+        let gridEditionLabel: string | null = null;
+        let gridsCompleted: number | null = null;
+        let gridLockPct: number | null = null;
+        let estTradableFloat: number | null = null;
+        let floatTurnoverPct: number | null = null;
+
+        if (fcoGrid && c.memberId && primaryMints !== null && primaryMints > 0) {
+          const matchingScos =
+            scoMintsByMemberSeasonEd.get(
+              `${c.memberId}|${c.season}|${fcoGrid.editionId}`,
+            ) ?? 0;
+          const supply = computeCardGridSupply(primaryMints, matchingScos, spunCount);
+          gridSize = fcoGrid.gridSize;
+          gridEditionLabel = fcoGrid.shortLabel;
+          gridsCompleted = supply.gridsCompleted;
+          gridLockPct = supply.gridLockPct;
+          estTradableFloat = supply.estTradableFloat;
+          floatTurnoverPct =
+            supply.estTradableFloat > 0
+              ? Number(((c.tradedCount / supply.estTradableFloat) * 100).toFixed(1))
+              : null;
+        }
+
         return {
           ...c,
           memberCode: m?.code ?? "",
           memberName: m?.name ?? c.rawMemberName,
           hexColor: m?.hexColor ?? c.backgroundColor ?? "#71717a",
           primaryMints,
+          spunCount,
           turnoverPct,
+          gridSize,
+          gridEditionLabel,
+          gridsCompleted,
+          gridLockPct,
+          estTradableFloat,
+          floatTurnoverPct,
         };
       }),
       dailyActivity: dailyRows,
@@ -267,6 +502,7 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
         isAsymmetric: Boolean(rt.isAsymmetric),
         isSameClass: Boolean(rt.isSameClass),
         isCleanSolo: Boolean(rt.isCleanSolo),
+        isSameEdition: Boolean(rt.isSameEdition),
         ratioMultiple: Number(rt.ratioMultiple ?? 1),
         walletAShort: rt.walletAShort,
         walletBShort: rt.walletBShort,
@@ -287,6 +523,7 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
         directTransfers,
         trackedCollections: Number(totalsRow?.trackedCollections ?? 0),
         peakDailyTraders: maxDailyUniqueTraders,
+        totalGridsCompleted,
         avgObjektsPerTrade:
           confirmedTradeSessions > 0
             ? Number((tradedObjekts / confirmedTradeSessions).toFixed(2))

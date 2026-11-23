@@ -4,6 +4,8 @@ import {
   ArrowLeftRight,
   Clock,
   Layers,
+  LayoutGrid,
+  Lock,
   Scale,
   Search,
   ShieldCheck,
@@ -61,15 +63,16 @@ function TradesPage() {
   const [metricMode, setMetricMode] = useState<
     "trades" | "asymmetric" | "transfers"
   >("trades");
-  const [asymScope, setAsymScope] = useState<"clean_solo" | "all_classes">(
-    "clean_solo",
-  );
+  const [asymScope, setAsymScope] = useState<
+    "clean_solo" | "same_edition" | "all_classes"
+  >("clean_solo");
   const [asymSort, setAsymSort] = useState<
     "overpayers" | "2x" | "3x" | "fav" | "rate"
   >("overpayers");
   const [recentFilter, setRecentFilter] = useState<
-    "all" | "cleanSolo" | "asymmetric" | "2x" | "3x"
+    "all" | "sameEdition" | "cleanSolo" | "asymmetric" | "2x" | "3x"
   >("all");
+  const [gridMonitorSeason, setGridMonitorSeason] = useState("latest");
   const [query, setQuery] = useState("");
   const [seasonFilter, setSeasonFilter] = useState("all");
   const [classFilter, setClassFilter] = useState<
@@ -77,10 +80,34 @@ function TradesPage() {
   >("all");
   const [memberFilter, setMemberFilter] = useState("all");
   const [sortBy, setSortBy] = useState<
-    "traded" | "cleanSolo" | "premium2x" | "rate" | "sessions" | "transfers" | "turnover"
+    | "traded"
+    | "cleanSolo"
+    | "sameEdition"
+    | "premium2x"
+    | "rate"
+    | "gridLock"
+    | "tightFloat"
+    | "sessions"
+    | "transfers"
+    | "turnover"
   >("traded");
 
-  const isCleanMode = asymScope === "clean_solo";
+  const isGridTierMode = asymScope === "clean_solo";
+  const isSameEdMode = asymScope === "same_edition";
+  const isCleanMode = isGridTierMode || isSameEdMode;
+
+  const gridMonitorSeasons = useMemo(
+    () =>
+      Array.from(new Set(data.editionGridSummary.map((e) => e.season))),
+    [data.editionGridSummary],
+  );
+
+  const visibleGridEditions = useMemo(() => {
+    if (gridMonitorSeason === "latest") {
+      return data.editionGridSummary.slice(0, 6);
+    }
+    return data.editionGridSummary.filter((e) => e.season === gridMonitorSeason);
+  }, [data.editionGridSummary, gridMonitorSeason]);
 
   const seasons = useMemo(
     () =>
@@ -101,55 +128,81 @@ function TradesPage() {
     }
     if (metricMode === "asymmetric") {
       return list.sort((a, b) => {
+        const aOver = isSameEdMode ? a.sameEditionOverpayers : a.uniqueOverpayers;
+        const bOver = isSameEdMode ? b.sameEditionOverpayers : b.uniqueOverpayers;
+        const a2x = isSameEdMode
+          ? a.sameEdition2xCount
+          : isGridTierMode
+            ? a.cleanSolo2xCount
+            : a.premium2xCount;
+        const b2x = isSameEdMode
+          ? b.sameEdition2xCount
+          : isGridTierMode
+            ? b.cleanSolo2xCount
+            : b.premium2xCount;
+        const a3x = isSameEdMode
+          ? a.sameEdition3xCount
+          : isGridTierMode
+            ? a.cleanSolo3xCount
+            : a.premium3xCount;
+        const b3x = isSameEdMode
+          ? b.sameEdition3xCount
+          : isGridTierMode
+            ? b.cleanSolo3xCount
+            : b.premium3xCount;
+        const aFav = isSameEdMode
+          ? (a.sameEditionFavorablePct ?? 0)
+          : isGridTierMode
+            ? (a.cleanFavorablePct ?? 0)
+            : (a.premiumCount / Math.max(1, a.premiumCount + a.bulkCount)) * 100;
+        const bFav = isSameEdMode
+          ? (b.sameEditionFavorablePct ?? 0)
+          : isGridTierMode
+            ? (b.cleanFavorablePct ?? 0)
+            : (b.premiumCount / Math.max(1, b.premiumCount + b.bulkCount)) * 100;
+
         if (isCleanMode && asymSort === "overpayers") {
-          return (
-            b.uniqueOverpayers - a.uniqueOverpayers ||
-            (b.cleanFavorablePct ?? 0) - (a.cleanFavorablePct ?? 0) ||
-            b.cleanSolo2xCount - a.cleanSolo2xCount
-          );
+          return bOver - aOver || bFav - aFav || b2x - a2x;
         }
         if (asymSort === "fav") {
-          const fa = isCleanMode
-            ? (a.cleanFavorablePct ?? 0)
-            : a.premiumCount / Math.max(1, a.premiumCount + a.bulkCount);
-          const fb = isCleanMode
-            ? (b.cleanFavorablePct ?? 0)
-            : b.premiumCount / Math.max(1, b.premiumCount + b.bulkCount);
-          return fb - fa || b.uniqueOverpayers - a.uniqueOverpayers;
+          return bFav - aFav || bOver - aOver;
         }
         if (asymSort === "rate") {
           const ra = isCleanMode ? a.sameClassAvgRate : a.avgExchangeRate;
           const rb = isCleanMode ? b.sameClassAvgRate : b.avgExchangeRate;
-          return rb - ra || b.uniqueOverpayers - a.uniqueOverpayers;
+          return rb - ra || bOver - aOver;
         }
         if (asymSort === "3x") {
-          const va = isCleanMode ? a.cleanSolo3xCount : a.premium3xCount;
-          const vb = isCleanMode ? b.cleanSolo3xCount : b.premium3xCount;
-          return vb - va || b.uniqueOverpayers - a.uniqueOverpayers;
+          return b3x - a3x || bOver - aOver;
         }
-        const va = isCleanMode ? a.cleanSolo2xCount : a.premium2xCount;
-        const vb = isCleanMode ? b.cleanSolo2xCount : b.premium2xCount;
-        return vb - va || b.uniqueOverpayers - a.uniqueOverpayers;
+        return b2x - a2x || bOver - aOver;
       });
     }
     return list.sort(
       (a, b) => a.tradeRank - b.tradeRank || b.tradedCount - a.tradedCount,
     );
-  }, [data.memberLeaderboard, metricMode, isCleanMode, asymSort]);
+  }, [data.memberLeaderboard, metricMode, isGridTierMode, isSameEdMode, isCleanMode, asymSort]);
 
   const maxMemberVal = useMemo(() => {
     if (rankedMembers.length === 0) return 1;
     if (metricMode === "asymmetric") {
       if (isCleanMode && asymSort === "overpayers") {
-        return Math.max(1, ...rankedMembers.map((m) => m.uniqueOverpayers));
+        return Math.max(
+          1,
+          ...rankedMembers.map((m) =>
+            isSameEdMode ? m.sameEditionOverpayers : m.uniqueOverpayers,
+          ),
+        );
       }
       if (asymSort === "fav") {
         return Math.max(
           50,
           ...rankedMembers.map((m) =>
-            isCleanMode
-              ? (m.cleanFavorablePct ?? 0)
-              : (m.premiumCount / Math.max(1, m.premiumCount + m.bulkCount)) * 100,
+            isSameEdMode
+              ? (m.sameEditionFavorablePct ?? 0)
+              : isGridTierMode
+                ? (m.cleanFavorablePct ?? 0)
+                : (m.premiumCount / Math.max(1, m.premiumCount + m.bulkCount)) * 100,
           ),
         );
       }
@@ -165,14 +218,22 @@ function TradesPage() {
         return Math.max(
           1,
           ...rankedMembers.map((m) =>
-            isCleanMode ? m.cleanSolo3xCount : m.premium3xCount,
+            isSameEdMode
+              ? m.sameEdition3xCount
+              : isGridTierMode
+                ? m.cleanSolo3xCount
+                : m.premium3xCount,
           ),
         );
       }
       return Math.max(
         1,
         ...rankedMembers.map((m) =>
-          isCleanMode ? m.cleanSolo2xCount : m.premium2xCount,
+          isSameEdMode
+            ? m.sameEdition2xCount
+            : isGridTierMode
+              ? m.cleanSolo2xCount
+              : m.premium2xCount,
         ),
       );
     }
@@ -182,7 +243,7 @@ function TradesPage() {
         metricMode === "transfers" ? m.directTransferCount : m.tradedCount,
       ),
     );
-  }, [rankedMembers, metricMode, isCleanMode, asymSort]);
+  }, [rankedMembers, metricMode, isGridTierMode, isSameEdMode, isCleanMode, asymSort]);
 
   const filteredCollections = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -190,7 +251,11 @@ function TradesPage() {
       .filter((c) => {
         if (metricMode === "trades" && c.tradedCount <= 0) return false;
         if (metricMode === "asymmetric") {
-          const pCount = isCleanMode ? c.cleanSolo2xCount : c.premiumCount;
+          const pCount = isSameEdMode
+            ? c.sameEdition2xCount
+            : isGridTierMode
+              ? c.cleanSolo2xCount
+              : c.premiumCount;
           if (pCount <= 0) return false;
         }
         if (seasonFilter !== "all" && c.season !== seasonFilter) return false;
@@ -215,6 +280,13 @@ function TradesPage() {
         return true;
       })
       .sort((a, b) => {
+        if (sortBy === "sameEdition") {
+          return (
+            b.sameEditionOverpayers - a.sameEditionOverpayers ||
+            b.sameEdition2xCount - a.sameEdition2xCount ||
+            b.sameClassAvgRate - a.sameClassAvgRate
+          );
+        }
         if (sortBy === "cleanSolo") {
           return (
             b.uniqueOverpayers - a.uniqueOverpayers ||
@@ -223,8 +295,16 @@ function TradesPage() {
           );
         }
         if (sortBy === "premium2x") {
-          const va = isCleanMode ? a.cleanSolo2xCount : a.premium2xCount;
-          const vb = isCleanMode ? b.cleanSolo2xCount : b.premium2xCount;
+          const va = isSameEdMode
+            ? a.sameEdition2xCount
+            : isGridTierMode
+              ? a.cleanSolo2xCount
+              : a.premium2xCount;
+          const vb = isSameEdMode
+            ? b.sameEdition2xCount
+            : isGridTierMode
+              ? b.cleanSolo2xCount
+              : b.premium2xCount;
           return vb - va || b.avgExchangeRate - a.avgExchangeRate;
         }
         if (sortBy === "rate") {
@@ -234,6 +314,22 @@ function TradesPage() {
           const ra = isCleanMode ? a.sameClassAvgRate : a.avgExchangeRate;
           const rb = isCleanMode ? b.sameClassAvgRate : b.avgExchangeRate;
           return rb - ra || b.premium2xCount - a.premium2xCount;
+        }
+        if (sortBy === "gridLock") {
+          return (
+            (b.gridLockPct ?? -1) - (a.gridLockPct ?? -1) ||
+            b.tradedCount - a.tradedCount
+          );
+        }
+        if (sortBy === "tightFloat") {
+          const aHas = a.estTradableFloat !== null ? 1 : 0;
+          const bHas = b.estTradableFloat !== null ? 1 : 0;
+          if (aHas !== bHas) return bHas - aHas;
+          return (
+            (a.estTradableFloat ?? Number.MAX_SAFE_INTEGER) -
+              (b.estTradableFloat ?? Number.MAX_SAFE_INTEGER) ||
+            b.tradedCount - a.tradedCount
+          );
         }
         if (sortBy === "sessions") {
           return b.tradeSessions - a.tradeSessions || b.tradedCount - a.tradedCount;
@@ -245,13 +341,17 @@ function TradesPage() {
           );
         }
         if (sortBy === "turnover") {
-          return (b.turnoverPct ?? -1) - (a.turnoverPct ?? -1) || b.tradedCount - a.tradedCount;
+          const ta = a.floatTurnoverPct ?? a.turnoverPct ?? -1;
+          const tb = b.floatTurnoverPct ?? b.turnoverPct ?? -1;
+          return tb - ta || b.tradedCount - a.tradedCount;
         }
         return b.tradedCount - a.tradedCount || b.directTransferCount - a.directTransferCount;
       });
   }, [
     data.collections,
     metricMode,
+    isGridTierMode,
+    isSameEdMode,
     isCleanMode,
     query,
     seasonFilter,
@@ -262,6 +362,7 @@ function TradesPage() {
 
   const filteredRecentTrades = useMemo(() => {
     return data.recentTrades.filter((rt) => {
+      if (recentFilter === "sameEdition") return rt.isSameEdition;
       if (recentFilter === "cleanSolo") return rt.isCleanSolo;
       if (recentFilter === "asymmetric") return rt.isAsymmetric;
       if (recentFilter === "2x") return rt.isAsymmetric && rt.ratioMultiple >= 2;
@@ -418,18 +519,22 @@ function TradesPage() {
                 <div>
                   <h2 className="text-base font-semibold text-white">
                     {metricMode === "asymmetric"
-                      ? isCleanMode
-                        ? "Asymmetric Swap Premium — Clean Solo N:1 (Same-Class)"
-                        : "Asymmetric Swap Premium — All Classes (≤6:1)"
+                      ? isSameEdMode
+                        ? "Asymmetric Swap Premium — Exact Same-Edition N:1"
+                        : isGridTierMode
+                          ? "Asymmetric Swap Premium — Grid-Tier Clean N:1"
+                          : "Asymmetric Swap Premium — All Classes (≤6:1)"
                       : metricMode === "transfers"
                         ? "Most Transferred Members (All P2P)"
                         : "Most Traded Members (Confirmed Swaps)"}
                   </h2>
                   <p className="text-xs text-zinc-400">
                     {metricMode === "asymmetric"
-                      ? isCleanMode
-                        ? "Pure 2:1–6:1 swaps (1 scarce card, same class & digital/physical format, cross-member). Ranked by distinct overpaying wallets to neutralize bias whales."
-                        : "Includes cross-class upgrades (e.g. 3 First → 1 Special) and M:N bundles up to 6:1; extreme >6:1 / >10-card alt-wallet dumps excluded."
+                      ? isSameEdMode
+                        ? "Strictest apples-to-apples 2:1–6:1 swaps within the exact same season & edition/DCO (e.g. Cream02 3rd Ed ↔ 3rd Ed, 353Z ↔ 353Z)."
+                        : isGridTierMode
+                          ? "Pure 2:1–6:1 swaps separating 8-card grid FCOs (101–116Z) from 4-card grid FCOs (117–120Z) so grid-utility arbitrage isn't miscounted as member demand."
+                          : "Includes cross-class upgrades (e.g. 3 First → 1 Special) and M:N bundles up to 6:1; extreme >6:1 / >10-card alt-wallet dumps excluded."
                       : "Compare secondary trading activity, average exchange rate (1.00× = parity), and primary mint rank."}
                   </p>
                 </div>
@@ -442,15 +547,32 @@ function TradesPage() {
                         onClick={() => {
                           setAsymScope("clean_solo");
                           setSortBy("cleanSolo");
+                          setRecentFilter("cleanSolo");
                         }}
-                        title="Pure N:1 (2:1–6:1) same-class & same-format cross-member swaps"
+                        title="Pure N:1 (2:1–6:1) swaps matching class, format, and COSMO grid tier (8-card vs 4-card)"
                         className={`rounded-md px-2 py-1 font-medium transition ${
-                          isCleanMode
+                          isGridTierMode
                             ? "bg-amber-400/20 text-amber-300"
                             : "text-zinc-400 hover:text-zinc-200"
                         }`}
                       >
-                        Clean N:1
+                        Grid-Tier N:1
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAsymScope("same_edition");
+                          setSortBy("sameEdition");
+                          setRecentFilter("sameEdition");
+                        }}
+                        title="Strictest: exact same season + edition bucket or exact DCO collection number"
+                        className={`rounded-md px-2 py-1 font-medium transition ${
+                          isSameEdMode
+                            ? "bg-emerald-400/20 text-emerald-300"
+                            : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                      >
+                        Same Edition
                       </button>
                       <button
                         type="button"
@@ -505,34 +627,49 @@ function TradesPage() {
                   const rateVal = isCleanMode
                     ? m.sameClassAvgRate
                     : m.avgExchangeRate;
-                  const count2x = isCleanMode
-                    ? m.cleanSolo2xCount
-                    : m.premium2xCount;
-                  const count3x = isCleanMode
-                    ? m.cleanSolo3xCount
-                    : m.premium3xCount;
-                  const favPct = isCleanMode
-                    ? m.cleanFavorablePct
-                    : m.premiumCount + m.bulkCount > 0
-                      ? Number(
-                          (
-                            (m.premiumCount / (m.premiumCount + m.bulkCount)) *
-                            100
-                          ).toFixed(1),
-                        )
-                      : null;
+                  const count2x = isSameEdMode
+                    ? m.sameEdition2xCount
+                    : isGridTierMode
+                      ? m.cleanSolo2xCount
+                      : m.premium2xCount;
+                  const count3x = isSameEdMode
+                    ? m.sameEdition3xCount
+                    : isGridTierMode
+                      ? m.cleanSolo3xCount
+                      : m.premium3xCount;
+                  const overpayerCount = isSameEdMode
+                    ? m.sameEditionOverpayers
+                    : m.uniqueOverpayers;
+                  const bulkCount = isSameEdMode
+                    ? m.sameEditionBulkCount
+                    : m.cleanSoloBulkCount;
+                  const topSharePct = isSameEdMode
+                    ? m.sameEditionTopSharePct
+                    : m.topOverpayerSharePct;
+                  const favPct = isSameEdMode
+                    ? m.sameEditionFavorablePct
+                    : isGridTierMode
+                      ? m.cleanFavorablePct
+                      : m.premiumCount + m.bulkCount > 0
+                        ? Number(
+                            (
+                              (m.premiumCount / (m.premiumCount + m.bulkCount)) *
+                              100
+                            ).toFixed(1),
+                          )
+                        : null;
                   const hasWhaleFlag =
                     isCleanMode &&
-                    m.cleanSolo2xCount >= 5 &&
-                    m.topOverpayerSharePct !== null &&
-                    m.topOverpayerSharePct >= 25;
+                    count2x >= 5 &&
+                    topSharePct !== null &&
+                    topSharePct >= 25;
 
                   const barVal =
                     metricMode === "transfers"
                       ? m.directTransferCount
                       : metricMode === "asymmetric"
                         ? isCleanMode && asymSort === "overpayers"
-                          ? m.uniqueOverpayers
+                          ? overpayerCount
                           : asymSort === "fav"
                             ? (favPct ?? 0)
                             : asymSort === "rate"
@@ -598,10 +735,10 @@ function TradesPage() {
 
                           {metricMode === "asymmetric" && hasWhaleFlag && (
                             <span
-                              title={`Whale concentration: 1 single wallet accounts for ${m.topOverpayerSharePct?.toFixed(0)}% of ${m.memberName}'s clean 2:1+ swaps (${m.uniqueOverpayers} unique wallets across ${m.cleanSolo2xCount} swaps).`}
+                              title={`Whale concentration: 1 single wallet accounts for ${topSharePct?.toFixed(0)}% of ${m.memberName}'s ${isSameEdMode ? "same-edition" : "grid-tier"} 2:1+ swaps (${overpayerCount} unique wallets across ${count2x} swaps).`}
                               className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-300"
                             >
-                              Top wallet {Math.round(m.topOverpayerSharePct!)}%
+                              Top wallet {Math.round(topSharePct!)}%
                             </span>
                           )}
                         </div>
@@ -612,18 +749,18 @@ function TradesPage() {
                               <>
                                 <span
                                   className="text-zinc-200 font-semibold"
-                                  title={`${m.uniqueOverpayers} distinct wallets paid 2:1–6:1 across ${m.cleanSolo2xCount} clean swaps`}
+                                  title={`${overpayerCount} distinct wallets paid 2:1–6:1 across ${count2x} ${isSameEdMode ? "same-edition" : "grid-tier"} swaps`}
                                 >
-                                  {m.uniqueOverpayers.toLocaleString()}{" "}
+                                  {overpayerCount.toLocaleString()}{" "}
                                   <span className="text-[10px] font-normal text-zinc-500">
                                     wallets
                                   </span>
                                 </span>
                                 <span className="text-[11px] text-zinc-400 hidden sm:inline">
-                                  {m.cleanSolo2xCount} swaps
+                                  {count2x} swaps
                                 </span>
                                 <span
-                                  title={`Favorable share: ${m.cleanSolo2xCount} times on scarce side vs ${m.cleanSoloBulkCount} times on bulk offering side`}
+                                  title={`Favorable share: ${count2x} times on scarce side vs ${bulkCount} times on bulk offering side`}
                                   className={`w-14 text-right text-[11px] font-semibold ${
                                     (favPct ?? 0) >= 35
                                       ? "text-emerald-300"
@@ -877,9 +1014,17 @@ function TradesPage() {
                     market-wide mean is always exactly 1.00×.
                   </li>
                   <li>
-                    <strong className="text-zinc-200">Same-Class Filter:</strong>{" "}
-                    Removes cross-class upgrades (e.g. 4 First → 1 Special) to
-                    isolate pure member &amp; edition demand premiums.
+                    <strong className="text-zinc-200">COSMO Grid-Tier Filter:</strong>{" "}
+                    Separates 8-card grid FCOs (<code className="text-zinc-300">101–116Z</code>)
+                    from 4-card grid FCOs (<code className="text-zinc-300">117–120Z</code>) so
+                    fair 2× 1st/2nd-Ed → 1× 3rd-Ed grid utility swaps aren&apos;t misread as
+                    member premiums.
+                  </li>
+                  <li>
+                    <strong className="text-zinc-200">Grid Lock &amp; Float:</strong>{" "}
+                    Every minted grid SCO (<code className="text-zinc-300">201Z–206Z</code>)
+                    permanently locks 1 copy of every FCO slot in that edition, revealing true
+                    circulating tradable float.
                   </li>
                   <li>
                     <strong className="text-zinc-200">
@@ -901,6 +1046,107 @@ function TradesPage() {
               </div>
             </div>
           </section>
+
+          {/* COSMO Grid Supply & Lock Monitor */}
+          {data.editionGridSummary.length > 0 && (
+            <section className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div className="space-y-1">
+                  <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                    <LayoutGrid className="h-4 w-4 text-emerald-400" />
+                    COSMO Grid Lock &amp; Tradable Float Monitor
+                  </h2>
+                  <p className="text-xs text-zinc-400">
+                    Completing a Digital First Class grid locks 8 FCOs (1st/2nd Ed →{" "}
+                    <code className="text-zinc-300">201Z–204Z</code>) or 4 FCOs (3rd Ed →{" "}
+                    <code className="text-zinc-300">205Z–206Z</code>) permanently unsendable.{" "}
+                    <span className="text-zinc-300 font-medium">
+                      {data.totals.totalGridsCompleted.toLocaleString()} total {artistName} grids completed
+                    </span>{" "}
+                    across indexed seasons.
+                  </p>
+                </div>
+
+                <select
+                  value={gridMonitorSeason}
+                  onChange={(e) => setGridMonitorSeason(e.target.value)}
+                  aria-label="Filter grid monitor season"
+                  className="rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
+                >
+                  <option value="latest">Latest Editions (Top 6)</option>
+                  {gridMonitorSeasons.map((s) => (
+                    <option key={s} value={s}>
+                      {s} Season
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {visibleGridEditions.map((ed) => (
+                  <div
+                    key={ed.key}
+                    className="rounded-xl border border-zinc-800/90 bg-zinc-950/70 p-4 space-y-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-white">
+                          {ed.season} · {ed.editionLabel}
+                        </p>
+                        <p className="font-mono text-[11px] text-zinc-500">
+                          {ed.gridSize}-card grid · {ed.gridsCompleted.toLocaleString()} grids completed
+                        </p>
+                      </div>
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-[11px] font-semibold shrink-0 ${
+                          ed.gridLockPct >= 50
+                            ? "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                            : ed.gridLockPct >= 25
+                              ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                              : "bg-zinc-800 text-zinc-300"
+                        }`}
+                      >
+                        <Lock className="h-3 w-3" />
+                        {ed.gridLockPct.toFixed(1)}%
+                      </span>
+                    </div>
+
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-900">
+                      <div
+                        className={`h-full rounded-full ${
+                          ed.gridLockPct >= 50
+                            ? "bg-amber-400"
+                            : ed.gridLockPct >= 25
+                              ? "bg-emerald-400"
+                              : "bg-sky-400"
+                        }`}
+                        style={{
+                          width: `${Math.min(100, Math.max(3, ed.gridLockPct))}%`,
+                        }}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 pt-0.5 font-mono text-[11px] tabular-nums">
+                      <div>
+                        <p className="text-[10px] text-zinc-500">Minted</p>
+                        <p className="text-zinc-300">{ed.fcoMints.toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-zinc-500">Locked FCOs</p>
+                        <p className="text-amber-200/90">{ed.lockedFcos.toLocaleString()}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] text-zinc-500">Tradable Float</p>
+                        <p className="font-semibold text-emerald-300">
+                          {ed.estTradableFloat.toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* Most Traded Collections Table */}
           <section className="space-y-4">
@@ -965,8 +1211,11 @@ function TradesPage() {
                         e.target.value as
                           | "traded"
                           | "cleanSolo"
+                          | "sameEdition"
                           | "premium2x"
                           | "rate"
+                          | "gridLock"
+                          | "tightFloat"
                           | "sessions"
                           | "transfers"
                           | "turnover",
@@ -976,12 +1225,15 @@ function TradesPage() {
                     className="rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
                   >
                     <option value="traded">Sort: Most Traded</option>
-                    <option value="cleanSolo">Sort: Clean N:1 Overpayers</option>
+                    <option value="cleanSolo">Sort: Grid-Tier N:1 Overpayers</option>
+                    <option value="sameEdition">Sort: Same-Edition Overpayers</option>
                     <option value="premium2x">Sort: Most ≥2:1 Swaps</option>
                     <option value="rate">Sort: Highest Avg Rate</option>
+                    <option value="gridLock">Sort: Highest Grid Lock %</option>
+                    <option value="tightFloat">Sort: Tightest Tradable Float</option>
                     <option value="sessions">Sort: Most Trade Swaps</option>
                     <option value="transfers">Sort: Most Direct Transfers</option>
-                    <option value="turnover">Sort: Highest Turnover %</option>
+                    <option value="turnover">Sort: Highest Float Turnover %</option>
                   </select>
               </div>
 
@@ -1025,25 +1277,30 @@ function TradesPage() {
                       <th className="px-4 py-3">#</th>
                       <th className="px-4 py-3">Objekt Collection</th>
                       <th className="px-4 py-3">Member</th>
-                      <th className="px-4 py-3">Class</th>
+                      <th className="px-4 py-3">Class / Grid</th>
                       <th className="px-4 py-3 text-right">Traded</th>
                       <th className="px-4 py-3 text-right">≥2:1 (≥3:1)</th>
                       <th className="px-4 py-3 text-right">Avg Rate</th>
-                      <th className="px-4 py-3 text-right">Direct</th>
-                      <th className="px-4 py-3 text-right">Turnover</th>
+                      <th className="px-4 py-3 text-right">Grid Lock / Float</th>
+                      <th className="px-4 py-3 text-right">Float Turnover</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/70">
                     {filteredCollections.slice(0, 80).map((c, idx) => {
-                      const col2x = isCleanMode
-                        ? c.cleanSolo2xCount
-                        : c.premium2xCount;
-                      const col3x = isCleanMode
-                        ? c.cleanSolo3xCount
-                        : c.premium3xCount;
+                      const col2x = isSameEdMode
+                        ? c.sameEdition2xCount
+                        : isGridTierMode
+                          ? c.cleanSolo2xCount
+                          : c.premium2xCount;
+                      const col3x = isSameEdMode
+                        ? c.sameEdition3xCount
+                        : isGridTierMode
+                          ? c.cleanSolo3xCount
+                          : c.premium3xCount;
                       const colRate = isCleanMode
                         ? c.sameClassAvgRate
                         : c.avgExchangeRate;
+                      const effTurnover = c.floatTurnoverPct ?? c.turnoverPct;
                       return (
                         <tr
                           key={c.collectionSlug}
@@ -1104,7 +1361,20 @@ function TradesPage() {
                             )}
                           </td>
                           <td className="px-4 py-2.5 font-mono text-xs text-zinc-400">
-                            {c.objektClass}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span>{c.objektClass}</span>
+                              {c.gridSize && (
+                                <span
+                                  className={`rounded px-1.5 py-0.5 text-[10px] ${
+                                    c.gridSize === 4
+                                      ? "bg-amber-500/15 text-amber-300"
+                                      : "bg-zinc-800 text-zinc-400"
+                                  }`}
+                                >
+                                  {c.gridSize}-card
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-4 py-2.5 text-right font-mono font-semibold text-white tabular-nums">
                             {c.tradedCount.toLocaleString()}
@@ -1138,16 +1408,45 @@ function TradesPage() {
                               {colRate.toFixed(2)}:1
                             </span>
                           </td>
-                          <td className="px-4 py-2.5 text-right font-mono text-xs text-zinc-400 tabular-nums">
-                            {c.directTransferCount.toLocaleString()}
+                          <td className="px-4 py-2.5 text-right font-mono text-xs tabular-nums">
+                            {c.gridLockPct !== null && c.estTradableFloat !== null ? (
+                              <div
+                                title={`${c.gridsCompleted?.toLocaleString()} completed grids locked + ${c.spunCount.toLocaleString()} spun out of ${c.primaryMints?.toLocaleString()} minted`}
+                              >
+                                <span
+                                  className={`font-semibold ${
+                                    c.gridLockPct >= 50
+                                      ? "text-amber-300"
+                                      : c.gridLockPct >= 25
+                                        ? "text-emerald-300"
+                                        : "text-zinc-300"
+                                  }`}
+                                >
+                                  {c.gridLockPct.toFixed(1)}%
+                                </span>
+                                <span className="block text-[10px] text-zinc-500">
+                                  {c.estTradableFloat.toLocaleString()} float
+                                </span>
+                              </div>
+                            ) : c.primaryMints ? (
+                              <span className="text-[11px] text-zinc-500">
+                                {c.primaryMints.toLocaleString()} minted
+                              </span>
+                            ) : (
+                              <span className="text-zinc-600">—</span>
+                            )}
                           </td>
                           <td className="px-4 py-2.5 text-right font-mono text-xs tabular-nums">
-                            {c.turnoverPct !== null ? (
+                            {effTurnover !== null ? (
                               <span
-                                title={`${c.tradedCount} traded / ${c.primaryMints?.toLocaleString()} indexed primary mints`}
+                                title={
+                                  c.floatTurnoverPct !== null
+                                    ? `${c.tradedCount.toLocaleString()} traded / ${c.estTradableFloat?.toLocaleString()} unlocked float (${c.turnoverPct?.toFixed(1)}% of total mints)`
+                                    : `${c.tradedCount.toLocaleString()} traded / ${c.primaryMints?.toLocaleString()} indexed primary mints`
+                                }
                                 className="text-sky-300"
                               >
-                                {c.turnoverPct.toFixed(1)}%
+                                {effTurnover.toFixed(1)}%
                               </span>
                             ) : (
                               <span className="text-zinc-600">—</span>
@@ -1181,7 +1480,8 @@ function TradesPage() {
                   {(
                     [
                       ["all", "All Swaps"],
-                      ["cleanSolo", "Clean N:1"],
+                      ["sameEdition", "Same Edition"],
+                      ["cleanSolo", "Grid-Tier N:1"],
                       ["asymmetric", "Asymmetric (≤6:1)"],
                       ["2x", "2:1+ Swaps"],
                       ["3x", "3:1+ Swaps"],
@@ -1242,9 +1542,13 @@ function TradesPage() {
                                 ? `${ratioLabel} asymmetric`
                                 : `${rt.sideACount} ↔ ${rt.sideBCount} swap`}
                             </span>
-                            {rt.isCleanSolo ? (
+                            {rt.isSameEdition ? (
+                              <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                                Same Edition
+                              </span>
+                            ) : rt.isCleanSolo ? (
                               <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">
-                                Clean N:1
+                                Grid-Tier N:1
                               </span>
                             ) : (
                               rt.isAsymmetric &&

@@ -10,6 +10,7 @@ import {
   isEligibleP2PTransfer,
   isRealisticAsymmetricSwap,
   isSameClassSwap,
+  isSameEditionSoloSwap,
   type P2PTransferEvent,
 } from "./trades.js";
 
@@ -285,6 +286,39 @@ describe("classifyTradeSymmetry & isSameClassSwap", () => {
           onOffline: "online",
           memberId: "triples-mayu",
         })),
+      ),
+    ).toBe(false);
+
+    // Rejects 8-card grid FCO (101-116Z) -> 4-card grid FCO (117-120Z) grid-utility arbitrage
+    expect(
+      isCleanSoloPremiumSwap(
+        [{ objektClass: "First", onOffline: "online", memberId: "triples-chaewon", season: "Cream02", collectionNo: "118Z" }],
+        [
+          { objektClass: "First", onOffline: "online", memberId: "triples-yeonji", season: "Cream02", collectionNo: "101Z" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-mayu", season: "Cream02", collectionNo: "104Z" },
+        ],
+      ),
+    ).toBe(false);
+
+    // Accepts apples-to-apples 4-card grid FCO (117-120Z) -> 4-card grid FCO (117-120Z)
+    expect(
+      isSameEditionSoloSwap(
+        [{ objektClass: "First", onOffline: "online", memberId: "triples-yooyeon", season: "Cream02", collectionNo: "118Z" }],
+        [
+          { objektClass: "First", onOffline: "online", memberId: "triples-soomin", season: "Cream02", collectionNo: "117Z" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-sullin", season: "Cream02", collectionNo: "120Z" },
+        ],
+      ),
+    ).toBe(true);
+
+    // Rejects cross-edition 1st Ed (101Z) -> 2nd Ed (110Z) in strict same-edition mode
+    expect(
+      isSameEditionSoloSwap(
+        [{ objektClass: "First", onOffline: "online", memberId: "triples-yooyeon", season: "Cream02", collectionNo: "110Z" }],
+        [
+          { objektClass: "First", onOffline: "online", memberId: "triples-soomin", season: "Cream02", collectionNo: "101Z" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-sullin", season: "Cream02", collectionNo: "104Z" },
+        ],
       ),
     ).toBe(false);
   });

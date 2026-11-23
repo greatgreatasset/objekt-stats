@@ -158,22 +158,46 @@ function MethodologyPage() {
             bounce-backs).
           </li>
           <li>
-            <strong>Asymmetric Swaps, Clean N:1 &amp; Anti-Whale Filtering:</strong>{" "}
+            <strong>Asymmetric Swaps, COSMO Grid Equivalence &amp; Anti-Whale Filtering:</strong>{" "}
             To prevent alt-wallet consolidations or bulk cash purchases (such as
             66-for-1 transfers) from distorting demand stats, asymmetric
             premium metrics exclude extreme outliers above{" "}
             <code className="text-zinc-200">6:1</code> or{" "}
             <code className="text-zinc-200">&gt;10</code> cards on one side. The
-            default <em>Clean N:1</em> leaderboard isolates unambiguous{" "}
+            default <em>Grid-Tier Clean N:1</em> leaderboard isolates unambiguous{" "}
             <code className="text-zinc-200">2:1–6:1</code> swaps where exactly 1
             Objekt sits on the scarce side, both sides share the exact same
-            Objekt Class and Digital/Physical format, and the counterparty cards
-            belong to other members. Members are ranked by{" "}
+            Objekt Class, Digital/Physical format, and{" "}
+            <strong>COSMO Grid Tier</strong> — separating{" "}
+            <strong className="text-zinc-200">8-card grid FCOs</strong> (
+            <code className="text-zinc-200">101–116Z</code>, worth 1/8 SCO) from{" "}
+            <strong className="text-zinc-200">4-card grid FCOs</strong> (
+            <code className="text-zinc-200">117–120Z</code>, worth 1/4 SCO) so
+            fair 2× 1st/2nd-Ed → 1× 3rd-Ed grid utility swaps are never
+            misclassified as member premiums. A stricter{" "}
+            <em>Exact Same-Edition</em> toggle further requires the exact same
+            season &amp; edition/DCO number. Members are ranked by{" "}
             <strong>Unique Overpayers</strong> (distinct wallets willing to pay
             2:1+), with a{" "}
             <span className="font-mono text-amber-300">Top wallet XX%</span>{" "}
             flag whenever a single wallet accounts for ≥ 25% of a member&apos;s
             clean 2:1+ swaps.
+          </li>
+          <li>
+            <strong>COSMO Grid Lock % &amp; Estimated Tradable Float:</strong>{" "}
+            Completing a Digital First Class grid permanently locks the required
+            FCOs as unsendable (8 cards for 1st/2nd Ed →{" "}
+            <code className="text-zinc-200">201Z–204Z</code> SCO; 4 cards for
+            3rd Ed → <code className="text-zinc-200">205Z–206Z</code> SCO).
+            Because every minted grid SCO locks exactly 1 copy of every slot in
+            its edition, we compute exact{" "}
+            <code className="text-zinc-200">Grid Lock %</code> and{" "}
+            <code className="text-zinc-200">
+              Est. Tradable Float = Mints − Grids Completed − Spins
+            </code>{" "}
+            per card, edition, and member, as well as each wallet&apos;s exact{" "}
+            <strong>Grids Completed</strong> total on{" "}
+            <code className="text-zinc-200">/wallet</code>.
           </li>
           <li>
             <strong>Direct Transfers Tracked Separately:</strong> One-way P2P
@@ -226,11 +250,14 @@ function MethodologyPage() {
             <code className="text-zinc-200">362Z</code>, and{" "}
             <code className="text-zinc-200">376Z</code>). When minted directly (
             <code className="text-zinc-200">from = 0x0</code>), we deduplicate
-            them from regular shop mints, deduce the active tier from the number
-            of distinct members minted (1, 2, 4, 8, or All-Member 24), and apply
-            the monthly subscription fee (editable, defaulting to $96/mo for
-            All-Member Pass+). Note that chat-only standard Pass tiers without
-            Objekts leave no on-chain footprint.
+            them from regular shop mints, deduce the active tier or optimal
+            stacked tier combination from the number of distinct members minted,
+            and apply tier-specific bulk pricing — reflecting real per-member
+            economies of scale (1-Member $4.89/mo [$4.89/ea], 2-Member $9.19/mo
+            [$4.60/ea], 4-Member $17.49/mo [$4.37/ea], 8-Member $32.99/mo
+            [$4.12/ea], All-Member 24 $90.00/mo pre-tax [$3.75/ea], all editable
+            to include local sales tax). Note that chat-only standard Pass tiers
+            without Objekts leave no on-chain footprint.
           </li>
           <li>
             <strong>Historical Store &amp; Bundle Pricing:</strong> Digital

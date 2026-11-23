@@ -1,5 +1,5 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { AlertTriangle, ArrowLeft } from "lucide-react";
+import { AlertTriangle, ArrowLeft, LayoutGrid } from "lucide-react";
 import { useState } from "react";
 import { getMemberDetail } from "../../lib/server/queries";
 
@@ -49,8 +49,15 @@ function MemberDetailPage() {
     );
   }
 
-  const { member, roundHistory, classBreakdown, anomalies, collections, events } =
-    data;
+  const {
+    member,
+    roundHistory,
+    classBreakdown,
+    anomalies,
+    collections,
+    events,
+    gridSummary,
+  } = data;
   const popHistory = [...roundHistory]
     .filter((r) => r.includeInPopularity)
     .reverse(); // chronological for trajectory chart
@@ -112,7 +119,7 @@ function MemberDetailPage() {
               <p className="text-sm text-zinc-400">{member.fullName}</p>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
               <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 px-3.5 py-2.5">
                 <div className="text-[11px] text-zinc-300">Avg Buyers Rank</div>
                 <div className="font-mono text-lg font-bold text-white">
@@ -132,6 +139,15 @@ function MemberDetailPage() {
                 <div className="text-[11px] text-zinc-400">Mints / Buyer</div>
                 <div className="font-mono text-lg font-bold text-white">
                   {avgMintsPerBuyer}
+                </div>
+              </div>
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2.5">
+                <div className="text-[11px] text-emerald-200/90">Grids Completed</div>
+                <div className="font-mono text-lg font-bold text-white">
+                  {gridSummary.totalGridsCompleted.toLocaleString()}
+                </div>
+                <div className="font-mono text-[10px] text-emerald-300/80">
+                  {gridSummary.totalLockedFcos.toLocaleString()} FCOs locked
                 </div>
               </div>
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3.5 py-2.5">
@@ -331,6 +347,67 @@ function MemberDetailPage() {
             </section>
           )}
         </div>
+      )}
+
+      {/* COSMO Grid Supply & Lock Monitor */}
+      {gridSummary.editions.length > 0 && (
+        <section className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <LayoutGrid className="h-4 w-4 text-emerald-400" />
+                COSMO Grid Completions &amp; Tradable Float
+              </h2>
+              <p className="text-xs text-zinc-400">
+                Completed grids permanently lock Digital First Class Objekts as
+                unsendable (8 cards for 1st/2nd Ed; 4 cards for 3rd Ed), reducing
+                real tradable supply.
+              </p>
+            </div>
+            <span className="font-mono text-xs text-emerald-300">
+              {gridSummary.totalGridsCompleted.toLocaleString()} grids ·{" "}
+              {gridSummary.totalLockedFcos.toLocaleString()} locked FCOs
+            </span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {gridSummary.editions.slice(0, 9).map((ed) => (
+              <div
+                key={ed.key}
+                className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3.5 space-y-2 text-xs"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-white">
+                    {ed.season} {ed.shortLabel}
+                  </span>
+                  <span
+                    className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+                      ed.gridLockPct >= 50
+                        ? "bg-amber-500/15 text-amber-300"
+                        : "bg-emerald-500/15 text-emerald-300"
+                    }`}
+                  >
+                    {ed.gridLockPct.toFixed(1)}% locked
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-900">
+                  <div
+                    className={`h-full rounded-full ${
+                      ed.gridLockPct >= 50 ? "bg-amber-400" : "bg-emerald-400"
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(3, ed.gridLockPct))}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between font-mono text-[11px] text-zinc-400 tabular-nums">
+                  <span>{ed.gridsCompleted.toLocaleString()} grids</span>
+                  <span className="text-zinc-200">
+                    ~{ed.estTradableFloatPerSlot.toLocaleString()} float/card
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {/* Round-by-round history */}

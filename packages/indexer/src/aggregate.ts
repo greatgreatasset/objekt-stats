@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { loadCurationData } from "@objekt-stats/db/curation-loader";
 import {
   classifyTradeSymmetry,
@@ -9,6 +10,7 @@ import {
   isCleanSoloPremiumSwap,
   isRealisticAsymmetricSwap,
   isSameClassSwap,
+  isSameEditionSoloSwap,
   makeTransferKey,
   shortenAddress,
   type P2PTransferEvent,
@@ -647,17 +649,136 @@ export function aggregateAndEmitSql(
   writeFileSync(outFile, lines.join("\n") + "\n", "utf8");
 
   // 6. Secondary User-to-User Trade Aggregation (STRICTLY isolated from raw_mints!)
-  const rawTransfers = store.getAllTransfers();
+  const tradeSummary = aggregateTradesAndEmitSql(store.db, {
+    dataRoot,
+    tradesOutFile,
+    now,
+  });
+
+  const snapshot = {
+    generatedAt: now,
+    chains: chainSummaries,
+    counts: {
+      collections: filteredCollections.length,
+      dailyRows: filteredDaily.length,
+      rounds: validRounds.length,
+      roundMemberStatRows,
+      confirmedTradesCount: tradeSummary.confirmedTradesCount,
+      asymmetricTradesCount: tradeSummary.asymmetricTradesCount,
+      confirmedTradedObjekts: tradeSummary.confirmedTradedObjekts,
+      directP2PTransfersCount: tradeSummary.directP2PTransfersCount,
+      tradeCollectionsCount: tradeSummary.tradeCollectionsCount,
+    },
+    rounds: validRounds
+      .sort((a, b) => b.startAt.localeCompare(a.startAt))
+      .map((r) => ({
+        slug: r.slug,
+        artistId: r.artistId,
+        title: r.title,
+        season: r.season,
+        objektClass: r.objektClass,
+        saleMechanic: r.saleMechanic,
+        startAt: r.startAt,
+        endAt: r.endAt,
+        totalMints: Array.from(r.memberMints.values()).reduce((a, b) => a + b, 0),
+        uniqueBuyers: r.roundUniqueBuyers,
+        participatingMembers: r.memberMints.size,
+        includeInPopularity: r.includeInPopularity,
+        stats: statsByRoundSlug.get(r.slug) ?? [],
+      })),
+  };
+  writeFileSync(snapshotFile, JSON.stringify(snapshot, null, 2), "utf8");
+
+  return {
+    collectionsCount: filteredCollections.length,
+    dailyRowsCount: filteredDaily.length,
+    roundsCount: validRounds.length,
+    roundMemberStatRows,
+    confirmedTradesCount: tradeSummary.confirmedTradesCount,
+    confirmedTradedObjekts: tradeSummary.confirmedTradedObjekts,
+    directP2PTransfersCount: tradeSummary.directP2PTransfersCount,
+    tradeCollectionsCount: tradeSummary.tradeCollectionsCount,
+    outFile,
+    tradesOutFile,
+    snapshotFile,
+  };
+}
+
+export interface AggregateTradesSummary {
+  confirmedTradesCount: number;
+  asymmetricTradesCount: number;
+  confirmedTradedObjekts: number;
+  directP2PTransfersCount: number;
+  tradeCollectionsCount: number;
+  tradesOutFile: string;
+}
+
+/**
+ * Fast, read-only-safe secondary trade aggregator (`sync-trades.sql`).
+ * Strictly reads `raw_transfers` + joined `token_metadata` and never scans `raw_mints`.
+ */
+export function aggregateTradesAndEmitSql(
+  db: DatabaseSync,
+  options: {
+    dataRoot?: string;
+    tradesOutFile?: string;
+    now?: string;
+  } = {},
+): AggregateTradesSummary {
+  const dataRoot = options.dataRoot ?? resolve(process.cwd(), "data");
+  const tradesOutFile =
+    options.tradesOutFile ??
+    resolve(process.cwd(), "packages/db/generated/sync-trades.sql");
+  const now = options.now ?? new Date().toISOString();
+
+  const curation = loadCurationData(dataRoot);
+  const trackedArtists = new Set(curation.artists.map((a) => a.id));
+
+  const memberLookup = new Map<string, string>();
+  const memberInfoById = new Map<
+    string,
+    { name: string; hexColor: string; artistId: string }
+  >();
+  for (const artist of curation.artists) {
+    for (const m of artist.members) {
+      memberLookup.set(`${artist.id}:${normalizeMemberLookupKey(m.name)}`, m.id);
+      memberLookup.set(`${artist.id}:${normalizeMemberLookupKey(m.cosmoName)}`, m.id);
+      memberLookup.set(`${artist.id}:${normalizeMemberLookupKey(m.fullName)}`, m.id);
+      memberInfoById.set(m.id, {
+        name: m.name,
+        hexColor: m.hexColor,
+        artistId: artist.id,
+      });
+    }
+  }
+
+  const rawTransfers = db
+    .prepare(
+      `SELECT tx_hash, log_index, token_id, chain, block_number, transferred_at, from_addr, to_addr
+       FROM raw_transfers
+       ORDER BY transferred_at ASC, block_number ASC, log_index ASC`,
+    )
+    .all() as unknown as Array<{
+    tx_hash: string;
+    log_index: number;
+    token_id: number;
+    chain: "polygon" | "abstract";
+    block_number: number;
+    transferred_at: string;
+    from_addr: string;
+    to_addr: string;
+  }>;
+
   const detectedTrades = detectTradesFromTransfers(
     rawTransfers.map((t) => ({
-      txHash: t.txHash,
-      logIndex: t.logIndex,
+      txHash: t.tx_hash,
+      logIndex: t.log_index,
       chain: t.chain,
-      blockNumber: t.blockNumber,
-      transferredAt: t.transferredAt,
-      from: t.fromAddr,
-      to: t.toAddr,
-      tokenId: t.tokenId,
+      blockNumber: t.block_number,
+      transferredAt: t.transferred_at,
+      from: t.from_addr,
+      to: t.to_addr,
+      tokenId: t.token_id,
     })),
   );
 
@@ -678,7 +799,7 @@ export function aggregateAndEmitSql(
 
   const metaByToken = new Map<number, TokenMetaRow>();
   if (detectedTrades.eligibleTransfers.length > 0) {
-    const metaRows = store.db
+    const metaRows = db
       .prepare(
         `SELECT DISTINCT
            tm.token_id, tm.slug, tm.collection_id, tm.artist_id, tm.raw_member,
@@ -715,6 +836,9 @@ export function aggregateAndEmitSql(
     cleanSolo2xCount: number;
     cleanSolo3xCount: number;
     overpayers: Set<string>;
+    sameEdition2xCount: number;
+    sameEdition3xCount: number;
+    sameEditionOverpayers: Set<string>;
     firstTradeAt: string | null;
     lastTradeAt: string | null;
   }
@@ -743,6 +867,10 @@ export function aggregateAndEmitSql(
     cleanSolo3xCount: number;
     cleanSoloBulkCount: number;
     overpayerCounts: Map<string, number>;
+    sameEdition2xCount: number;
+    sameEdition3xCount: number;
+    sameEditionBulkCount: number;
+    sameEditionOverpayerCounts: Map<string, number>;
     lastTradeAt: string | null;
   }
 
@@ -792,6 +920,9 @@ export function aggregateAndEmitSql(
         cleanSolo2xCount: 0,
         cleanSolo3xCount: 0,
         overpayers: new Set(),
+        sameEdition2xCount: 0,
+        sameEdition3xCount: 0,
+        sameEditionOverpayers: new Set(),
         firstTradeAt: null,
         lastTradeAt: null,
       };
@@ -827,6 +958,10 @@ export function aggregateAndEmitSql(
         cleanSolo3xCount: 0,
         cleanSoloBulkCount: 0,
         overpayerCounts: new Map(),
+        sameEdition2xCount: 0,
+        sameEdition3xCount: 0,
+        sameEditionBulkCount: 0,
+        sameEditionOverpayerCounts: new Map(),
         lastTradeAt: null,
       };
       memberTradeMap.set(memberId, acc);
@@ -894,6 +1029,7 @@ export function aggregateAndEmitSql(
     isAsymmetric: boolean;
     isSameClass: boolean;
     isCleanSolo: boolean;
+    isSameEdition: boolean;
     ratioMultiple: number;
     walletAShort: string;
     walletBShort: string;
@@ -1019,15 +1155,18 @@ export function aggregateAndEmitSql(
         objektClass: m.objekt_class,
         onOffline: m.on_offline,
         memberId,
+        season: m.season,
+        collectionNo: m.collection_no,
       };
     };
+    const premCleanMetas = premSideLegs.map(toCleanMeta);
+    const bulkCleanMetas = bulkSideLegs.map(toCleanMeta);
     const isCleanSolo =
       realisticAsym &&
       sym.is2to1Plus &&
-      isCleanSoloPremiumSwap(
-        premSideLegs.map(toCleanMeta),
-        bulkSideLegs.map(toCleanMeta),
-      );
+      isCleanSoloPremiumSwap(premCleanMetas, bulkCleanMetas);
+    const isSameEdition =
+      isCleanSolo && isSameEditionSoloSwap(premCleanMetas, bulkCleanMetas);
 
     // Exclude extreme >6:1 / >10-card alt-wallet dumps from distorting exchange-rate averages
     const rateA = !sym.isAsymmetric || realisticAsym ? sym.sideAExchangeRate : 1;
@@ -1086,7 +1225,7 @@ export function aggregateAndEmitSql(
       }
     }
 
-    // Attribute Clean Solo N:1 swaps + Unique Overpaying Wallets (pLeg.to paid 2..6 cards to acquire this 1 card)
+    // Attribute Grid-Tier-Aware Clean Solo N:1 & Strict Same-Edition swaps + Unique Overpayers
     if (isCleanSolo && premSideLegs.length === 1) {
       const premLeg = premSideLegs[0]!;
       const pMeta = metaByToken.get(premLeg.tokenId);
@@ -1096,6 +1235,11 @@ export function aggregateAndEmitSql(
         colAcc.cleanSolo2xCount++;
         if (sym.is3to1Plus) colAcc.cleanSolo3xCount++;
         colAcc.overpayers.add(overpayer);
+        if (isSameEdition) {
+          colAcc.sameEdition2xCount++;
+          if (sym.is3to1Plus) colAcc.sameEdition3xCount++;
+          colAcc.sameEditionOverpayers.add(overpayer);
+        }
 
         if (colAcc.memberId) {
           const mAcc = ensureMemberAcc(colAcc.memberId, pMeta.artist_id);
@@ -1105,6 +1249,14 @@ export function aggregateAndEmitSql(
             overpayer,
             (mAcc.overpayerCounts.get(overpayer) ?? 0) + 1,
           );
+          if (isSameEdition) {
+            mAcc.sameEdition2xCount++;
+            if (sym.is3to1Plus) mAcc.sameEdition3xCount++;
+            mAcc.sameEditionOverpayerCounts.set(
+              overpayer,
+              (mAcc.sameEditionOverpayerCounts.get(overpayer) ?? 0) + 1,
+            );
+          }
         }
       }
 
@@ -1118,7 +1270,9 @@ export function aggregateAndEmitSql(
             `${bMeta.artist_id}:${normalizeMemberLookupKey(bMeta.raw_member)}`,
           ) ?? null;
         if (bMemberId) {
-          ensureMemberAcc(bMemberId, bMeta.artist_id).cleanSoloBulkCount++;
+          const bmAcc = ensureMemberAcc(bMemberId, bMeta.artist_id);
+          bmAcc.cleanSoloBulkCount++;
+          if (isSameEdition) bmAcc.sameEditionBulkCount++;
         }
       }
     }
@@ -1146,6 +1300,7 @@ export function aggregateAndEmitSql(
           isAsymmetric: realisticAsym,
           isSameClass: sameClass,
           isCleanSolo,
+          isSameEdition,
           ratioMultiple: realisticAsym ? sym.ratioMultiple : 1,
           walletAShort: shortenAddress(trade.walletA),
           walletBShort: shortenAddress(trade.walletB),
@@ -1174,7 +1329,7 @@ export function aggregateAndEmitSql(
     const scAvgRate =
       col.sameClassLegs > 0 ? round4(col.sameClassRateSum / col.sameClassLegs) : 1;
     tradeLines.push(
-      `INSERT OR REPLACE INTO collection_trade_stats (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, unique_overpayers, first_trade_at, last_trade_at, updated_at) VALUES (${sqlStr(col.meta.slug)}, ${sqlStr(col.meta.collection_id)}, ${sqlStr(col.meta.artist_id)}, ${sqlStr(col.memberId)}, ${sqlStr(col.meta.raw_member)}, ${sqlStr(col.meta.season)}, ${sqlStr(col.meta.objekt_class)}, ${sqlStr(col.meta.collection_no)}, ${sqlStr(col.meta.on_offline)}, ${sqlStr(col.meta.image_url)}, ${sqlStr(col.meta.background_color)}, ${col.tradedCount}, ${col.tradeSessions}, ${col.directTransferCount}, ${col.traders.size}, ${col.premiumCount}, ${col.bulkCount}, ${col.premium2xCount}, ${col.premium3xCount}, ${avgRate}, ${round4(col.maxExchangeRate)}, ${col.sameClassLegs}, ${col.sameClassPremiumCount}, ${col.sameClassBulkCount}, ${col.sameClass2xCount}, ${col.sameClass3xCount}, ${scAvgRate}, ${col.cleanSolo2xCount}, ${col.cleanSolo3xCount}, ${col.overpayers.size}, ${sqlStr(col.firstTradeAt)}, ${sqlStr(col.lastTradeAt)}, ${sqlStr(now)});`,
+      `INSERT OR REPLACE INTO collection_trade_stats (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, unique_overpayers, same_edition_2x_count, same_edition_3x_count, same_edition_overpayers, first_trade_at, last_trade_at, updated_at) VALUES (${sqlStr(col.meta.slug)}, ${sqlStr(col.meta.collection_id)}, ${sqlStr(col.meta.artist_id)}, ${sqlStr(col.memberId)}, ${sqlStr(col.meta.raw_member)}, ${sqlStr(col.meta.season)}, ${sqlStr(col.meta.objekt_class)}, ${sqlStr(col.meta.collection_no)}, ${sqlStr(col.meta.on_offline)}, ${sqlStr(col.meta.image_url)}, ${sqlStr(col.meta.background_color)}, ${col.tradedCount}, ${col.tradeSessions}, ${col.directTransferCount}, ${col.traders.size}, ${col.premiumCount}, ${col.bulkCount}, ${col.premium2xCount}, ${col.premium3xCount}, ${avgRate}, ${round4(col.maxExchangeRate)}, ${col.sameClassLegs}, ${col.sameClassPremiumCount}, ${col.sameClassBulkCount}, ${col.sameClass2xCount}, ${col.sameClass3xCount}, ${scAvgRate}, ${col.cleanSolo2xCount}, ${col.cleanSolo3xCount}, ${col.overpayers.size}, ${col.sameEdition2xCount}, ${col.sameEdition3xCount}, ${col.sameEditionOverpayers.size}, ${sqlStr(col.firstTradeAt)}, ${sqlStr(col.lastTradeAt)}, ${sqlStr(now)});`,
     );
   }
 
@@ -1207,6 +1362,10 @@ export function aggregateAndEmitSql(
           cleanSolo3xCount: 0,
           cleanSoloBulkCount: 0,
           overpayerCounts: new Map<string, number>(),
+          sameEdition2xCount: 0,
+          sameEdition3xCount: 0,
+          sameEditionBulkCount: 0,
+          sameEditionOverpayerCounts: new Map<string, number>(),
           lastTradeAt: null,
         }
       );
@@ -1238,8 +1397,16 @@ export function aggregateAndEmitSql(
         a.cleanSolo2xCount > 0
           ? Math.round((topOverpayerCount / a.cleanSolo2xCount) * 1000) / 10
           : null;
+      let topSameEdCount = 0;
+      for (const c of a.sameEditionOverpayerCounts.values()) {
+        if (c > topSameEdCount) topSameEdCount = c;
+      }
+      const sameEditionTopSharePct =
+        a.sameEdition2xCount > 0
+          ? Math.round((topSameEdCount / a.sameEdition2xCount) * 1000) / 10
+          : null;
       tradeLines.push(
-        `INSERT OR REPLACE INTO member_trade_stats (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, clean_solo_bulk_count, unique_overpayers, top_overpayer_share_pct, last_trade_at, updated_at) VALUES (${sqlStr(a.memberId)}, ${sqlStr(a.artistId)}, ${a.tradedCount}, ${a.tradeSessions}, ${a.directTransferCount}, ${a.traders.size}, ${a.collections.size}, ${r.tradeRank}, ${r.tradeSharePct}, ${r.tradeRelativeIndex}, ${a.premiumCount}, ${a.bulkCount}, ${a.premium2xCount}, ${a.premium3xCount}, ${avgRate}, ${round4(a.maxExchangeRate)}, ${a.sameClassLegs}, ${a.sameClassPremiumCount}, ${a.sameClassBulkCount}, ${a.sameClass2xCount}, ${a.sameClass3xCount}, ${scAvgRate}, ${a.cleanSolo2xCount}, ${a.cleanSolo3xCount}, ${a.cleanSoloBulkCount}, ${a.overpayerCounts.size}, ${sqlNum(topOverpayerSharePct)}, ${sqlStr(a.lastTradeAt)}, ${sqlStr(now)});`,
+        `INSERT OR REPLACE INTO member_trade_stats (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, clean_solo_bulk_count, unique_overpayers, top_overpayer_share_pct, same_edition_2x_count, same_edition_3x_count, same_edition_bulk_count, same_edition_overpayers, same_edition_top_share_pct, last_trade_at, updated_at) VALUES (${sqlStr(a.memberId)}, ${sqlStr(a.artistId)}, ${a.tradedCount}, ${a.tradeSessions}, ${a.directTransferCount}, ${a.traders.size}, ${a.collections.size}, ${r.tradeRank}, ${r.tradeSharePct}, ${r.tradeRelativeIndex}, ${a.premiumCount}, ${a.bulkCount}, ${a.premium2xCount}, ${a.premium3xCount}, ${avgRate}, ${round4(a.maxExchangeRate)}, ${a.sameClassLegs}, ${a.sameClassPremiumCount}, ${a.sameClassBulkCount}, ${a.sameClass2xCount}, ${a.sameClass3xCount}, ${scAvgRate}, ${a.cleanSolo2xCount}, ${a.cleanSolo3xCount}, ${a.cleanSoloBulkCount}, ${a.overpayerCounts.size}, ${sqlNum(topOverpayerSharePct)}, ${a.sameEdition2xCount}, ${a.sameEdition3xCount}, ${a.sameEditionBulkCount}, ${a.sameEditionOverpayerCounts.size}, ${sqlNum(sameEditionTopSharePct)}, ${sqlStr(a.lastTradeAt)}, ${sqlStr(now)});`,
       );
     }
   }
@@ -1285,58 +1452,19 @@ export function aggregateAndEmitSql(
     }
 
     tradeLines.push(
-      `INSERT OR REPLACE INTO recent_trades (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, is_asymmetric, is_same_class, is_clean_solo, ratio_multiple, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary) VALUES (${sqlStr(rt.tradeId)}, ${sqlStr(rt.artistId)}, ${sqlStr(rt.chain)}, ${sqlStr(rt.tradedAt)}, ${rt.durationSeconds}, ${rt.sideACount}, ${rt.sideBCount}, ${sqlBool(rt.isAsymmetric)}, ${sqlBool(rt.isSameClass)}, ${sqlBool(rt.isCleanSolo)}, ${rt.ratioMultiple}, ${sqlStr(rt.walletAShort)}, ${sqlStr(rt.walletBShort)}, ${sqlStr(rt.sideASummary)}, ${sqlStr(rt.sideBSummary)});`,
+      `INSERT OR REPLACE INTO recent_trades (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, is_asymmetric, is_same_class, is_clean_solo, is_same_edition, ratio_multiple, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary) VALUES (${sqlStr(rt.tradeId)}, ${sqlStr(rt.artistId)}, ${sqlStr(rt.chain)}, ${sqlStr(rt.tradedAt)}, ${rt.durationSeconds}, ${rt.sideACount}, ${rt.sideBCount}, ${sqlBool(rt.isAsymmetric)}, ${sqlBool(rt.isSameClass)}, ${sqlBool(rt.isCleanSolo)}, ${sqlBool(rt.isSameEdition)}, ${rt.ratioMultiple}, ${sqlStr(rt.walletAShort)}, ${sqlStr(rt.walletBShort)}, ${sqlStr(rt.sideASummary)}, ${sqlStr(rt.sideBSummary)});`,
     );
   }
 
   mkdirSync(resolve(tradesOutFile, ".."), { recursive: true });
   writeFileSync(tradesOutFile, tradeLines.join("\n") + "\n", "utf8");
 
-  const snapshot = {
-    generatedAt: now,
-    chains: chainSummaries,
-    counts: {
-      collections: filteredCollections.length,
-      dailyRows: filteredDaily.length,
-      rounds: validRounds.length,
-      roundMemberStatRows,
-      confirmedTradesCount: detectedTrades.trades.length,
-      asymmetricTradesCount,
-      confirmedTradedObjekts,
-      directP2PTransfersCount,
-      tradeCollectionsCount: colTradeMap.size,
-    },
-    rounds: validRounds
-      .sort((a, b) => b.startAt.localeCompare(a.startAt))
-      .map((r) => ({
-        slug: r.slug,
-        artistId: r.artistId,
-        title: r.title,
-        season: r.season,
-        objektClass: r.objektClass,
-        saleMechanic: r.saleMechanic,
-        startAt: r.startAt,
-        endAt: r.endAt,
-        totalMints: Array.from(r.memberMints.values()).reduce((a, b) => a + b, 0),
-        uniqueBuyers: r.roundUniqueBuyers,
-        participatingMembers: r.memberMints.size,
-        includeInPopularity: r.includeInPopularity,
-        stats: statsByRoundSlug.get(r.slug) ?? [],
-      })),
-  };
-  writeFileSync(snapshotFile, JSON.stringify(snapshot, null, 2), "utf8");
-
   return {
-    collectionsCount: filteredCollections.length,
-    dailyRowsCount: filteredDaily.length,
-    roundsCount: validRounds.length,
-    roundMemberStatRows,
     confirmedTradesCount: detectedTrades.trades.length,
+    asymmetricTradesCount,
     confirmedTradedObjekts,
     directP2PTransfersCount,
     tradeCollectionsCount: colTradeMap.size,
-    outFile,
     tradesOutFile,
-    snapshotFile,
   };
 }

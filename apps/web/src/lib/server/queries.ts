@@ -14,7 +14,13 @@ import {
   saleRounds,
   syncState,
 } from "@objekt-stats/db";
-import { correlateEventsForMemberRound } from "@objekt-stats/stats";
+import {
+  classifyFcoGridEdition,
+  classifyGridRewardSco,
+  computeEditionGridSupply,
+  correlateEventsForMemberRound,
+  type GridEditionId,
+} from "@objekt-stats/stats";
 
 export type ArtistSlug = "triples" | "artms";
 
@@ -728,6 +734,141 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       .orderBy(desc(collections.totalMints))
       .limit(24);
 
+    // Compute per-edition COSMO Grid completion & supply lock stats for this member
+    const memberGridRows = await db
+      .select({
+        season: collections.season,
+        objektClass: collections.objektClass,
+        collectionNo: collections.collectionNo,
+        onOffline: collections.onOffline,
+        totalMints: collections.totalMints,
+        spunCount: collections.spunCount,
+        lastMintAt: collections.lastMintAt,
+      })
+      .from(collections)
+      .where(
+        sql`${collections.memberId} = ${memberId} AND ${collections.onOffline} = 'online' AND ${collections.objektClass} IN ('First', 'Special')`,
+      )
+      .catch(() => []);
+
+    const memberEdMap = new Map<
+      string,
+      {
+        season: string;
+        editionId: GridEditionId;
+        editionLabel: string;
+        shortLabel: string;
+        gridSize: 4 | 8;
+        fcoMints: number;
+        scoMints: number;
+        spunCount: number;
+        latestMintAt: string;
+      }
+    >();
+
+    for (const row of memberGridRows) {
+      if (row.totalMints <= 0) continue;
+      if (row.objektClass === "Special") {
+        const sco = classifyGridRewardSco(
+          member.artistId,
+          row.season,
+          row.objektClass,
+          row.collectionNo,
+          row.onOffline,
+        );
+        if (!sco) continue;
+        const key = `${row.season}|${sco.editionId}`;
+        let acc = memberEdMap.get(key);
+        if (!acc) {
+          acc = {
+            season: row.season,
+            editionId: sco.editionId,
+            editionLabel: sco.editionLabel,
+            shortLabel: sco.shortLabel,
+            gridSize: sco.gridSize,
+            fcoMints: 0,
+            scoMints: 0,
+            spunCount: 0,
+            latestMintAt: row.lastMintAt ?? "",
+          };
+          memberEdMap.set(key, acc);
+        }
+        acc.scoMints += row.totalMints;
+        if (row.lastMintAt && row.lastMintAt > acc.latestMintAt) {
+          acc.latestMintAt = row.lastMintAt;
+        }
+      } else if (row.objektClass === "First") {
+        const fco = classifyFcoGridEdition(
+          member.artistId,
+          row.season,
+          row.objektClass,
+          row.collectionNo,
+          row.onOffline,
+        );
+        if (!fco) continue;
+        const key = `${row.season}|${fco.editionId}`;
+        let acc = memberEdMap.get(key);
+        if (!acc) {
+          acc = {
+            season: row.season,
+            editionId: fco.editionId,
+            editionLabel: fco.editionLabel,
+            shortLabel: fco.shortLabel,
+            gridSize: fco.gridSize,
+            fcoMints: 0,
+            scoMints: 0,
+            spunCount: 0,
+            latestMintAt: row.lastMintAt ?? "",
+          };
+          memberEdMap.set(key, acc);
+        }
+        acc.fcoMints += row.totalMints;
+        acc.spunCount += row.spunCount ?? 0;
+        if (row.lastMintAt && row.lastMintAt > acc.latestMintAt) {
+          acc.latestMintAt = row.lastMintAt;
+        }
+      }
+    }
+
+    const gridEditions = Array.from(memberEdMap.entries())
+      .filter(([, a]) => a.fcoMints > 0)
+      .map(([key, a]) => {
+        const m = computeEditionGridSupply({
+          fcoMints: a.fcoMints,
+          scoMints: a.scoMints,
+          spunCount: a.spunCount,
+          gridSize: a.gridSize,
+          slotCount: a.gridSize,
+        });
+        return {
+          key,
+          season: a.season,
+          editionId: a.editionId,
+          editionLabel: a.editionLabel,
+          shortLabel: a.shortLabel,
+          gridSize: a.gridSize,
+          fcoMints: a.fcoMints,
+          gridsCompleted: m.gridsCompleted,
+          lockedFcos: m.lockedFcos,
+          gridLockPct: m.gridLockPct,
+          estTradableFloat: m.estTradableFloat,
+          estTradableFloatPerSlot: m.estTradableFloatPerSlot,
+          latestMintAt: a.latestMintAt,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.latestMintAt.localeCompare(a.latestMintAt) ||
+          b.fcoMints - a.fcoMints,
+      );
+
+    const gridSummary = {
+      totalGridsCompleted: gridEditions.reduce((s, g) => s + g.gridsCompleted, 0),
+      totalLockedFcos: gridEditions.reduce((s, g) => s + g.lockedFcos, 0),
+      totalFcoMints: gridEditions.reduce((s, g) => s + g.fcoMints, 0),
+      editions: gridEditions,
+    };
+
     const artistEvents = await loadArtistEventsWithMembers(
       db,
       normalizeArtist(member.artistId),
@@ -771,6 +912,7 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       anomalies,
       collections: memberCollections,
       events: relatedEvents,
+      gridSummary,
     };
   });
 

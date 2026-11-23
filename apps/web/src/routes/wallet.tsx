@@ -14,6 +14,7 @@ import {
   Flame,
   Gift,
   Layers,
+  LayoutGrid,
   Link2,
   Loader2,
   MessageCircle,
@@ -124,6 +125,7 @@ type CategoryFilter =
   | "physical_scan"
   | "trade_swap"
   | "spin"
+  | "grid_reward"
   | "free_reward"
   | "p2p"
   | "migration_bridge";
@@ -569,6 +571,8 @@ function WalletCostPage() {
       if (categoryFilter === "all") {
         // Hide noisy migration bridge from "All" once Polygon history is cleanly loaded
         if (act.category === "migration_bridge" && polygonLoaded) return false;
+      } else if (categoryFilter === "grid_reward") {
+        if (!act.isGridReward) return false;
       } else if (categoryFilter === "p2p") {
         if (
           act.category !== "p2p_received" &&
@@ -611,6 +615,7 @@ function WalletCostPage() {
         physical_scan: 0,
         trade_swap: 0,
         spin: 0,
+        grid_reward: 0,
         free_reward: 0,
         p2p: 0,
         migration_bridge: 0,
@@ -623,6 +628,7 @@ function WalletCostPage() {
       physical_scan: 0,
       trade_swap: 0,
       spin: 0,
+      grid_reward: 0,
       free_reward: 0,
       p2p: 0,
       migration_bridge: 0,
@@ -633,6 +639,7 @@ function WalletCostPage() {
         if (!polygonLoaded) counts.all++;
       } else {
         counts.all++;
+        if (a.isGridReward) counts.grid_reward++;
         if (
           a.category === "p2p_received" ||
           a.category === "p2p_sent" ||
@@ -863,6 +870,20 @@ function WalletCostPage() {
                     <h2 className="text-xl font-bold text-white truncate">
                       {identity.nickname ?? shortenAddress(identity.address)}
                     </h2>
+                    <span
+                      title={`Native Digital Grid SCO completions minted directly to this account (${analysis.summary.gridsCompletedPolygon} Polygon + ${analysis.summary.gridsCompletedAbstract} Abstract; excludes traded-in SCOs)`}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-0.5 font-mono text-[11px] font-semibold text-emerald-200"
+                    >
+                      <LayoutGrid className="h-3 w-3 text-emerald-400" />
+                      <span>
+                        Grids Completed:{" "}
+                        {analysis.summary.gridsCompleted.toLocaleString()}
+                        {!polygonLoaded &&
+                        analysis.summary.migratedGridScosCount > 0
+                          ? ` (+${analysis.summary.migratedGridScosCount} syncing)`
+                          : ""}
+                      </span>
+                    </span>
                     {analysis.summary.firstActivityAt &&
                       analysis.summary.lastActivityAt && (
                         <span className="rounded-full border border-zinc-800 bg-zinc-950 px-2.5 py-0.5 font-mono text-[11px] text-zinc-400">
@@ -1029,7 +1050,7 @@ function WalletCostPage() {
           </section>
 
           {/* Hero KPI Cards */}
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <div className="rounded-2xl border border-sky-500/40 bg-gradient-to-br from-sky-500/15 via-zinc-900/70 to-zinc-950 p-5 space-y-1.5">
               <div className="flex items-center justify-between text-xs text-sky-200/90">
                 <span className="font-medium">Estimated Total Spend</span>
@@ -1130,6 +1151,46 @@ function WalletCostPage() {
               </p>
             </div>
 
+            <div
+              className={`rounded-2xl border p-5 space-y-1.5 ${
+                analysis.summary.gridsCompleted > 0
+                  ? "border-emerald-500/40 bg-emerald-500/10"
+                  : "border-zinc-800/80 bg-zinc-900/40"
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs text-zinc-400">
+                <span
+                  className={
+                    analysis.summary.gridsCompleted > 0
+                      ? "text-emerald-200 font-medium"
+                      : ""
+                  }
+                >
+                  Grids Completed
+                </span>
+                <LayoutGrid className="h-4 w-4 text-emerald-400" />
+              </div>
+              <p className="font-mono text-2xl font-bold text-white tabular-nums">
+                {analysis.summary.gridsCompleted.toLocaleString()}
+              </p>
+              <p className="font-mono text-[11px] text-zinc-400">
+                {analysis.summary.gridsCompleted > 0 ? (
+                  <>
+                    <span className="text-emerald-200">
+                      {analysis.summary.gridFcosLocked.toLocaleString()} FCOs locked
+                    </span>{" "}
+                    · {analysis.summary.heldScoCount} SCOs held
+                  </>
+                ) : (
+                  <span>
+                    {analysis.summary.heldScoCount > 0
+                      ? `0 minted · ${analysis.summary.heldScoCount} SCOs held`
+                      : "No grid rewards minted yet"}
+                  </span>
+                )}
+              </p>
+            </div>
+
             <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-1.5">
               <div className="flex items-center justify-between text-xs text-zinc-400">
                 <span>Held · Trades · Spins</span>
@@ -1146,6 +1207,73 @@ function WalletCostPage() {
               </p>
             </div>
           </section>
+
+          {/* Completed COSMO Grids Breakdown */}
+          {analysis.summary.gridsCompleted > 0 && (
+            <section className="rounded-2xl border border-emerald-500/30 bg-emerald-950/15 p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                    <LayoutGrid className="h-4 w-4 text-emerald-400" />
+                    COSMO Grids Completed (
+                    {analysis.summary.gridsCompleted.toLocaleString()})
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Verified from native Special Class Grid Reward mints (
+                    <code className="text-zinc-300">201Z–206Z</code> / idntt{" "}
+                    <code className="text-zinc-300">301Z–302Z</code>; excludes
+                    traded-in SCOs).{" "}
+                    <span className="font-mono text-zinc-300">
+                      1st Ed (8-card): {analysis.summary.gridsEd1Count} · 2nd Ed
+                      (8-card): {analysis.summary.gridsEd2Count} · 3rd Ed (4-card):{" "}
+                      {analysis.summary.gridsEd3Count}
+                    </span>
+                  </p>
+                </div>
+                <div className="text-right font-mono text-xs tabular-nums">
+                  <p className="font-semibold text-emerald-200">
+                    {analysis.summary.gridFcosLocked.toLocaleString()} FCOs locked
+                  </p>
+                  <p className="text-[10px] text-zinc-400">
+                    {analysis.summary.gridsCompletedPolygon > 0
+                      ? `${analysis.summary.gridsCompletedPolygon} Polygon + `
+                      : ""}
+                    {analysis.summary.gridsCompletedAbstract} Abstract
+                  </p>
+                </div>
+              </div>
+
+              {analysis.gridBreakdown.length > 0 && (
+                <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                  {analysis.gridBreakdown.slice(0, 9).map((g) => (
+                    <div
+                      key={g.key}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/20 bg-zinc-950/70 px-3.5 py-2.5 text-xs"
+                    >
+                      <div className="min-w-0">
+                        <p className="font-semibold text-zinc-100 truncate">
+                          {g.artistLabel} · {g.season}
+                        </p>
+                        <p className="font-mono text-[11px] text-zinc-400">
+                          {g.shortLabel} · {g.uniqueMembers} member
+                          {g.uniqueMembers === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                      <div className="text-right font-mono tabular-nums shrink-0">
+                        <p className="font-semibold text-emerald-300">
+                          {g.gridsCompleted} grid
+                          {g.gridsCompleted === 1 ? "" : "s"}
+                        </p>
+                        <p className="text-[10px] text-zinc-500">
+                          {g.fcosLocked} FCOs locked
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
           {/* Detected COSMO Talk Subscriptions Breakdown */}
           {analysis.subscriptions.length > 0 && (
@@ -1192,7 +1320,8 @@ function WalletCostPage() {
                         {formatUsd(sub.estimatedUsd)}
                       </p>
                       <p className="text-[10px] text-zinc-500">
-                        {sub.memberCount} card{sub.memberCount === 1 ? "" : "s"}
+                        {sub.memberCount} card{sub.memberCount === 1 ? "" : "s"} ·{" "}
+                        {formatUsd(sub.perMemberUsd)}/ea
                       </p>
                     </div>
                   </div>
@@ -1438,32 +1567,32 @@ function WalletCostPage() {
                       COSMO Talk Pass+ (/mo)
                     </p>
                     <RateField
-                      label="All-Member (24)"
+                      label={`All-Member 24 (${formatUsd(pricingConfig.rates.passPlusAll24 / 24)}/ea)`}
                       value={pricingConfig.rates.passPlusAll24}
                       onChange={(v) => updateRate("passPlusAll24", v)}
                     />
                     <RateField
-                      label="8-Member Pass+"
+                      label={`8-Member (${formatUsd(pricingConfig.rates.passPlus8 / 8)}/ea)`}
                       value={pricingConfig.rates.passPlus8}
                       onChange={(v) => updateRate("passPlus8", v)}
                     />
                     <RateField
-                      label="4-Member Pass+"
+                      label={`4-Member (${formatUsd(pricingConfig.rates.passPlus4 / 4)}/ea)`}
                       value={pricingConfig.rates.passPlus4}
                       onChange={(v) => updateRate("passPlus4", v)}
                     />
                     <RateField
-                      label="2-Member Pass+"
+                      label={`2-Member (${formatUsd(pricingConfig.rates.passPlus2 / 2)}/ea)`}
                       value={pricingConfig.rates.passPlus2}
                       onChange={(v) => updateRate("passPlus2", v)}
                     />
                     <RateField
-                      label="1-Member Pass+"
+                      label={`1-Member (${formatUsd(pricingConfig.rates.passPlus1)}/ea)`}
                       value={pricingConfig.rates.passPlus1}
                       onChange={(v) => updateRate("passPlus1", v)}
                     />
                     <RateField
-                      label="ARTMS All (5)"
+                      label={`ARTMS All 5 (${formatUsd(pricingConfig.rates.passPlusArtmsAll5 / 5)}/ea)`}
                       value={pricingConfig.rates.passPlusArtmsAll5}
                       onChange={(v) => updateRate("passPlusArtmsAll5", v)}
                     />
@@ -1594,9 +1723,10 @@ function WalletCostPage() {
                               {m.physicalScanCount})
                             </div>
                           )}
-                          {(m.tradeCount > 0 || m.spinCount > 0) && (
+                          {(m.tradeCount > 0 || m.spinCount > 0 || m.gridsCompleted > 0) && (
                             <div className="text-emerald-300">
                               {m.tradeCount} trades · {m.spinCount} spins
+                              {m.gridsCompleted > 0 ? ` · ${m.gridsCompleted} grids` : ""}
                             </div>
                           )}
                         </div>
@@ -1694,6 +1824,12 @@ function WalletCostPage() {
                           {m.paidMintCount}m
                           {m.physicalScanCount > 0 ? ` · ${m.physicalScanCount}p` : ""}
                           {m.tradedInCount > 0 ? ` · ${m.tradedInCount}t` : ""}
+                          {m.gridsCompleted > 0 && (
+                            <span className="text-emerald-400">
+                              {" "}
+                              · {m.gridsCompleted}g
+                            </span>
+                          )}
                         </span>
                       </div>
                     );
@@ -1752,6 +1888,7 @@ function WalletCostPage() {
                         <p className="font-mono text-[11px] text-zinc-500">
                           {a.currentlyHeldCount} held · {a.paidMintCount} digital ·{" "}
                           {a.physicalScanCount} physical
+                          {a.gridsCompleted > 0 ? ` · ${a.gridsCompleted} grids` : ""}
                         </p>
                       </div>
                       <span className="font-mono text-sm font-bold text-white tabular-nums">
@@ -1870,6 +2007,7 @@ function WalletCostPage() {
                     ["physical_scan", "Physical Scans", categoryCounts.physical_scan],
                     ["trade_swap", "Trades", categoryCounts.trade_swap],
                     ["spin", "Spins", categoryCounts.spin],
+                    ["grid_reward", "Grids", categoryCounts.grid_reward],
                     ["free_reward", "Free Rewards", categoryCounts.free_reward],
                     ["p2p", "P2P Transfers", categoryCounts.p2p],
                     ["migration_bridge", "Migration", categoryCounts.migration_bridge],
@@ -2064,7 +2202,13 @@ function ActivityRow({
   onToggle: () => void;
   onInspectAddress: (addr: string) => void;
 }) {
-  const meta = categoryMeta(activity.category);
+  const meta = activity.isGridReward
+    ? {
+        label: "Grid Complete",
+        badgeClass: "bg-emerald-500/20 text-emerald-200 border-emerald-500/40",
+        icon: <LayoutGrid className="h-3.5 w-3.5 text-emerald-400" />,
+      }
+    : categoryMeta(activity.category);
   const firstThumb = activity.items.find((i) => i.imageUrl)?.imageUrl ?? null;
 
   return (

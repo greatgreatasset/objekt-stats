@@ -328,10 +328,11 @@ describe("analyzeWalletCost", () => {
     expect(res.summary.subscriptionMonths).toBe(1);
     expect(res.summary.subscriptionObjekts).toBe(24);
     expect(res.summary.detectedSubscriptionTier).toBe("All-Member Pass+ (24)");
-    expect(res.summary.subscriptionsUsd).toBe(96);
+    expect(res.summary.subscriptionsUsd).toBe(90);
+    expect(res.subscriptions[0]?.perMemberUsd).toBe(3.75);
     expect(res.summary.paidDigitalMints).toBe(0); // Never double-counted in Digital Shop!
     expect(res.summary.digitalShopUsd).toBe(0);
-    expect(res.summary.estimatedTotalUsd).toBe(96);
+    expect(res.summary.estimatedTotalUsd).toBe(90);
     expect(res.subscriptions).toHaveLength(1);
     expect(res.activities.some((a) => a.category === "cosmo_talk_pass")).toBe(true);
 
@@ -408,12 +409,187 @@ describe("analyzeWalletCost", () => {
     });
 
     expect(res.summary.subscriptionMonths).toBe(2);
-    expect(res.summary.subscriptionsUsd).toBe(112.99); // $16.99 (4-Member) + $96.00 (All-Member 24)
+    expect(res.summary.subscriptionsUsd).toBe(107.49); // $17.49 (4-Member @ $4.37/ea) + $90.00 (All-Member 24 @ $3.75/ea)
     expect(res.subscriptions.find((s) => s.collectionNo === "376Z")?.tierLabel).toBe(
       "4-Member Pass+",
     );
+    expect(res.subscriptions.find((s) => s.collectionNo === "376Z")?.perMemberUsd).toBe(4.37);
     expect(res.subscriptions.find((s) => s.collectionNo === "399Z")?.isInferred).toBe(
       true,
     );
+  });
+
+  it("models strictly decreasing per-member Pass+ tier economics and stacked tiers (e.g. 6=4+2, 12=8+4)", () => {
+    const runTier = (count: number) => {
+      const logs: WalletTransferLog[] = Array.from({ length: count }, (_, i) => ({
+        chain: "abstract",
+        txHash: `0xpass_${count}`,
+        logIndex: i,
+        blockNumber: 89_000_000,
+        timestamp: "2026-11-15T09:00:00Z",
+        from: ZERO_ADDRESS,
+        to: USER_ABS,
+        tokenId: 31_100_000 + i,
+      }));
+      const meta = new Map<number, WalletTokenMetadata>(
+        logs.map((l, i) => [
+          l.tokenId,
+          mkMeta(l.tokenId, {
+            season: "Cream02",
+            objektClass: "Double",
+            collectionNo: "376Z",
+            memberName: `S${i + 1}`,
+          }),
+        ]),
+      );
+      return analyzeWalletCost({
+        userAddresses: [USER_ABS],
+        logs,
+        metadataByTokenId: meta,
+        polygonLoaded: true,
+      }).subscriptions[0]!;
+    };
+
+    const t1 = runTier(1);
+    const t2 = runTier(2);
+    const t4 = runTier(4);
+    const t8 = runTier(8);
+    const t24 = runTier(24);
+    const t6 = runTier(6);
+    const t12 = runTier(12);
+
+    // Strictly more economical per member at every larger official tier
+    expect(t1.perMemberUsd).toBeGreaterThan(t2.perMemberUsd);
+    expect(t2.perMemberUsd).toBeGreaterThan(t4.perMemberUsd);
+    expect(t4.perMemberUsd).toBeGreaterThan(t8.perMemberUsd);
+    expect(t8.perMemberUsd).toBeGreaterThan(t24.perMemberUsd);
+
+    expect(t1.estimatedUsd).toBe(4.89);
+    expect(t2.estimatedUsd).toBe(9.19);
+    expect(t4.estimatedUsd).toBe(17.49);
+    expect(t8.estimatedUsd).toBe(32.99);
+    expect(t24.estimatedUsd).toBe(90);
+
+    // Stacked intermediate counts use minimum-cost tier combinations
+    expect(t6.tierLabel).toBe("6-Member Pass+ (4+2)");
+    expect(t6.estimatedUsd).toBe(26.68);
+    expect(t12.tierLabel).toBe("12-Member Pass+ (8+4)");
+    expect(t12.estimatedUsd).toBe(50.48);
+  });
+
+  it("tracks Grids Completed across Polygon + Abstract, locks FCOs per edition, and excludes traded-in SCOs", () => {
+    const logs: WalletTransferLog[] = [
+      // Polygon-era 1st Ed grid SCO (8 FCOs locked), migrated to Abstract
+      {
+        chain: "polygon",
+        txHash: "0xpoly_grid",
+        logIndex: 0,
+        blockNumber: 60_000_000,
+        timestamp: "2024-09-10T10:00:00Z",
+        from: ZERO_ADDRESS,
+        to: USER_POLY,
+        tokenId: 5_000_001,
+      },
+      {
+        chain: "abstract",
+        txHash: "0xmig_grid",
+        logIndex: 0,
+        blockNumber: 6_881_200,
+        timestamp: "2025-04-16T12:10:00Z",
+        from: ZERO_ADDRESS,
+        to: USER_ABS,
+        tokenId: 5_000_001,
+      },
+      // Abstract-era 3rd Ed grid SCO (4 FCOs locked)
+      {
+        chain: "abstract",
+        txHash: "0xabs_grid_ed3",
+        logIndex: 0,
+        blockNumber: 89_100_000,
+        timestamp: "2026-11-18T14:00:00Z",
+        from: ZERO_ADDRESS,
+        to: USER_ABS,
+        tokenId: 31_000_501,
+      },
+      // Traded-in / P2P SCO (should NOT count as a grid completed by this user!)
+      {
+        chain: "abstract",
+        txHash: "0xp2p_sco",
+        logIndex: 0,
+        blockNumber: 89_200_000,
+        timestamp: "2026-11-19T14:00:00Z",
+        from: FRIEND,
+        to: USER_ABS,
+        tokenId: 31_000_502,
+      },
+      // Non-grid promo SCO 207Z (should NOT count as a standard grid completion)
+      {
+        chain: "abstract",
+        txHash: "0xpromo_sco",
+        logIndex: 0,
+        blockNumber: 89_300_000,
+        timestamp: "2026-11-20T14:00:00Z",
+        from: ZERO_ADDRESS,
+        to: USER_ABS,
+        tokenId: 31_000_503,
+      },
+    ];
+
+    const meta = new Map<number, WalletTokenMetadata>([
+      [
+        5_000_001,
+        mkMeta(5_000_001, {
+          season: "Divine01",
+          objektClass: "Special",
+          collectionNo: "201Z",
+          memberName: "SeoYeon",
+        }),
+      ],
+      [
+        31_000_501,
+        mkMeta(31_000_501, {
+          season: "Cream02",
+          objektClass: "Special",
+          collectionNo: "205Z",
+          memberName: "YooYeon",
+        }),
+      ],
+      [
+        31_000_502,
+        mkMeta(31_000_502, {
+          season: "Cream02",
+          objektClass: "Special",
+          collectionNo: "206Z",
+          memberName: "YooYeon",
+        }),
+      ],
+      [
+        31_000_503,
+        mkMeta(31_000_503, {
+          season: "Divine01",
+          objektClass: "Special",
+          collectionNo: "207Z",
+          memberName: "Kotone",
+        }),
+      ],
+    ]);
+
+    const res = analyzeWalletCost({
+      userAddresses: [USER_ABS, USER_POLY],
+      logs,
+      metadataByTokenId: meta,
+      polygonLoaded: true,
+    });
+
+    expect(res.summary.gridsCompleted).toBe(2);
+    expect(res.summary.gridsCompletedPolygon).toBe(1);
+    expect(res.summary.gridsCompletedAbstract).toBe(1);
+    expect(res.summary.gridsEd1Count).toBe(1);
+    expect(res.summary.gridsEd3Count).toBe(1);
+    expect(res.summary.gridFcosLocked).toBe(12); // 8 + 4
+    expect(res.summary.heldScoCount).toBe(4);
+    expect(res.gridBreakdown).toHaveLength(2);
+    expect(res.activities.filter((a) => a.isGridReward)).toHaveLength(2);
+    expect(res.memberBreakdown.find((m) => m.memberName === "YooYeon")?.gridsCompleted).toBe(1);
   });
 });

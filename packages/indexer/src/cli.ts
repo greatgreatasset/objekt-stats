@@ -1,8 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { detectTradesFromTransfers } from "@objekt-stats/stats";
 import { stringify as stringifyYaml } from "yaml";
-import { aggregateAndEmitSql, inferAutoRoundGroup } from "./aggregate.js";
+import {
+  aggregateAndEmitSql,
+  aggregateTradesAndEmitSql,
+  inferAutoRoundGroup,
+} from "./aggregate.js";
 import {
   getAbstractHeadBlock,
   syncAbstractLogs,
@@ -436,6 +441,21 @@ async function main() {
   const { command, args } = parseArgs(process.argv.slice(2));
   const rootDir = resolve(import.meta.dirname, "../../..");
   const dbPath = args.get("db") ?? resolve(rootDir, "data/raw/indexer.sqlite");
+
+  if (command === "aggregate-trades") {
+    const roDb = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const summary = aggregateTradesAndEmitSql(roDb, {
+        dataRoot: resolve(rootDir, "data"),
+        tradesOutFile: resolve(rootDir, "packages/db/generated/sync-trades.sql"),
+      });
+      console.log("✓ Read-only trade aggregation complete:", summary);
+    } finally {
+      roDb.close();
+    }
+    return;
+  }
+
   const store = new IndexerStore(dbPath);
 
   try {
