@@ -3,11 +3,23 @@ import { resolve } from "node:path";
 import { detectTradesFromTransfers } from "@objekt-stats/stats";
 import { stringify as stringifyYaml } from "yaml";
 import { aggregateAndEmitSql, inferAutoRoundGroup } from "./aggregate.js";
-import { getAbstractHeadBlock, syncAbstractLogs } from "./chains/abstract.js";
-import { syncPolygonArchive } from "./chains/polygon.js";
-import { ABSTRACT_START_BLOCK, POLYGON_START_BLOCK } from "./constants.js";
+import {
+  getAbstractHeadBlock,
+  syncAbstractLogs,
+  turboSyncAbstractLogs,
+} from "./chains/abstract.js";
+import {
+  syncPolygonArchive,
+  turboSyncPolygonArchive,
+} from "./chains/polygon.js";
+import {
+  ABSTRACT_START_BLOCK,
+  POLYGON_END_BLOCK,
+  POLYGON_START_BLOCK,
+} from "./constants.js";
 import {
   fetchCosmoTokenMetadata,
+  fetchCosmoTokenMetadataFast,
   type NormalizedTokenMetadata,
 } from "./cosmo-metadata.js";
 import { IndexerStore } from "./store.js";
@@ -125,6 +137,164 @@ async function resolveMetadataBatch(
 ) {
   const pending = store.getUnresolvedTokenIds(limit, order);
   return resolveSpecificTokenIds(store, pending, concurrency, `mint tokens (${order})`);
+}
+
+async function turboResolveMetadata(
+  store: IndexerStore,
+  options: {
+    limit: number;
+    batchSize: number;
+    startConc: number;
+    maxConc: number;
+    minConc: number;
+    order: "newest" | "oldest";
+    chain?: "polygon" | "abstract";
+  },
+) {
+  let targetConc = options.startConc;
+  let totalResolved = 0;
+  let totalMissing = 0;
+  let totalRetries = 0;
+  const startedAll = Date.now();
+  const initialRemaining = store.countUnresolvedMints(options.chain);
+
+  console.log(
+    `Turbo AIMD metadata resolver starting: remaining=${initialRemaining.toLocaleString()}, limit=${options.limit.toLocaleString()}, startConc=${targetConc}, maxConc=${options.maxConc}, order=${options.order}${options.chain ? `, chain=${options.chain}` : ""}`,
+  );
+
+  while (totalResolved + totalMissing < options.limit) {
+    const remainingBudget = options.limit - (totalResolved + totalMissing);
+    const pending = store.getUnresolvedTokenIds(
+      Math.min(options.batchSize, remainingBudget),
+      options.order,
+      options.chain,
+    );
+    if (pending.length === 0) {
+      console.log("✓ 100% of mint tokens resolved! Zero unresolved remaining.");
+      break;
+    }
+
+    // Queue of { tokenId, attempts } so transient 502/429s are ALWAYS retried cleanly
+    const queue: Array<{ tokenId: number; attempts: number }> = pending.map((tokenId) => ({
+      tokenId,
+      attempts: 0,
+    }));
+    let qHead = 0;
+    let inFlight = 0;
+    let batchOk = 0;
+    let batchMissing = 0;
+    let batchRetry = 0;
+    let windowDone = 0;
+    let windowRetry = 0;
+    let cooldownUntil = 0;
+    let bufferOk: NormalizedTokenMetadata[] = [];
+    let bufferMissing: number[] = [];
+
+    const flush = () => {
+      if (bufferOk.length > 0) {
+        store.upsertMetadataBatch(bufferOk);
+        bufferOk = [];
+      }
+      if (bufferMissing.length > 0) {
+        store.markMissingMetadata(bufferMissing);
+        bufferMissing = [];
+      }
+    };
+
+    const batchStart = Date.now();
+
+    await new Promise<void>((resolveBatch) => {
+      const checkDone = () => {
+        if (qHead >= queue.length && inFlight === 0) {
+          flush();
+          resolveBatch();
+          return true;
+        }
+        return false;
+      };
+
+      const pump = () => {
+        if (checkDone()) return;
+        const now = Date.now();
+        if (now < cooldownUntil) {
+          setTimeout(pump, Math.max(50, cooldownUntil - now));
+          return;
+        }
+
+        while (inFlight < targetConc && qHead < queue.length) {
+          const item = queue[qHead++]!;
+          inFlight++;
+          fetchCosmoTokenMetadataFast(item.tokenId)
+            .then((res) => {
+              windowDone++;
+              if (res.kind === "ok") {
+                bufferOk.push(res.meta);
+                batchOk++;
+                totalResolved++;
+              } else if (res.kind === "missing") {
+                bufferMissing.push(item.tokenId);
+                batchMissing++;
+                totalMissing++;
+              } else {
+                batchRetry++;
+                totalRetries++;
+                windowRetry++;
+                if (res.status === 429) {
+                  targetConc = Math.max(options.minConc, Math.floor(targetConc * 0.65));
+                  cooldownUntil = Math.max(cooldownUntil, Date.now() + 1500);
+                }
+                if (item.attempts < 8) {
+                  queue.push({ tokenId: item.tokenId, attempts: item.attempts + 1 });
+                }
+              }
+
+              // AIMD controller check every 2,000 responses
+              if (windowDone >= 2_000) {
+                const errRate = windowRetry / windowDone;
+                if (errRate > 0.015) {
+                  targetConc = Math.max(options.minConc, Math.floor(targetConc * 0.75));
+                  cooldownUntil = Math.max(cooldownUntil, Date.now() + 800);
+                } else if (errRate < 0.002 && targetConc < options.maxConc) {
+                  targetConc = Math.min(options.maxConc, targetConc + 25);
+                }
+                windowDone = 0;
+                windowRetry = 0;
+              }
+
+              if (bufferOk.length + bufferMissing.length >= 5_000) {
+                flush();
+                const elapsedSec = Math.max(0.5, (Date.now() - startedAll) / 1000);
+                const doneAll = totalResolved + totalMissing;
+                const rps = Math.round(doneAll / elapsedSec);
+                const left = Math.max(0, Math.min(initialRemaining, options.limit) - doneAll);
+                const etaMin = rps > 0 ? (left / rps / 60).toFixed(1) : "?";
+                console.log(
+                  `  resolved ${doneAll.toLocaleString()}/${Math.min(initialRemaining, options.limit).toLocaleString()} | ${rps} req/s | conc=${targetConc} | retries=${totalRetries} | ETA ${etaMin}m`,
+                );
+              }
+            })
+            .finally(() => {
+              inFlight--;
+              if (!checkDone()) {
+                pump();
+              }
+            });
+        }
+      };
+
+      pump();
+    });
+
+    const batchSec = ((Date.now() - batchStart) / 1000).toFixed(1);
+    console.log(
+      `✓ Batch complete: +${batchOk.toLocaleString()} ok, +${batchMissing} 404, ${batchRetry} retries in ${batchSec}s (conc=${targetConc})`,
+    );
+  }
+
+  const totalSec = ((Date.now() - startedAll) / 1000).toFixed(1);
+  console.log(
+    `✓ Turbo resolve done: ${totalResolved.toLocaleString()} ok, ${totalMissing} 404, ${totalRetries} retries in ${totalSec}s`,
+  );
 }
 
 function exportRoundsDraftYaml(store: IndexerStore, rootDir: string) {
@@ -270,10 +440,25 @@ async function main() {
            FROM raw_transfers GROUP BY chain`,
         )
         .all();
+      const unresolvedCount = store.countUnresolvedMints();
+      const abstractSynced = store.getMergedSyncedRanges("abstract", "mints");
+      const polygonSynced = store.getMergedSyncedRanges("polygon", "mints");
+      const polyBlocks = polygonSynced.reduce((s, r) => s + (r.toBlock - r.fromBlock + 1), 0);
+      const absBlocks = abstractSynced.reduce((s, r) => s + (r.toBlock - r.fromBlock + 1), 0);
+
       console.log("Indexer SQLite:", store.dbPath);
-      console.log("Counts:", counts);
+      console.log("Counts:", { ...counts, unresolvedMints: unresolvedCount });
       console.log("Mint chain ranges:", ranges);
       console.log("Transfer chain ranges:", transferRanges);
+      console.log("Synced mint block coverage:", {
+        abstractBlocks: absBlocks,
+        abstractRanges: abstractSynced.length,
+        polygonBlocks: polyBlocks,
+        polygonRanges: polygonSynced.length,
+        polygonPctOfGenesisToMigration: Number(
+          ((polyBlocks / (POLYGON_END_BLOCK - POLYGON_START_BLOCK + 1)) * 100).toFixed(2),
+        ),
+      });
       console.log("Cursors:", {
         abstract: store.getCursor("abstract:last_block"),
         abstractTransfers: store.getCursor("abstract:transfers_last_block"),
@@ -281,6 +466,135 @@ async function main() {
         polygon: store.getCursor("polygon:last_block"),
         polygonTransfers: store.getCursor("polygon:transfers_last_block"),
       });
+      return;
+    }
+
+    if (command === "turbo-sync-abstract") {
+      const head = await getAbstractHeadBlock();
+      const fromBlock = Number(args.get("from") ?? String(ABSTRACT_START_BLOCK));
+      const toBlock = Number(args.get("to") ?? String(head));
+      const chunkSize = Number(args.get("chunk") ?? "5000");
+      const parallelism = Number(args.get("parallel") ?? "10");
+      const includeSpins = args.get("spins") !== "false";
+      const direction =
+        args.get("direction") === "oldest-first" ? "oldest-first" : "newest-first";
+
+      console.log(
+        `Turbo Abstract log sync: ${fromBlock.toLocaleString()} → ${toBlock.toLocaleString()} (head=${head.toLocaleString()}, parallel=${parallelism}, chunk=${chunkSize.toLocaleString()}, spins=${includeSpins}, dir=${direction})`,
+      );
+      const res = await turboSyncAbstractLogs(store, {
+        fromBlock,
+        toBlock,
+        chunkSize,
+        parallelism,
+        includeSpins,
+        direction,
+        onProgress: ({
+          doneChunks,
+          totalChunks,
+          blocksSynced,
+          totalBlocks,
+          mintsAdded,
+          spinsAdded,
+          blocksPerSec,
+        }) => {
+          const pct = ((blocksSynced / Math.max(1, totalBlocks)) * 100).toFixed(1);
+          const etaMin =
+            blocksPerSec > 0
+              ? (((totalBlocks - blocksSynced) / blocksPerSec) / 60).toFixed(1)
+              : "?";
+          console.log(
+            `  [abstract] ${pct}% (${doneChunks}/${totalChunks}) | ${blocksPerSec.toLocaleString()} blk/s | +${mintsAdded.toLocaleString()} mints, +${spinsAdded.toLocaleString()} spins | ETA ${etaMin}m`,
+          );
+        },
+      });
+      console.log("✓ Turbo Abstract log sync complete:", res);
+      return;
+    }
+
+    if (command === "turbo-sync-polygon") {
+      const fromBlock = Number(args.get("from") ?? String(POLYGON_START_BLOCK));
+      const toBlock = Number(args.get("to") ?? String(POLYGON_END_BLOCK));
+      const chunkSize = Number(args.get("chunk") ?? "100000");
+      const includeSpins = args.get("spins") !== "false";
+
+      console.log(
+        `Turbo Polygon SQD archive sync (tripleS + ARTMS): ${fromBlock.toLocaleString()} → ${toBlock.toLocaleString()} (chunk=${chunkSize.toLocaleString()}, spins=${includeSpins})`,
+      );
+      const res = await turboSyncPolygonArchive(store, {
+        fromBlock,
+        toBlock,
+        chunkSize,
+        includeSpins,
+        onProgress: ({
+          block,
+          blocksSynced,
+          totalBlocks,
+          mintsAdded,
+          spinsAdded,
+          chunkSize: cs,
+        }) => {
+          const pct = ((blocksSynced / Math.max(1, totalBlocks)) * 100).toFixed(1);
+          console.log(
+            `  [polygon] ${pct}% @ block ${block.toLocaleString()} (chunk=${cs.toLocaleString()}) | +${mintsAdded.toLocaleString()} mints, +${spinsAdded.toLocaleString()} spins`,
+          );
+        },
+      });
+      console.log("✓ Turbo Polygon archive sync complete:", res);
+      return;
+    }
+
+    if (command === "turbo-resolve") {
+      const chainArg = args.get("chain");
+      await turboResolveMetadata(store, {
+        limit: Number(args.get("limit") ?? "100000000"),
+        batchSize: Number(args.get("batch") ?? "50000"),
+        startConc: Number(args.get("start-conc") ?? "350"),
+        maxConc: Number(args.get("max-conc") ?? "520"),
+        minConc: Number(args.get("min-conc") ?? "40"),
+        order: args.get("order") === "oldest" ? "oldest" : "newest",
+        chain:
+          chainArg === "polygon" || chainArg === "abstract" ? chainArg : undefined,
+      });
+      return;
+    }
+
+    if (command === "merge-db") {
+      const sourceArg = args.get("source");
+      if (!sourceArg) {
+        throw new Error("merge-db requires --source <path-to-sqlite>");
+      }
+      const sourcePath = resolve(rootDir, sourceArg).replace(/'/g, "''");
+      console.log(`Merging ${sourcePath} into ${store.dbPath}...`);
+      store.db.exec(`ATTACH DATABASE '${sourcePath}' AS src;`);
+      store.db.exec("BEGIN");
+      try {
+        store.db.exec(`
+          INSERT INTO raw_mints (token_id, chain, block_number, minted_at, minter, tx_hash)
+          SELECT token_id, chain, block_number, minted_at, minter, tx_hash FROM src.raw_mints
+          ON CONFLICT(token_id) DO UPDATE SET
+            chain        = CASE WHEN excluded.minted_at < raw_mints.minted_at THEN excluded.chain        ELSE raw_mints.chain END,
+            block_number = CASE WHEN excluded.minted_at < raw_mints.minted_at THEN excluded.block_number ELSE raw_mints.block_number END,
+            minted_at    = CASE WHEN excluded.minted_at < raw_mints.minted_at THEN excluded.minted_at    ELSE raw_mints.minted_at END,
+            minter       = CASE WHEN excluded.minted_at < raw_mints.minted_at THEN excluded.minter       ELSE raw_mints.minter END,
+            tx_hash      = CASE WHEN excluded.minted_at < raw_mints.minted_at THEN excluded.tx_hash      ELSE raw_mints.tx_hash END;
+
+          INSERT OR IGNORE INTO raw_spins (tx_hash, log_index, token_id, chain, block_number, spun_at)
+          SELECT tx_hash, log_index, token_id, chain, block_number, spun_at FROM src.raw_spins;
+
+          INSERT OR REPLACE INTO synced_ranges (chain, kind, from_block, to_block, synced_at)
+          SELECT chain, kind, from_block, to_block, synced_at FROM src.synced_ranges;
+        `);
+        store.db.exec("COMMIT");
+      } catch (err) {
+        store.db.exec("ROLLBACK");
+        throw err;
+      } finally {
+        store.db.exec("DETACH DATABASE src;");
+      }
+      store.compactSyncedRanges("polygon", "mints");
+      store.compactSyncedRanges("abstract", "mints");
+      console.log("✓ Merge complete. New counts:", store.getSummaryCounts());
       return;
     }
 

@@ -55,10 +55,15 @@ export function normalizeMetadataV3(
   }
 
   const rawArtist = attr.get("artist") ?? "";
-  const rawMember = attr.get("member") ?? "";
+  let rawMember = attr.get("member") ?? "";
   const season = attr.get("season") ?? "";
   const objektClass = attr.get("class") ?? "";
   const collectionNo = attr.get("collection") ?? "";
+
+  if (!rawMember && objektClass === "Unit") {
+    const unitAttr = raw.attributes.find((a) => a.value.includes(" x "));
+    if (unitAttr) rawMember = unitAttr.value.trim();
+  }
 
   if (!rawArtist || !season || !collectionNo) {
     return null;
@@ -145,4 +150,49 @@ export async function fetchCosmoTokenMetadata(
   }
 
   throw lastError;
+}
+
+export type FastMetadataResult =
+  | { kind: "ok"; meta: NormalizedTokenMetadata }
+  | { kind: "missing" }
+  | { kind: "retry"; status: number; message: string };
+
+/**
+ * Single-attempt low-overhead fetcher for the AIMD adaptive turbo resolver.
+ * Never swallows errors; the caller re-queues any `retry` token until 100% resolved.
+ */
+export async function fetchCosmoTokenMetadataFast(
+  tokenId: number,
+  baseUrl = DEFAULT_ENDPOINTS.cosmoApi,
+): Promise<FastMetadataResult> {
+  const url = `${baseUrl}/bff/v3/objekts/nft-metadata/${tokenId}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "user-agent": "objektstats.com (github.com/greatgreatasset/objekt-stats)",
+        accept: "application/json",
+      },
+    });
+    if (res.status === 404) {
+      await res.body?.cancel();
+      return { kind: "missing" };
+    }
+    if (res.ok) {
+      const json: unknown = await res.json();
+      const parsed = CosmoMetadataV3Schema.parse(json);
+      const meta = normalizeMetadataV3(tokenId, parsed);
+      return meta ? { kind: "ok", meta } : { kind: "missing" };
+    }
+    await res.body?.cancel();
+    return { kind: "retry", status: res.status, message: `HTTP ${res.status}` };
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return { kind: "missing" };
+    }
+    return {
+      kind: "retry",
+      status: 0,
+      message: (err as Error).message || "network error",
+    };
+  }
 }

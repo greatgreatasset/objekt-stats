@@ -13,7 +13,9 @@ export const ABSTRACT_MIGRATION_ISO = "2025-04-18T11:24:00Z";
 export const ABSTRACT_START_BLOCK = 6_363_806;
 export const ABSTRACT_FIRST_NATIVE_TOKEN_ID = 9_419_276;
 
-export const POLYGON_START_BLOCK = 28_000_000; // May 2022 (Atom01 launch)
+export const POLYGON_START_BLOCK = 29_388_703; // Exact tripleS Polygon Objekt genesis block (2022)
+export const POLYGON_ARTMS_START_BLOCK = 44_048_396; // Exact ARTMS Polygon Objekt genesis block (2023)
+export const POLYGON_END_BLOCK = 71_000_000; // Safely past April 18, 2025 Abstract migration
 
 export const ABSTRACT_ADDRESSES = {
   NULL: "0x0000000000000000000000000000000000000000",

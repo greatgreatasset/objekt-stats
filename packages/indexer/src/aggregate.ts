@@ -28,6 +28,17 @@ function sqlBool(val: boolean): string {
   return val ? "1" : "0";
 }
 
+function pushBatchedInserts(
+  lines: string[],
+  prefix: string,
+  tuples: string[],
+  batchSize = 40,
+): void {
+  for (let i = 0; i < tuples.length; i += batchSize) {
+    lines.push(`${prefix} VALUES ${tuples.slice(i, i + batchSize).join(", ")};`);
+  }
+}
+
 export function normalizeMemberLookupKey(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -209,43 +220,47 @@ export function aggregateAndEmitSql(
     }
   }
 
-  // O(N) spin lookup map by collection slug
-  const spinCountsBySlug = new Map<string, number>();
+  // O(N) spin lookup map by collection col_id
+  const spinCountsByColId = new Map<number, number>();
   const spinRows = store.db
     .prepare(
-      `SELECT tm.slug AS slug, COUNT(DISTINCT rs.token_id) AS spun_count
+      `SELECT tc.col_id AS col_id, COUNT(DISTINCT rs.token_id) AS spun_count
        FROM raw_spins rs
-       JOIN token_metadata tm ON tm.token_id = rs.token_id
-       GROUP BY tm.slug`,
+       JOIN token_collections tc ON tc.token_id = rs.token_id
+       GROUP BY tc.col_id`,
     )
-    .all() as Array<{ slug: string; spun_count: number }>;
+    .all() as Array<{ col_id: number; spun_count: number }>;
   for (const r of spinRows) {
-    spinCountsBySlug.set(r.slug, r.spun_count);
+    spinCountsByColId.set(r.col_id, r.spun_count);
   }
 
-  // 1. Aggregate per-collection totals from SQLite (O(N))
+  // 1. Aggregate per-collection totals from normalized SQLite tables (O(N), low RAM at 31M+ rows)
   const collectionRows = store.db
     .prepare(
       `SELECT
-        tm.slug,
-        tm.collection_id,
-        tm.artist_id,
-        tm.raw_member,
-        tm.season,
-        tm.objekt_class,
-        tm.collection_no,
-        tm.on_offline,
-        MAX(tm.image_url) AS image_url,
-        MAX(tm.background_color) AS background_color,
+        cc.col_id,
+        cc.slug,
+        cc.collection_id,
+        cc.artist_id,
+        cc.raw_member,
+        cc.season,
+        cc.objekt_class,
+        cc.collection_no,
+        cc.on_offline,
+        cc.image_url,
+        cc.background_color,
         COUNT(*) AS total_mints,
         COUNT(DISTINCT rm.minter) AS unique_minters,
         MIN(rm.minted_at) AS first_mint_at,
         MAX(rm.minted_at) AS last_mint_at
-      FROM token_metadata tm
-      JOIN raw_mints rm ON rm.token_id = tm.token_id
-      GROUP BY tm.slug`,
+      FROM collection_catalog cc
+      JOIN token_collections tc ON tc.col_id = cc.col_id
+      JOIN raw_mints rm ON rm.token_id = tc.token_id
+      WHERE cc.artist_id IN ('triples', 'artms')
+      GROUP BY cc.col_id`,
     )
     .all() as Array<{
+    col_id: number;
     slug: string;
     collection_id: string;
     artist_id: string;
@@ -266,20 +281,22 @@ export function aggregateAndEmitSql(
     .filter((c) => trackedArtists.has(c.artist_id as "triples" | "artms"))
     .map((c) => ({
       ...c,
-      spun_count: spinCountsBySlug.get(c.slug) ?? 0,
+      spun_count: spinCountsByColId.get(c.col_id) ?? 0,
     }));
 
-  // 2. Daily mints per collection
+  // 2. Daily mints per collection (only tracked artists)
   const dailyRows = store.db
     .prepare(
       `SELECT
-        tm.slug AS collection_slug,
+        cc.slug AS collection_slug,
         substr(rm.minted_at, 1, 10) AS mint_date,
         COUNT(*) AS mint_count,
         COUNT(DISTINCT rm.minter) AS unique_minters
-      FROM token_metadata tm
-      JOIN raw_mints rm ON rm.token_id = tm.token_id
-      GROUP BY tm.slug, substr(rm.minted_at, 1, 10)`,
+      FROM collection_catalog cc
+      JOIN token_collections tc ON tc.col_id = cc.col_id
+      JOIN raw_mints rm ON rm.token_id = tc.token_id
+      WHERE cc.artist_id IN ('triples', 'artms')
+      GROUP BY cc.col_id, substr(rm.minted_at, 1, 10)`,
     )
     .all() as Array<{
     collection_slug: string;
@@ -291,7 +308,7 @@ export function aggregateAndEmitSql(
   const validSlugs = new Set(filteredCollections.map((c) => c.slug));
   const filteredDaily = dailyRows.filter((d) => validSlugs.has(d.collection_slug));
 
-  // 3. Group collections into Sale Rounds + compute TRUE deduplicated unique buyers & top-wallet concentration
+  // 3. Group collections into Sale Rounds + compute TRUE deduplicated unique buyers & top-wallet share IN SQLITE
   interface RoundAccumulator {
     slug: string;
     artistId: string;
@@ -308,12 +325,13 @@ export function aggregateAndEmitSql(
     notes: string | null;
     collectionSlugs: string[];
     memberMints: Map<string, number>;
-    roundBuyers: Set<string>;
-    memberBuyerCounts: Map<string, Map<string, number>>; // memberId -> (wallet -> mintCount)
+    roundUniqueBuyers: number;
+    memberUniqueBuyers: Map<string, number>;
+    memberTopBuyerMints: Map<string, number>;
   }
 
   const rounds = new Map<string, RoundAccumulator>();
-  const colToRoundMember = new Map<string, { roundSlug: string; memberId: string }>();
+  const colMappings: Array<{ colId: number; roundSlug: string; memberId: string }> = [];
 
   for (const col of filteredCollections) {
     const memberId =
@@ -373,8 +391,9 @@ export function aggregateAndEmitSql(
         notes: meta.notes,
         collectionSlugs: [],
         memberMints: new Map(),
-        roundBuyers: new Set(),
-        memberBuyerCounts: new Map(),
+        roundUniqueBuyers: 0,
+        memberUniqueBuyers: new Map(),
+        memberTopBuyerMints: new Map(),
       };
       rounds.set(meta.slug, acc);
     }
@@ -384,35 +403,79 @@ export function aggregateAndEmitSql(
       memberId,
       (acc.memberMints.get(memberId) ?? 0) + col.total_mints,
     );
-    colToRoundMember.set(col.slug, { roundSlug: acc.slug, memberId });
+    colMappings.push({ colId: col.col_id, roundSlug: acc.slug, memberId });
     if (col.first_mint_at < acc.startAt) acc.startAt = col.first_mint_at;
     if (col.last_mint_at > acc.endAt) acc.endAt = col.last_mint_at;
   }
 
-  // Single O(N) grouped scan to compute exact deduplicated unique buyers & max single-wallet count per round+member
-  const walletMintRows = store.db
-    .prepare(
-      `SELECT tm.slug AS slug, rm.minter AS minter, COUNT(*) AS cnt
-       FROM token_metadata tm
-       JOIN raw_mints rm ON rm.token_id = tm.token_id
-       WHERE tm.artist_id IN ('triples', 'artms')
-       GROUP BY tm.slug, rm.minter`,
-    )
-    .all() as Array<{ slug: string; minter: string; cnt: number }>;
-
-  for (const row of walletMintRows) {
-    const mapping = colToRoundMember.get(row.slug);
-    if (!mapping) continue;
-    const acc = rounds.get(mapping.roundSlug);
-    if (!acc) continue;
-    acc.roundBuyers.add(row.minter);
-    let mWallets = acc.memberBuyerCounts.get(mapping.memberId);
-    if (!mWallets) {
-      mWallets = new Map();
-      acc.memberBuyerCounts.set(mapping.memberId, mWallets);
+  // Compute exact deduplicated unique buyers & top-wallet concentration INSIDE SQLite (O(N), constant RAM!)
+  store.db.exec(`
+    DROP TABLE IF EXISTS temp._round_cols;
+    CREATE TEMP TABLE _round_cols (
+      col_id INTEGER PRIMARY KEY,
+      round_slug TEXT NOT NULL,
+      member_id TEXT NOT NULL
+    );
+  `);
+  const insertMappingStmt = store.db.prepare(
+    "INSERT INTO temp._round_cols (col_id, round_slug, member_id) VALUES (?, ?, ?)",
+  );
+  store.db.exec("BEGIN");
+  try {
+    for (const m of colMappings) {
+      insertMappingStmt.run(m.colId, m.roundSlug, m.memberId);
     }
-    mWallets.set(row.minter, (mWallets.get(row.minter) ?? 0) + row.cnt);
+    store.db.exec("COMMIT");
+  } catch (err) {
+    store.db.exec("ROLLBACK");
+    throw err;
   }
+
+  const roundBuyerTotals = store.db
+    .prepare(
+      `SELECT rc.round_slug AS round_slug, COUNT(DISTINCT rm.minter) AS unique_buyers
+       FROM temp._round_cols rc
+       JOIN token_collections tc ON tc.col_id = rc.col_id
+       JOIN raw_mints rm ON rm.token_id = tc.token_id
+       GROUP BY rc.round_slug`,
+    )
+    .all() as Array<{ round_slug: string; unique_buyers: number }>;
+
+  for (const row of roundBuyerTotals) {
+    const acc = rounds.get(row.round_slug);
+    if (acc) acc.roundUniqueBuyers = row.unique_buyers;
+  }
+
+  const memberBuyerTotals = store.db
+    .prepare(
+      `SELECT
+         round_slug,
+         member_id,
+         COUNT(*) AS unique_buyers,
+         MAX(cnt) AS top_buyer_mints
+       FROM (
+         SELECT rc.round_slug, rc.member_id, rm.minter, COUNT(*) AS cnt
+         FROM temp._round_cols rc
+         JOIN token_collections tc ON tc.col_id = rc.col_id
+         JOIN raw_mints rm ON rm.token_id = tc.token_id
+         GROUP BY rc.round_slug, rc.member_id, rm.minter
+       )
+       GROUP BY round_slug, member_id`,
+    )
+    .all() as Array<{
+    round_slug: string;
+    member_id: string;
+    unique_buyers: number;
+    top_buyer_mints: number;
+  }>;
+
+  for (const row of memberBuyerTotals) {
+    const acc = rounds.get(row.round_slug);
+    if (!acc) continue;
+    acc.memberUniqueBuyers.set(row.member_id, row.unique_buyers);
+    acc.memberTopBuyerMints.set(row.member_id, row.top_buyer_mints);
+  }
+  store.db.exec("DROP TABLE IF EXISTS temp._round_cols;");
 
   const validRounds = Array.from(rounds.values()).filter(
     (r) => r.memberMints.size >= 2,
@@ -447,22 +510,12 @@ export function aggregateAndEmitSql(
         startAt: r.startAt,
         includeInPopularity: r.includeInPopularity,
         memberMints: Array.from(r.memberMints.entries()).map(
-          ([memberId, mintCount]) => {
-            const walletMap = r.memberBuyerCounts.get(memberId);
-            const uniqueBuyers = walletMap ? walletMap.size : 0;
-            let topBuyerMints = 0;
-            if (walletMap) {
-              for (const c of walletMap.values()) {
-                if (c > topBuyerMints) topBuyerMints = c;
-              }
-            }
-            return {
-              memberId,
-              mintCount,
-              uniqueBuyers,
-              topBuyerMints,
-            };
-          },
+          ([memberId, mintCount]) => ({
+            memberId,
+            mintCount,
+            uniqueBuyers: r.memberUniqueBuyers.get(memberId) ?? 0,
+            topBuyerMints: r.memberTopBuyerMints.get(memberId) ?? 0,
+          }),
         ),
       }));
 
@@ -472,7 +525,7 @@ export function aggregateAndEmitSql(
     }
   }
 
-  // 5. Emit deterministic SQL for D1
+  // 5. Emit compact multi-row deterministic SQL for D1
   const now = new Date().toISOString();
   const lines: string[] = [
     `-- Auto-generated on-chain aggregates (${now})`,
@@ -483,6 +536,7 @@ export function aggregateAndEmitSql(
     "",
   ];
 
+  const colTuples: string[] = [];
   for (const col of filteredCollections) {
     const memberId =
       memberLookup.get(`${col.artist_id}:${normalizeMemberLookupKey(col.raw_member)}`) ??
@@ -490,44 +544,75 @@ export function aggregateAndEmitSql(
     const comoAmount =
       col.objekt_class === "Double" || col.objekt_class === "Premier" ? 2 : 1;
 
-    lines.push(
-      `INSERT OR REPLACE INTO collections (slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, como_amount, total_mints, max_serial, spun_count, unique_minters, first_mint_at, last_mint_at, front_image_url, thumbnail_image_url, accent_color, background_color, text_color, is_unobtainable, updated_at) VALUES (${sqlStr(col.slug)}, ${sqlStr(col.collection_id)}, ${sqlStr(col.artist_id)}, ${sqlStr(memberId)}, ${sqlStr(col.raw_member)}, ${sqlStr(col.season)}, ${sqlStr(col.objekt_class)}, ${sqlStr(col.collection_no)}, ${sqlStr(col.on_offline)}, ${comoAmount}, ${col.total_mints}, ${col.total_mints}, ${col.spun_count}, ${col.unique_minters}, ${sqlStr(col.first_mint_at)}, ${sqlStr(col.last_mint_at)}, ${sqlStr(col.image_url)}, ${sqlStr(col.image_url)}, ${sqlStr(col.background_color)}, ${sqlStr(col.background_color)}, NULL, 0, ${sqlStr(now)});`,
+    colTuples.push(
+      `(${sqlStr(col.slug)}, ${sqlStr(col.collection_id)}, ${sqlStr(col.artist_id)}, ${sqlStr(memberId)}, ${sqlStr(col.raw_member)}, ${sqlStr(col.season)}, ${sqlStr(col.objekt_class)}, ${sqlStr(col.collection_no)}, ${sqlStr(col.on_offline)}, ${comoAmount}, ${col.total_mints}, ${col.total_mints}, ${col.spun_count}, ${col.unique_minters}, ${sqlStr(col.first_mint_at)}, ${sqlStr(col.last_mint_at)}, ${sqlStr(col.image_url)}, ${sqlStr(col.image_url)}, ${sqlStr(col.background_color)}, ${sqlStr(col.background_color)}, NULL, 0, ${sqlStr(now)})`,
     );
   }
+  pushBatchedInserts(
+    lines,
+    "INSERT OR REPLACE INTO collections (slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, como_amount, total_mints, max_serial, spun_count, unique_minters, first_mint_at, last_mint_at, front_image_url, thumbnail_image_url, accent_color, background_color, text_color, is_unobtainable, updated_at)",
+    colTuples,
+    25,
+  );
 
   lines.push("");
-  for (const d of filteredDaily) {
-    lines.push(
-      `INSERT OR REPLACE INTO collection_daily_mints (collection_slug, mint_date, mint_count, unique_minters, spin_count) VALUES (${sqlStr(d.collection_slug)}, ${sqlStr(d.mint_date)}, ${d.mint_count}, ${d.unique_minters}, 0);`,
-    );
-  }
+  const dailyTuples = filteredDaily.map(
+    (d) =>
+      `(${sqlStr(d.collection_slug)}, ${sqlStr(d.mint_date)}, ${d.mint_count}, ${d.unique_minters}, 0)`,
+  );
+  pushBatchedInserts(
+    lines,
+    "INSERT OR REPLACE INTO collection_daily_mints (collection_slug, mint_date, mint_count, unique_minters, spin_count)",
+    dailyTuples,
+    60,
+  );
 
   lines.push("");
   let roundMemberStatRows = 0;
+  const roundTuples: string[] = [];
+  const roundColTuples: string[] = [];
+  const statTuples: string[] = [];
 
   for (const r of validRounds) {
     const totalMints = Array.from(r.memberMints.values()).reduce(
       (a, b) => a + b,
       0,
     );
-    lines.push(
-      `INSERT OR REPLACE INTO sale_rounds (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, unique_buyers, participating_members, include_in_popularity, is_auto_detected, notes) VALUES (${sqlStr(r.slug)}, ${sqlStr(r.artistId)}, ${sqlStr(r.title)}, ${sqlStr(r.season)}, ${sqlStr(r.objektClass)}, ${sqlStr(r.onOffline)}, ${sqlStr(r.saleMechanic)}, ${sqlStr(r.startAt)}, ${sqlStr(r.endAt)}, ${sqlNum(r.unitPriceUsd)}, ${totalMints}, ${r.roundBuyers.size}, ${r.memberMints.size}, ${sqlBool(r.includeInPopularity)}, ${sqlBool(r.isAutoDetected)}, ${sqlStr(r.notes)});`,
+    roundTuples.push(
+      `(${sqlStr(r.slug)}, ${sqlStr(r.artistId)}, ${sqlStr(r.title)}, ${sqlStr(r.season)}, ${sqlStr(r.objektClass)}, ${sqlStr(r.onOffline)}, ${sqlStr(r.saleMechanic)}, ${sqlStr(r.startAt)}, ${sqlStr(r.endAt)}, ${sqlNum(r.unitPriceUsd)}, ${totalMints}, ${r.roundUniqueBuyers}, ${r.memberMints.size}, ${sqlBool(r.includeInPopularity)}, ${sqlBool(r.isAutoDetected)}, ${sqlStr(r.notes)})`,
     );
 
     for (const cSlug of r.collectionSlugs) {
-      lines.push(
-        `INSERT OR IGNORE INTO sale_round_collections (round_slug, collection_slug) VALUES (${sqlStr(r.slug)}, ${sqlStr(cSlug)});`,
-      );
+      roundColTuples.push(`(${sqlStr(r.slug)}, ${sqlStr(cSlug)})`);
     }
 
     const stats = statsByRoundSlug.get(r.slug) ?? [];
     for (const s of stats) {
       roundMemberStatRows++;
-      lines.push(
-        `INSERT OR REPLACE INTO sale_round_member_stats (round_slug, member_id, mint_count, unique_buyers, mints_per_buyer, top_buyer_share_pct, rank, unique_buyers_rank, share_pct, unique_buyers_share_pct, relative_index, unique_buyers_relative_index, z_score, rank_delta_prev, rolling5_rank, rolling10_rank, rolling5_relative_index, rolling10_relative_index, is_anomaly, anomaly_direction, anomaly_reason) VALUES (${sqlStr(s.roundSlug)}, ${sqlStr(s.memberId)}, ${s.mintCount}, ${s.uniqueBuyers}, ${s.mintsPerBuyer}, ${sqlNum(s.topBuyerSharePct)}, ${s.rank}, ${s.uniqueBuyersRank}, ${s.sharePct}, ${s.uniqueBuyersSharePct}, ${s.relativeIndex}, ${s.uniqueBuyersRelativeIndex}, ${s.zScore}, ${sqlNum(s.rankDeltaPrev)}, ${sqlNum(s.rolling5Rank)}, ${sqlNum(s.rolling10Rank)}, ${sqlNum(s.rolling5RelativeIndex)}, ${sqlNum(s.rolling10RelativeIndex)}, ${sqlBool(s.isAnomaly)}, ${sqlStr(s.anomalyDirection)}, ${sqlStr(s.anomalyReason)});`,
+      statTuples.push(
+        `(${sqlStr(s.roundSlug)}, ${sqlStr(s.memberId)}, ${s.mintCount}, ${s.uniqueBuyers}, ${s.mintsPerBuyer}, ${sqlNum(s.topBuyerSharePct)}, ${s.rank}, ${s.uniqueBuyersRank}, ${s.sharePct}, ${s.uniqueBuyersSharePct}, ${s.relativeIndex}, ${s.uniqueBuyersRelativeIndex}, ${s.zScore}, ${sqlNum(s.rankDeltaPrev)}, ${sqlNum(s.rolling5Rank)}, ${sqlNum(s.rolling10Rank)}, ${sqlNum(s.rolling5RelativeIndex)}, ${sqlNum(s.rolling10RelativeIndex)}, ${sqlBool(s.isAnomaly)}, ${sqlStr(s.anomalyDirection)}, ${sqlStr(s.anomalyReason)})`,
       );
     }
   }
+
+  pushBatchedInserts(
+    lines,
+    "INSERT OR REPLACE INTO sale_rounds (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, unique_buyers, participating_members, include_in_popularity, is_auto_detected, notes)",
+    roundTuples,
+    25,
+  );
+  pushBatchedInserts(
+    lines,
+    "INSERT OR IGNORE INTO sale_round_collections (round_slug, collection_slug)",
+    roundColTuples,
+    60,
+  );
+  pushBatchedInserts(
+    lines,
+    "INSERT OR REPLACE INTO sale_round_member_stats (round_slug, member_id, mint_count, unique_buyers, mints_per_buyer, top_buyer_share_pct, rank, unique_buyers_rank, share_pct, unique_buyers_share_pct, relative_index, unique_buyers_relative_index, z_score, rank_delta_prev, rolling5_rank, rolling10_rank, rolling5_relative_index, rolling10_relative_index, is_anomaly, anomaly_direction, anomaly_reason)",
+    statTuples,
+    25,
+  );
 
   // Update sync_state cursors
   lines.push("");
@@ -1116,7 +1201,7 @@ export function aggregateAndEmitSql(
         startAt: r.startAt,
         endAt: r.endAt,
         totalMints: Array.from(r.memberMints.values()).reduce((a, b) => a + b, 0),
-        uniqueBuyers: r.roundBuyers.size,
+        uniqueBuyers: r.roundUniqueBuyers,
         participatingMembers: r.memberMints.size,
         includeInPopularity: r.includeInPopularity,
         stats: statsByRoundSlug.get(r.slug) ?? [],

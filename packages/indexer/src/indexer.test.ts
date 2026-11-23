@@ -226,4 +226,60 @@ describe("aggregateAndEmitSql trade isolation", () => {
       rmSync(workDir, { recursive: true, force: true });
     }
   });
+
+  it("preserves original Polygon minter wallet and timestamp when Abstract migration re-mint arrives first", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "objekt-stats-mig-"));
+    const store = new IndexerStore(join(workDir, "test.sqlite"));
+    try {
+      store.insertMints([
+        {
+          tokenId: 500_000,
+          chain: "abstract",
+          blockNumber: 6_400_000,
+          mintedAt: "2025-04-18T12:00:00.000Z",
+          minter: "0x2222222222222222222222222222222222222222",
+          txHash: "0x" + "2".repeat(64),
+        },
+      ]);
+      store.insertMints([
+        {
+          tokenId: 500_000,
+          chain: "polygon",
+          blockNumber: 43_000_000,
+          mintedAt: "2023-06-01T09:00:00.000Z",
+          minter: "0x1111111111111111111111111111111111111111",
+          txHash: "0x" + "1".repeat(64),
+        },
+      ]);
+
+      const row = store.db
+        .prepare(
+          "SELECT chain, block_number, minted_at, minter, tx_hash FROM raw_mints WHERE token_id = 500000",
+        )
+        .get() as {
+        chain: string;
+        block_number: number;
+        minted_at: string;
+        minter: string;
+        tx_hash: string;
+      };
+      expect(row.chain).toBe("polygon");
+      expect(row.block_number).toBe(43_000_000);
+      expect(row.minted_at).toBe("2023-06-01T09:00:00.000Z");
+      expect(row.minter).toBe("0x1111111111111111111111111111111111111111");
+      expect(row.tx_hash).toBe("0x" + "1".repeat(64));
+
+      store.recordSyncedRange("polygon", "mints", 100, 200);
+      store.recordSyncedRange("polygon", "mints", 201, 300);
+      store.recordSyncedRange("polygon", "mints", 400, 500);
+      expect(store.getMissingRanges("polygon", "mints", 50, 600)).toEqual([
+        { fromBlock: 50, toBlock: 99 },
+        { fromBlock: 301, toBlock: 399 },
+        { fromBlock: 501, toBlock: 600 },
+      ]);
+    } finally {
+      store.close();
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
 });
