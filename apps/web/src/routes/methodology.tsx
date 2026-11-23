@@ -158,21 +158,22 @@ function MethodologyPage() {
             bounce-backs).
           </li>
           <li>
-            <strong>Asymmetric Swaps &amp; Exchange Rate Premiums:</strong>{" "}
-            When one side sends more Objekts than the other (such as{" "}
-            <code className="text-zinc-200">2:1</code> or{" "}
-            <code className="text-zinc-200">3:1</code> swaps), each Objekt on
-            the scarcer side logs an exchange rate of{" "}
-            <code className="text-zinc-200">counterparty_count / side_count</code>{" "}
-            (e.g. <span className="font-mono text-amber-300">3.00×</span>) while
-            each card on the bulk offering side logs its reciprocal (
-            <span className="font-mono text-zinc-200">0.33×</span>). Because the
-            leg-weighted market mean is always exactly{" "}
-            <span className="font-mono text-zinc-200">1.00×</span>, averages
-            above 1.00× reveal real secondary-market demand premiums. A{" "}
-            <em>Same-Class Filter</em> isolates member-vs-member swaps within
-            the same Objekt Class (e.g. First ↔ First) from cross-class rarity
-            upgrades (e.g. First → Special).
+            <strong>Asymmetric Swaps, Clean N:1 &amp; Anti-Whale Filtering:</strong>{" "}
+            To prevent alt-wallet consolidations or bulk cash purchases (such as
+            66-for-1 transfers) from distorting demand stats, asymmetric
+            premium metrics exclude extreme outliers above{" "}
+            <code className="text-zinc-200">6:1</code> or{" "}
+            <code className="text-zinc-200">&gt;10</code> cards on one side. The
+            default <em>Clean N:1</em> leaderboard isolates unambiguous{" "}
+            <code className="text-zinc-200">2:1–6:1</code> swaps where exactly 1
+            Objekt sits on the scarce side, both sides share the exact same
+            Objekt Class and Digital/Physical format, and the counterparty cards
+            belong to other members. Members are ranked by{" "}
+            <strong>Unique Overpayers</strong> (distinct wallets willing to pay
+            2:1+), with a{" "}
+            <span className="font-mono text-amber-300">Top wallet XX%</span>{" "}
+            flag whenever a single wallet accounts for ≥ 25% of a member&apos;s
+            clean 2:1+ swaps.
           </li>
           <li>
             <strong>Direct Transfers Tracked Separately:</strong> One-way P2P

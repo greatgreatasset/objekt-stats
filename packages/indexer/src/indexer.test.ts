@@ -214,12 +214,14 @@ describe("aggregateAndEmitSql trade isolation", () => {
       expect(tradesSql).toContain("triples-atom01-nakyoung-101z");
       expect(tradesSql).toContain("INSERT OR REPLACE INTO recent_trades");
       expect(tradesSql).toContain("INSERT OR REPLACE INTO member_trade_stats");
-      // Verify 2:1 asymmetric same-class premium attribution: YooYeon received 2:1 (rate=2), SeoYeon & NaKyoung paid bulk (rate=0.5)
+      // Verify 2:1 asymmetric same-class clean solo N:1 attribution:
+      // YooYeon received 2:1 (rate=2, cleanSolo2x=1, uniqueOverpayers=1, topOverpayerSharePct=100)
+      // SeoYeon & NaKyoung paid bulk (rate=0.5, cleanSoloBulk=1)
       expect(tradesSql).toMatch(
-        /'triples-yooyeon', 'triples', 1, 1, 1, 2, 1, \d+, [\d.]+, [\d.]+, 1, 0, 1, 0, 2, 2, 1, 1, 0, 1, 0, 2/,
+        /'triples-yooyeon', 'triples', 1, 1, 1, 2, 1, \d+, [\d.]+, [\d.]+, 1, 0, 1, 0, 2, 2, 1, 1, 0, 1, 0, 2, 1, 0, 0, 1, 100/,
       );
       expect(tradesSql).toMatch(
-        /'triples-seoyeon', 'triples', 1, 1, 2, 2, 1, \d+, [\d.]+, [\d.]+, 0, 1, 0, 0, 0\.5, 1, 1, 0, 1, 0, 0, 0\.5/,
+        /'triples-seoyeon', 'triples', 1, 1, 2, 2, 1, \d+, [\d.]+, [\d.]+, 0, 1, 0, 0, 0\.5, 1, 1, 0, 1, 0, 0, 0\.5, 0, 0, 1, 0, NULL/,
       );
     } finally {
       store.close();

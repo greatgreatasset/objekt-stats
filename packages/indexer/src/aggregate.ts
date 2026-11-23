@@ -6,6 +6,8 @@ import {
   computeArtistSeriesStats,
   computeMemberTradeRankings,
   detectTradesFromTransfers,
+  isCleanSoloPremiumSwap,
+  isRealisticAsymmetricSwap,
   isSameClassSwap,
   makeTransferKey,
   shortenAddress,
@@ -710,6 +712,9 @@ export function aggregateAndEmitSql(
     sameClass2xCount: number;
     sameClass3xCount: number;
     sameClassRateSum: number;
+    cleanSolo2xCount: number;
+    cleanSolo3xCount: number;
+    overpayers: Set<string>;
     firstTradeAt: string | null;
     lastTradeAt: string | null;
   }
@@ -734,6 +739,10 @@ export function aggregateAndEmitSql(
     sameClass2xCount: number;
     sameClass3xCount: number;
     sameClassRateSum: number;
+    cleanSolo2xCount: number;
+    cleanSolo3xCount: number;
+    cleanSoloBulkCount: number;
+    overpayerCounts: Map<string, number>;
     lastTradeAt: string | null;
   }
 
@@ -780,6 +789,9 @@ export function aggregateAndEmitSql(
         sameClass2xCount: 0,
         sameClass3xCount: 0,
         sameClassRateSum: 0,
+        cleanSolo2xCount: 0,
+        cleanSolo3xCount: 0,
+        overpayers: new Set(),
         firstTradeAt: null,
         lastTradeAt: null,
       };
@@ -811,6 +823,10 @@ export function aggregateAndEmitSql(
         sameClass2xCount: 0,
         sameClass3xCount: 0,
         sameClassRateSum: 0,
+        cleanSolo2xCount: 0,
+        cleanSolo3xCount: 0,
+        cleanSoloBulkCount: 0,
+        overpayerCounts: new Map(),
         lastTradeAt: null,
       };
       memberTradeMap.set(memberId, acc);
@@ -877,6 +893,7 @@ export function aggregateAndEmitSql(
     sideBCount: number;
     isAsymmetric: boolean;
     isSameClass: boolean;
+    isCleanSolo: boolean;
     ratioMultiple: number;
     walletAShort: string;
     walletBShort: string;
@@ -968,16 +985,57 @@ export function aggregateAndEmitSql(
     const tradeDate = trade.completedAt.slice(0, 10);
 
     const sym = classifyTradeSymmetry(trade.sideALegs.length, trade.sideBLegs.length);
-    if (sym.isAsymmetric) asymmetricTradesCount++;
+    const realisticAsym = isRealisticAsymmetricSwap(
+      trade.sideALegs.length,
+      trade.sideBLegs.length,
+    );
+    if (realisticAsym) asymmetricTradesCount++;
 
     const sameClass = isSameClassSwap(
       trade.sideALegs.map((l) => metaByToken.get(l.tokenId)?.objekt_class),
       trade.sideBLegs.map((l) => metaByToken.get(l.tokenId)?.objekt_class),
     );
 
+    // Evaluate clean apples-to-apples Solo N:1 (2:1..6:1, same class + same format, cross-member)
+    const premSideLegs =
+      sym.premiumSide === "A"
+        ? trade.sideALegs
+        : sym.premiumSide === "B"
+          ? trade.sideBLegs
+          : [];
+    const bulkSideLegs =
+      sym.premiumSide === "A"
+        ? trade.sideBLegs
+        : sym.premiumSide === "B"
+          ? trade.sideALegs
+          : [];
+    const toCleanMeta = (leg: P2PTransferEvent) => {
+      const m = metaByToken.get(leg.tokenId);
+      if (!m) return null;
+      const memberId =
+        memberLookup.get(`${m.artist_id}:${normalizeMemberLookupKey(m.raw_member)}`) ??
+        null;
+      return {
+        objektClass: m.objekt_class,
+        onOffline: m.on_offline,
+        memberId,
+      };
+    };
+    const isCleanSolo =
+      realisticAsym &&
+      sym.is2to1Plus &&
+      isCleanSoloPremiumSwap(
+        premSideLegs.map(toCleanMeta),
+        bulkSideLegs.map(toCleanMeta),
+      );
+
+    // Exclude extreme >6:1 / >10-card alt-wallet dumps from distorting exchange-rate averages
+    const rateA = !sym.isAsymmetric || realisticAsym ? sym.sideAExchangeRate : 1;
+    const rateB = !sym.isAsymmetric || realisticAsym ? sym.sideBExchangeRate : 1;
+
     const sidePairs: Array<readonly [readonly P2PTransferEvent[], number]> = [
-      [trade.sideALegs, sym.sideAExchangeRate],
-      [trade.sideBLegs, sym.sideBExchangeRate],
+      [trade.sideALegs, rateA],
+      [trade.sideBLegs, rateB],
     ];
 
     for (const [sideLegs, legRate] of sidePairs) {
@@ -1028,13 +1086,50 @@ export function aggregateAndEmitSql(
       }
     }
 
+    // Attribute Clean Solo N:1 swaps + Unique Overpaying Wallets (pLeg.to paid 2..6 cards to acquire this 1 card)
+    if (isCleanSolo && premSideLegs.length === 1) {
+      const premLeg = premSideLegs[0]!;
+      const pMeta = metaByToken.get(premLeg.tokenId);
+      if (pMeta && trackedArtists.has(pMeta.artist_id as "triples" | "artms")) {
+        const overpayer = premLeg.to.toLowerCase();
+        const colAcc = ensureColAcc(pMeta);
+        colAcc.cleanSolo2xCount++;
+        if (sym.is3to1Plus) colAcc.cleanSolo3xCount++;
+        colAcc.overpayers.add(overpayer);
+
+        if (colAcc.memberId) {
+          const mAcc = ensureMemberAcc(colAcc.memberId, pMeta.artist_id);
+          mAcc.cleanSolo2xCount++;
+          if (sym.is3to1Plus) mAcc.cleanSolo3xCount++;
+          mAcc.overpayerCounts.set(
+            overpayer,
+            (mAcc.overpayerCounts.get(overpayer) ?? 0) + 1,
+          );
+        }
+      }
+
+      for (const bLeg of bulkSideLegs) {
+        const bMeta = metaByToken.get(bLeg.tokenId);
+        if (!bMeta || !trackedArtists.has(bMeta.artist_id as "triples" | "artms")) {
+          continue;
+        }
+        const bMemberId =
+          memberLookup.get(
+            `${bMeta.artist_id}:${normalizeMemberLookupKey(bMeta.raw_member)}`,
+          ) ?? null;
+        if (bMemberId) {
+          ensureMemberAcc(bMemberId, bMeta.artist_id).cleanSoloBulkCount++;
+        }
+      }
+    }
+
     if (touchedArtists.size > 0) {
       const sideASummary = summarizeLegs(trade.sideALegs);
       const sideBSummary = summarizeLegs(trade.sideBLegs);
       for (const artistId of touchedArtists) {
         const dayAcc = ensureDailyAcc(artistId, tradeDate);
         dayAcc.tradeSessions++;
-        if (sym.isAsymmetric) {
+        if (realisticAsym) {
           dayAcc.asymmetricSessions++;
           if (sym.is2to1Plus) dayAcc.ratio2xSessions++;
           if (sym.is3to1Plus) dayAcc.ratio3xSessions++;
@@ -1048,9 +1143,10 @@ export function aggregateAndEmitSql(
           durationSeconds: trade.durationSeconds,
           sideACount: trade.sideALegs.length,
           sideBCount: trade.sideBLegs.length,
-          isAsymmetric: sym.isAsymmetric,
+          isAsymmetric: realisticAsym,
           isSameClass: sameClass,
-          ratioMultiple: sym.ratioMultiple,
+          isCleanSolo,
+          ratioMultiple: realisticAsym ? sym.ratioMultiple : 1,
           walletAShort: shortenAddress(trade.walletA),
           walletBShort: shortenAddress(trade.walletB),
           sideASummary,
@@ -1078,7 +1174,7 @@ export function aggregateAndEmitSql(
     const scAvgRate =
       col.sameClassLegs > 0 ? round4(col.sameClassRateSum / col.sameClassLegs) : 1;
     tradeLines.push(
-      `INSERT OR REPLACE INTO collection_trade_stats (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, first_trade_at, last_trade_at, updated_at) VALUES (${sqlStr(col.meta.slug)}, ${sqlStr(col.meta.collection_id)}, ${sqlStr(col.meta.artist_id)}, ${sqlStr(col.memberId)}, ${sqlStr(col.meta.raw_member)}, ${sqlStr(col.meta.season)}, ${sqlStr(col.meta.objekt_class)}, ${sqlStr(col.meta.collection_no)}, ${sqlStr(col.meta.on_offline)}, ${sqlStr(col.meta.image_url)}, ${sqlStr(col.meta.background_color)}, ${col.tradedCount}, ${col.tradeSessions}, ${col.directTransferCount}, ${col.traders.size}, ${col.premiumCount}, ${col.bulkCount}, ${col.premium2xCount}, ${col.premium3xCount}, ${avgRate}, ${round4(col.maxExchangeRate)}, ${col.sameClassLegs}, ${col.sameClassPremiumCount}, ${col.sameClassBulkCount}, ${col.sameClass2xCount}, ${col.sameClass3xCount}, ${scAvgRate}, ${sqlStr(col.firstTradeAt)}, ${sqlStr(col.lastTradeAt)}, ${sqlStr(now)});`,
+      `INSERT OR REPLACE INTO collection_trade_stats (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, unique_overpayers, first_trade_at, last_trade_at, updated_at) VALUES (${sqlStr(col.meta.slug)}, ${sqlStr(col.meta.collection_id)}, ${sqlStr(col.meta.artist_id)}, ${sqlStr(col.memberId)}, ${sqlStr(col.meta.raw_member)}, ${sqlStr(col.meta.season)}, ${sqlStr(col.meta.objekt_class)}, ${sqlStr(col.meta.collection_no)}, ${sqlStr(col.meta.on_offline)}, ${sqlStr(col.meta.image_url)}, ${sqlStr(col.meta.background_color)}, ${col.tradedCount}, ${col.tradeSessions}, ${col.directTransferCount}, ${col.traders.size}, ${col.premiumCount}, ${col.bulkCount}, ${col.premium2xCount}, ${col.premium3xCount}, ${avgRate}, ${round4(col.maxExchangeRate)}, ${col.sameClassLegs}, ${col.sameClassPremiumCount}, ${col.sameClassBulkCount}, ${col.sameClass2xCount}, ${col.sameClass3xCount}, ${scAvgRate}, ${col.cleanSolo2xCount}, ${col.cleanSolo3xCount}, ${col.overpayers.size}, ${sqlStr(col.firstTradeAt)}, ${sqlStr(col.lastTradeAt)}, ${sqlStr(now)});`,
     );
   }
 
@@ -1107,6 +1203,10 @@ export function aggregateAndEmitSql(
           sameClass2xCount: 0,
           sameClass3xCount: 0,
           sameClassRateSum: 0,
+          cleanSolo2xCount: 0,
+          cleanSolo3xCount: 0,
+          cleanSoloBulkCount: 0,
+          overpayerCounts: new Map<string, number>(),
           lastTradeAt: null,
         }
       );
@@ -1130,8 +1230,16 @@ export function aggregateAndEmitSql(
       const avgRate = a.tradedCount > 0 ? round4(a.rateSum / a.tradedCount) : 1;
       const scAvgRate =
         a.sameClassLegs > 0 ? round4(a.sameClassRateSum / a.sameClassLegs) : 1;
+      let topOverpayerCount = 0;
+      for (const c of a.overpayerCounts.values()) {
+        if (c > topOverpayerCount) topOverpayerCount = c;
+      }
+      const topOverpayerSharePct =
+        a.cleanSolo2xCount > 0
+          ? Math.round((topOverpayerCount / a.cleanSolo2xCount) * 1000) / 10
+          : null;
       tradeLines.push(
-        `INSERT OR REPLACE INTO member_trade_stats (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, last_trade_at, updated_at) VALUES (${sqlStr(a.memberId)}, ${sqlStr(a.artistId)}, ${a.tradedCount}, ${a.tradeSessions}, ${a.directTransferCount}, ${a.traders.size}, ${a.collections.size}, ${r.tradeRank}, ${r.tradeSharePct}, ${r.tradeRelativeIndex}, ${a.premiumCount}, ${a.bulkCount}, ${a.premium2xCount}, ${a.premium3xCount}, ${avgRate}, ${round4(a.maxExchangeRate)}, ${a.sameClassLegs}, ${a.sameClassPremiumCount}, ${a.sameClassBulkCount}, ${a.sameClass2xCount}, ${a.sameClass3xCount}, ${scAvgRate}, ${sqlStr(a.lastTradeAt)}, ${sqlStr(now)});`,
+        `INSERT OR REPLACE INTO member_trade_stats (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, clean_solo_2x_count, clean_solo_3x_count, clean_solo_bulk_count, unique_overpayers, top_overpayer_share_pct, last_trade_at, updated_at) VALUES (${sqlStr(a.memberId)}, ${sqlStr(a.artistId)}, ${a.tradedCount}, ${a.tradeSessions}, ${a.directTransferCount}, ${a.traders.size}, ${a.collections.size}, ${r.tradeRank}, ${r.tradeSharePct}, ${r.tradeRelativeIndex}, ${a.premiumCount}, ${a.bulkCount}, ${a.premium2xCount}, ${a.premium3xCount}, ${avgRate}, ${round4(a.maxExchangeRate)}, ${a.sameClassLegs}, ${a.sameClassPremiumCount}, ${a.sameClassBulkCount}, ${a.sameClass2xCount}, ${a.sameClass3xCount}, ${scAvgRate}, ${a.cleanSolo2xCount}, ${a.cleanSolo3xCount}, ${a.cleanSoloBulkCount}, ${a.overpayerCounts.size}, ${sqlNum(topOverpayerSharePct)}, ${sqlStr(a.lastTradeAt)}, ${sqlStr(now)});`,
       );
     }
   }
@@ -1143,9 +1251,10 @@ export function aggregateAndEmitSql(
     );
   }
 
-  // Keep up to 80 newest general swaps + up to 60 newest >=2:1 asymmetric swaps per artist
+  // Keep up to 70 newest general swaps + up to 50 newest clean N:1 swaps + up to 40 newest >=2:1 asymmetric swaps per artist
   tradeLines.push("");
   const perArtistGeneralCount = new Map<string, number>();
+  const perArtistCleanSoloCount = new Map<string, number>();
   const perArtistAsymCount = new Map<string, number>();
   const emittedRecentKeys = new Set<string>();
   recentTradeRows.sort((a, b) => b.tradedAt.localeCompare(a.tradedAt));
@@ -1155,20 +1264,28 @@ export function aggregateAndEmitSql(
     if (emittedRecentKeys.has(key)) continue;
 
     const genCount = perArtistGeneralCount.get(rt.artistId) ?? 0;
+    const cleanCount = perArtistCleanSoloCount.get(rt.artistId) ?? 0;
     const asymCount = perArtistAsymCount.get(rt.artistId) ?? 0;
 
-    const takeGeneral = genCount < 80;
-    const takeAsym = !takeGeneral && rt.isAsymmetric && rt.ratioMultiple >= 2 && asymCount < 60;
-    if (!takeGeneral && !takeAsym) continue;
+    const takeGeneral = genCount < 70;
+    const takeClean = !takeGeneral && rt.isCleanSolo && cleanCount < 50;
+    const takeAsym =
+      !takeGeneral &&
+      !takeClean &&
+      rt.isAsymmetric &&
+      rt.ratioMultiple >= 2 &&
+      asymCount < 40;
+    if (!takeGeneral && !takeClean && !takeAsym) continue;
 
     emittedRecentKeys.add(key);
     if (takeGeneral) perArtistGeneralCount.set(rt.artistId, genCount + 1);
+    if (rt.isCleanSolo) perArtistCleanSoloCount.set(rt.artistId, cleanCount + 1);
     if (rt.isAsymmetric && rt.ratioMultiple >= 2) {
       perArtistAsymCount.set(rt.artistId, asymCount + 1);
     }
 
     tradeLines.push(
-      `INSERT OR REPLACE INTO recent_trades (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, is_asymmetric, is_same_class, ratio_multiple, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary) VALUES (${sqlStr(rt.tradeId)}, ${sqlStr(rt.artistId)}, ${sqlStr(rt.chain)}, ${sqlStr(rt.tradedAt)}, ${rt.durationSeconds}, ${rt.sideACount}, ${rt.sideBCount}, ${sqlBool(rt.isAsymmetric)}, ${sqlBool(rt.isSameClass)}, ${rt.ratioMultiple}, ${sqlStr(rt.walletAShort)}, ${sqlStr(rt.walletBShort)}, ${sqlStr(rt.sideASummary)}, ${sqlStr(rt.sideBSummary)});`,
+      `INSERT OR REPLACE INTO recent_trades (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, is_asymmetric, is_same_class, is_clean_solo, ratio_multiple, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary) VALUES (${sqlStr(rt.tradeId)}, ${sqlStr(rt.artistId)}, ${sqlStr(rt.chain)}, ${sqlStr(rt.tradedAt)}, ${rt.durationSeconds}, ${rt.sideACount}, ${rt.sideBCount}, ${sqlBool(rt.isAsymmetric)}, ${sqlBool(rt.isSameClass)}, ${sqlBool(rt.isCleanSolo)}, ${rt.ratioMultiple}, ${sqlStr(rt.walletAShort)}, ${sqlStr(rt.walletBShort)}, ${sqlStr(rt.sideASummary)}, ${sqlStr(rt.sideBSummary)});`,
     );
   }
 

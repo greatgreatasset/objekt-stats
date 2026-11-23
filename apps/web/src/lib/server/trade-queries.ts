@@ -128,6 +128,9 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
         sameClass2xCount: collectionTradeStats.sameClass2xCount,
         sameClass3xCount: collectionTradeStats.sameClass3xCount,
         sameClassAvgRate: collectionTradeStats.sameClassAvgRate,
+        cleanSolo2xCount: collectionTradeStats.cleanSolo2xCount,
+        cleanSolo3xCount: collectionTradeStats.cleanSolo3xCount,
+        uniqueOverpayers: collectionTradeStats.uniqueOverpayers,
         firstTradeAt: collectionTradeStats.firstTradeAt,
         lastTradeAt: collectionTradeStats.lastTradeAt,
         primaryMints: collections.totalMints,
@@ -158,7 +161,7 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
       .from(recentTrades)
       .where(eq(recentTrades.artistId, artistId))
       .orderBy(desc(recentTrades.tradedAt))
-      .limit(120)
+      .limit(160)
       .catch(() => []);
 
     const [totalsRow] = await db
@@ -214,6 +217,11 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
       memberLeaderboard: memberTradeRows.map((row) => {
         const m = memberById.get(row.memberId);
         const primary = primaryRankByMember.get(row.memberId) ?? null;
+        const cleanDenom = row.cleanSolo2xCount + row.cleanSoloBulkCount;
+        const cleanFavorablePct =
+          cleanDenom > 0
+            ? Number(((row.cleanSolo2xCount / cleanDenom) * 100).toFixed(1))
+            : null;
         return {
           ...row,
           memberCode: m?.code ?? "",
@@ -226,6 +234,7 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
             primary !== null && row.tradedCount > 0
               ? primary.rank - row.tradeRank
               : null,
+          cleanFavorablePct,
         };
       }),
       collections: collectionTradeRows.map((c) => {
@@ -257,6 +266,7 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
         sideBCount: rt.sideBCount,
         isAsymmetric: Boolean(rt.isAsymmetric),
         isSameClass: Boolean(rt.isSameClass),
+        isCleanSolo: Boolean(rt.isCleanSolo),
         ratioMultiple: Number(rt.ratioMultiple ?? 1),
         walletAShort: rt.walletAShort,
         walletBShort: rt.walletBShort,

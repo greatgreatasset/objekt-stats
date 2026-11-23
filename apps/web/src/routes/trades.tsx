@@ -61,10 +61,14 @@ function TradesPage() {
   const [metricMode, setMetricMode] = useState<
     "trades" | "asymmetric" | "transfers"
   >("trades");
-  const [sameClassOnly, setSameClassOnly] = useState(false);
-  const [asymSort, setAsymSort] = useState<"2x" | "3x" | "rate">("2x");
+  const [asymScope, setAsymScope] = useState<"clean_solo" | "all_classes">(
+    "clean_solo",
+  );
+  const [asymSort, setAsymSort] = useState<
+    "overpayers" | "2x" | "3x" | "fav" | "rate"
+  >("overpayers");
   const [recentFilter, setRecentFilter] = useState<
-    "all" | "asymmetric" | "2x" | "3x" | "sameClassAsym"
+    "all" | "cleanSolo" | "asymmetric" | "2x" | "3x"
   >("all");
   const [query, setQuery] = useState("");
   const [seasonFilter, setSeasonFilter] = useState("all");
@@ -73,8 +77,10 @@ function TradesPage() {
   >("all");
   const [memberFilter, setMemberFilter] = useState("all");
   const [sortBy, setSortBy] = useState<
-    "traded" | "premium2x" | "rate" | "sessions" | "transfers" | "turnover"
+    "traded" | "cleanSolo" | "premium2x" | "rate" | "sessions" | "transfers" | "turnover"
   >("traded");
+
+  const isCleanMode = asymScope === "clean_solo";
 
   const seasons = useMemo(
     () =>
@@ -95,34 +101,63 @@ function TradesPage() {
     }
     if (metricMode === "asymmetric") {
       return list.sort((a, b) => {
+        if (isCleanMode && asymSort === "overpayers") {
+          return (
+            b.uniqueOverpayers - a.uniqueOverpayers ||
+            (b.cleanFavorablePct ?? 0) - (a.cleanFavorablePct ?? 0) ||
+            b.cleanSolo2xCount - a.cleanSolo2xCount
+          );
+        }
+        if (asymSort === "fav") {
+          const fa = isCleanMode
+            ? (a.cleanFavorablePct ?? 0)
+            : a.premiumCount / Math.max(1, a.premiumCount + a.bulkCount);
+          const fb = isCleanMode
+            ? (b.cleanFavorablePct ?? 0)
+            : b.premiumCount / Math.max(1, b.premiumCount + b.bulkCount);
+          return fb - fa || b.uniqueOverpayers - a.uniqueOverpayers;
+        }
         if (asymSort === "rate") {
-          const ra = sameClassOnly ? a.sameClassAvgRate : a.avgExchangeRate;
-          const rb = sameClassOnly ? b.sameClassAvgRate : b.avgExchangeRate;
-          return rb - ra || b.premium2xCount - a.premium2xCount;
+          const ra = isCleanMode ? a.sameClassAvgRate : a.avgExchangeRate;
+          const rb = isCleanMode ? b.sameClassAvgRate : b.avgExchangeRate;
+          return rb - ra || b.uniqueOverpayers - a.uniqueOverpayers;
         }
         if (asymSort === "3x") {
-          const va = sameClassOnly ? a.sameClass3xCount : a.premium3xCount;
-          const vb = sameClassOnly ? b.sameClass3xCount : b.premium3xCount;
-          return vb - va || b.avgExchangeRate - a.avgExchangeRate;
+          const va = isCleanMode ? a.cleanSolo3xCount : a.premium3xCount;
+          const vb = isCleanMode ? b.cleanSolo3xCount : b.premium3xCount;
+          return vb - va || b.uniqueOverpayers - a.uniqueOverpayers;
         }
-        const va = sameClassOnly ? a.sameClass2xCount : a.premium2xCount;
-        const vb = sameClassOnly ? b.sameClass2xCount : b.premium2xCount;
-        return vb - va || b.avgExchangeRate - a.avgExchangeRate;
+        const va = isCleanMode ? a.cleanSolo2xCount : a.premium2xCount;
+        const vb = isCleanMode ? b.cleanSolo2xCount : b.premium2xCount;
+        return vb - va || b.uniqueOverpayers - a.uniqueOverpayers;
       });
     }
     return list.sort(
       (a, b) => a.tradeRank - b.tradeRank || b.tradedCount - a.tradedCount,
     );
-  }, [data.memberLeaderboard, metricMode, sameClassOnly, asymSort]);
+  }, [data.memberLeaderboard, metricMode, isCleanMode, asymSort]);
 
   const maxMemberVal = useMemo(() => {
     if (rankedMembers.length === 0) return 1;
     if (metricMode === "asymmetric") {
+      if (isCleanMode && asymSort === "overpayers") {
+        return Math.max(1, ...rankedMembers.map((m) => m.uniqueOverpayers));
+      }
+      if (asymSort === "fav") {
+        return Math.max(
+          50,
+          ...rankedMembers.map((m) =>
+            isCleanMode
+              ? (m.cleanFavorablePct ?? 0)
+              : (m.premiumCount / Math.max(1, m.premiumCount + m.bulkCount)) * 100,
+          ),
+        );
+      }
       if (asymSort === "rate") {
         return Math.max(
           1.15,
           ...rankedMembers.map((m) =>
-            sameClassOnly ? m.sameClassAvgRate : m.avgExchangeRate,
+            isCleanMode ? m.sameClassAvgRate : m.avgExchangeRate,
           ),
         );
       }
@@ -130,14 +165,14 @@ function TradesPage() {
         return Math.max(
           1,
           ...rankedMembers.map((m) =>
-            sameClassOnly ? m.sameClass3xCount : m.premium3xCount,
+            isCleanMode ? m.cleanSolo3xCount : m.premium3xCount,
           ),
         );
       }
       return Math.max(
         1,
         ...rankedMembers.map((m) =>
-          sameClassOnly ? m.sameClass2xCount : m.premium2xCount,
+          isCleanMode ? m.cleanSolo2xCount : m.premium2xCount,
         ),
       );
     }
@@ -147,7 +182,7 @@ function TradesPage() {
         metricMode === "transfers" ? m.directTransferCount : m.tradedCount,
       ),
     );
-  }, [rankedMembers, metricMode, sameClassOnly, asymSort]);
+  }, [rankedMembers, metricMode, isCleanMode, asymSort]);
 
   const filteredCollections = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -155,7 +190,7 @@ function TradesPage() {
       .filter((c) => {
         if (metricMode === "trades" && c.tradedCount <= 0) return false;
         if (metricMode === "asymmetric") {
-          const pCount = sameClassOnly ? c.sameClassPremiumCount : c.premiumCount;
+          const pCount = isCleanMode ? c.cleanSolo2xCount : c.premiumCount;
           if (pCount <= 0) return false;
         }
         if (seasonFilter !== "all" && c.season !== seasonFilter) return false;
@@ -180,18 +215,24 @@ function TradesPage() {
         return true;
       })
       .sort((a, b) => {
+        if (sortBy === "cleanSolo") {
+          return (
+            b.uniqueOverpayers - a.uniqueOverpayers ||
+            b.cleanSolo2xCount - a.cleanSolo2xCount ||
+            b.sameClassAvgRate - a.sameClassAvgRate
+          );
+        }
         if (sortBy === "premium2x") {
-          const va = sameClassOnly ? a.sameClass2xCount : a.premium2xCount;
-          const vb = sameClassOnly ? b.sameClass2xCount : b.premium2xCount;
+          const va = isCleanMode ? a.cleanSolo2xCount : a.premium2xCount;
+          const vb = isCleanMode ? b.cleanSolo2xCount : b.premium2xCount;
           return vb - va || b.avgExchangeRate - a.avgExchangeRate;
         }
         if (sortBy === "rate") {
-          // Prioritize collections with >= 5 trades so 1-off anomalies don't drown out real demand
           const aQual = a.tradedCount >= 5 ? 1 : 0;
           const bQual = b.tradedCount >= 5 ? 1 : 0;
           if (aQual !== bQual) return bQual - aQual;
-          const ra = sameClassOnly ? a.sameClassAvgRate : a.avgExchangeRate;
-          const rb = sameClassOnly ? b.sameClassAvgRate : b.avgExchangeRate;
+          const ra = isCleanMode ? a.sameClassAvgRate : a.avgExchangeRate;
+          const rb = isCleanMode ? b.sameClassAvgRate : b.avgExchangeRate;
           return rb - ra || b.premium2xCount - a.premium2xCount;
         }
         if (sortBy === "sessions") {
@@ -211,7 +252,7 @@ function TradesPage() {
   }, [
     data.collections,
     metricMode,
-    sameClassOnly,
+    isCleanMode,
     query,
     seasonFilter,
     classFilter,
@@ -221,10 +262,10 @@ function TradesPage() {
 
   const filteredRecentTrades = useMemo(() => {
     return data.recentTrades.filter((rt) => {
+      if (recentFilter === "cleanSolo") return rt.isCleanSolo;
       if (recentFilter === "asymmetric") return rt.isAsymmetric;
       if (recentFilter === "2x") return rt.isAsymmetric && rt.ratioMultiple >= 2;
       if (recentFilter === "3x") return rt.isAsymmetric && rt.ratioMultiple >= 3;
-      if (recentFilter === "sameClassAsym") return rt.isAsymmetric && rt.isSameClass;
       return true;
     });
   }, [data.recentTrades, recentFilter]);
@@ -286,8 +327,10 @@ function TradesPage() {
                 type="button"
                 onClick={() => {
                   setMetricMode("asymmetric");
-                  setSortBy("premium2x");
-                  setRecentFilter("2x");
+                  setAsymScope("clean_solo");
+                  setAsymSort("overpayers");
+                  setSortBy("cleanSolo");
+                  setRecentFilter("cleanSolo");
                 }}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition ${
                   metricMode === "asymmetric"
@@ -375,42 +418,78 @@ function TradesPage() {
                 <div>
                   <h2 className="text-base font-semibold text-white">
                     {metricMode === "asymmetric"
-                      ? `Asymmetric Swap Premium (${sameClassOnly ? "Same-Class Only" : "All Classes"})`
+                      ? isCleanMode
+                        ? "Asymmetric Swap Premium — Clean Solo N:1 (Same-Class)"
+                        : "Asymmetric Swap Premium — All Classes (≤6:1)"
                       : metricMode === "transfers"
                         ? "Most Transferred Members (All P2P)"
                         : "Most Traded Members (Confirmed Swaps)"}
                   </h2>
                   <p className="text-xs text-zinc-400">
                     {metricMode === "asymmetric"
-                      ? "Times a member's Objekt sat on the scarcer side of 2:1 / 3:1+ swaps. Exchange rate 1.00× = exact market parity."
+                      ? isCleanMode
+                        ? "Pure 2:1–6:1 swaps (1 scarce card, same class & digital/physical format, cross-member). Ranked by distinct overpaying wallets to neutralize bias whales."
+                        : "Includes cross-class upgrades (e.g. 3 First → 1 Special) and M:N bundles up to 6:1; extreme >6:1 / >10-card alt-wallet dumps excluded."
                       : "Compare secondary trading activity, average exchange rate (1.00× = parity), and primary mint rank."}
                   </p>
                 </div>
 
                 {metricMode === "asymmetric" ? (
                   <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                    <button
-                      type="button"
-                      onClick={() => setSameClassOnly((v) => !v)}
-                      title="Restrict to swaps where both sides are the exact same Objekt class (e.g. First ↔ First), removing cross-class rarity upgrades like 4 FCO → 1 SCO"
-                      className={`rounded-lg border px-2.5 py-1 font-medium transition ${
-                        sameClassOnly
-                          ? "border-amber-400/50 bg-amber-400/15 text-amber-300"
-                          : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200"
-                      }`}
-                    >
-                      {sameClassOnly ? "✓ Same-Class Only" : "Same-Class Filter"}
-                    </button>
+                    <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAsymScope("clean_solo");
+                          setSortBy("cleanSolo");
+                        }}
+                        title="Pure N:1 (2:1–6:1) same-class & same-format cross-member swaps"
+                        className={`rounded-md px-2 py-1 font-medium transition ${
+                          isCleanMode
+                            ? "bg-amber-400/20 text-amber-300"
+                            : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                      >
+                        Clean N:1
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAsymScope("all_classes");
+                          if (asymSort === "overpayers") setAsymSort("2x");
+                          setSortBy("premium2x");
+                        }}
+                        title="Includes cross-class rarity upgrades (e.g. First → Special) & M:N bundles up to 6:1"
+                        className={`rounded-md px-2 py-1 font-medium transition ${
+                          !isCleanMode
+                            ? "bg-zinc-800 text-white"
+                            : "text-zinc-400 hover:text-zinc-200"
+                        }`}
+                      >
+                        All Classes
+                      </button>
+                    </div>
                     <select
                       value={asymSort}
                       onChange={(e) =>
-                        setAsymSort(e.target.value as "2x" | "3x" | "rate")
+                        setAsymSort(
+                          e.target.value as
+                            | "overpayers"
+                            | "2x"
+                            | "3x"
+                            | "fav"
+                            | "rate",
+                        )
                       }
                       aria-label="Sort asymmetric leaderboard"
                       className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1 text-zinc-200 focus:border-zinc-600 focus:outline-none"
                     >
+                      {isCleanMode && (
+                        <option value="overpayers">Sort: Unique Overpayers</option>
+                      )}
                       <option value="2x">Sort: ≥2:1 Swaps</option>
                       <option value="3x">Sort: ≥3:1 Swaps</option>
+                      <option value="fav">Sort: Favorable %</option>
                       <option value="rate">Sort: Avg Rate</option>
                     </select>
                   </div>
@@ -423,31 +502,44 @@ function TradesPage() {
 
               <div className="space-y-2">
                 {rankedMembers.map((m, idx) => {
-                  const rateVal = sameClassOnly
+                  const rateVal = isCleanMode
                     ? m.sameClassAvgRate
                     : m.avgExchangeRate;
-                  const count2x = sameClassOnly
-                    ? m.sameClass2xCount
+                  const count2x = isCleanMode
+                    ? m.cleanSolo2xCount
                     : m.premium2xCount;
-                  const count3x = sameClassOnly
-                    ? m.sameClass3xCount
+                  const count3x = isCleanMode
+                    ? m.cleanSolo3xCount
                     : m.premium3xCount;
-                  const premCnt = sameClassOnly
-                    ? m.sameClassPremiumCount
-                    : m.premiumCount;
-                  const bulkCnt = sameClassOnly
-                    ? m.sameClassBulkCount
-                    : m.bulkCount;
+                  const favPct = isCleanMode
+                    ? m.cleanFavorablePct
+                    : m.premiumCount + m.bulkCount > 0
+                      ? Number(
+                          (
+                            (m.premiumCount / (m.premiumCount + m.bulkCount)) *
+                            100
+                          ).toFixed(1),
+                        )
+                      : null;
+                  const hasWhaleFlag =
+                    isCleanMode &&
+                    m.cleanSolo2xCount >= 5 &&
+                    m.topOverpayerSharePct !== null &&
+                    m.topOverpayerSharePct >= 25;
 
                   const barVal =
                     metricMode === "transfers"
                       ? m.directTransferCount
                       : metricMode === "asymmetric"
-                        ? asymSort === "rate"
-                          ? rateVal
-                          : asymSort === "3x"
-                            ? count3x
-                            : count2x
+                        ? isCleanMode && asymSort === "overpayers"
+                          ? m.uniqueOverpayers
+                          : asymSort === "fav"
+                            ? (favPct ?? 0)
+                            : asymSort === "rate"
+                              ? rateVal
+                              : asymSort === "3x"
+                                ? count3x
+                                : count2x
                         : m.tradedCount;
 
                   const widthPct = Math.max(
@@ -463,7 +555,7 @@ function TradesPage() {
                       className="group block space-y-1 rounded-lg p-1.5 transition hover:bg-zinc-900/80"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="w-6 font-mono text-zinc-500">
                             #{metricMode === "trades" ? m.tradeRank : idx + 1}
                           </span>
@@ -497,46 +589,78 @@ function TradesPage() {
 
                           {metricMode === "asymmetric" && count3x > 0 && (
                             <span
-                              title={`Commanded ${count3x} swaps at ≥3:1 (peak ${m.maxExchangeRate.toFixed(1)}:1)`}
+                              title={`Commanded ${count3x} swaps at ≥3:1`}
                               className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] text-amber-300"
                             >
                               {count3x} at ≥3:1
+                            </span>
+                          )}
+
+                          {metricMode === "asymmetric" && hasWhaleFlag && (
+                            <span
+                              title={`Whale concentration: 1 single wallet accounts for ${m.topOverpayerSharePct?.toFixed(0)}% of ${m.memberName}'s clean 2:1+ swaps (${m.uniqueOverpayers} unique wallets across ${m.cleanSolo2xCount} swaps).`}
+                              className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-300"
+                            >
+                              Top wallet {Math.round(m.topOverpayerSharePct!)}%
                             </span>
                           )}
                         </div>
 
                         <div className="flex items-center gap-3 font-mono tabular-nums">
                           {metricMode === "asymmetric" ? (
-                            <>
-                              <span
-                                className="text-[11px] text-zinc-500 hidden sm:inline"
-                                title="Scarce-side legs vs Bulk-offering legs in asymmetric swaps"
-                              >
-                                {premCnt}↑ / {bulkCnt}↓
-                              </span>
-                              <span className="text-zinc-200 font-semibold">
-                                {count2x.toLocaleString()}{" "}
-                                <span className="text-[10px] font-normal text-zinc-500">
-                                  2:1+
+                            isCleanMode ? (
+                              <>
+                                <span
+                                  className="text-zinc-200 font-semibold"
+                                  title={`${m.uniqueOverpayers} distinct wallets paid 2:1–6:1 across ${m.cleanSolo2xCount} clean swaps`}
+                                >
+                                  {m.uniqueOverpayers.toLocaleString()}{" "}
+                                  <span className="text-[10px] font-normal text-zinc-500">
+                                    wallets
+                                  </span>
                                 </span>
-                              </span>
-                              <span
-                                title="Average counterparty Objekts received per 1 Objekt of this member (1.00× = exact market parity)"
-                                className={`w-12 text-right font-semibold ${
-                                  rateVal >= 1.03
-                                    ? "text-emerald-300"
-                                    : rateVal <= 0.97
-                                      ? "text-rose-300"
-                                      : "text-zinc-300"
-                                }`}
-                              >
-                                {rateVal.toFixed(2)}×
-                              </span>
-                            </>
+                                <span className="text-[11px] text-zinc-400 hidden sm:inline">
+                                  {m.cleanSolo2xCount} swaps
+                                </span>
+                                <span
+                                  title={`Favorable share: ${m.cleanSolo2xCount} times on scarce side vs ${m.cleanSoloBulkCount} times on bulk offering side`}
+                                  className={`w-14 text-right text-[11px] font-semibold ${
+                                    (favPct ?? 0) >= 35
+                                      ? "text-emerald-300"
+                                      : (favPct ?? 0) <= 25
+                                        ? "text-rose-300"
+                                        : "text-zinc-300"
+                                  }`}
+                                >
+                                  {favPct !== null ? `${favPct.toFixed(1)}% fav` : "—"}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="text-zinc-200 font-semibold">
+                                  {count2x.toLocaleString()}{" "}
+                                  <span className="text-[10px] font-normal text-zinc-500">
+                                    2:1+
+                                  </span>
+                                </span>
+                                <span
+                                  title="Average counterparty Objekts received per 1 Objekt (≤6:1 cap; 1.00× = parity)"
+                                  className={`w-12 text-right font-semibold ${
+                                    rateVal >= 1.03
+                                      ? "text-emerald-300"
+                                      : rateVal <= 0.97
+                                        ? "text-rose-300"
+                                        : "text-zinc-300"
+                                  }`}
+                                >
+                                  {rateVal.toFixed(2)}×
+                                </span>
+                              </>
+                            )
                           ) : metricMode === "trades" ? (
                             <>
                               <span
-                                title={`Avg exchange rate ${m.avgExchangeRate.toFixed(2)}× (${m.premium2xCount} swaps at ≥2:1)`}
+                                title={`Avg exchange rate ${m.avgExchangeRate.toFixed(2)}× (${m.uniqueOverpayers} unique overpaying wallets in clean N:1 swaps)`}
                                 className={`hidden sm:inline text-[11px] ${
                                   m.avgExchangeRate >= 1.03
                                     ? "text-amber-300"
@@ -657,12 +781,14 @@ function TradesPage() {
                     type="button"
                     onClick={() => {
                       setMetricMode("asymmetric");
-                      setSortBy("premium2x");
-                      setRecentFilter("2x");
+                      setAsymScope("clean_solo");
+                      setAsymSort("overpayers");
+                      setSortBy("cleanSolo");
+                      setRecentFilter("cleanSolo");
                     }}
                     className="w-full rounded-lg border border-amber-400/30 bg-amber-400/10 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-400/20"
                   >
-                    Switch to Asymmetric 2:1 / 3:1+ View →
+                    Switch to Clean N:1 Asymmetric View →
                   </button>
                 )}
               </div>
@@ -832,29 +958,31 @@ function TradesPage() {
                   ))}
                 </select>
 
-                <select
-                  value={sortBy}
-                  onChange={(e) =>
-                    setSortBy(
-                      e.target.value as
-                        | "traded"
-                        | "premium2x"
-                        | "rate"
-                        | "sessions"
-                        | "transfers"
-                        | "turnover",
-                    )
-                  }
-                  aria-label="Sort traded collections"
-                  className="rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
-                >
-                  <option value="traded">Sort: Most Traded</option>
-                  <option value="premium2x">Sort: Most ≥2:1 Swaps</option>
-                  <option value="rate">Sort: Highest Avg Rate</option>
-                  <option value="sessions">Sort: Most Trade Swaps</option>
-                  <option value="transfers">Sort: Most Direct Transfers</option>
-                  <option value="turnover">Sort: Highest Turnover %</option>
-                </select>
+                  <select
+                    value={sortBy}
+                    onChange={(e) =>
+                      setSortBy(
+                        e.target.value as
+                          | "traded"
+                          | "cleanSolo"
+                          | "premium2x"
+                          | "rate"
+                          | "sessions"
+                          | "transfers"
+                          | "turnover",
+                      )
+                    }
+                    aria-label="Sort traded collections"
+                    className="rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
+                  >
+                    <option value="traded">Sort: Most Traded</option>
+                    <option value="cleanSolo">Sort: Clean N:1 Overpayers</option>
+                    <option value="premium2x">Sort: Most ≥2:1 Swaps</option>
+                    <option value="rate">Sort: Highest Avg Rate</option>
+                    <option value="sessions">Sort: Most Trade Swaps</option>
+                    <option value="transfers">Sort: Most Direct Transfers</option>
+                    <option value="turnover">Sort: Highest Turnover %</option>
+                  </select>
               </div>
 
               <div className="flex flex-wrap gap-1.5">
@@ -907,13 +1035,13 @@ function TradesPage() {
                   </thead>
                   <tbody className="divide-y divide-zinc-800/70">
                     {filteredCollections.slice(0, 80).map((c, idx) => {
-                      const col2x = sameClassOnly
-                        ? c.sameClass2xCount
+                      const col2x = isCleanMode
+                        ? c.cleanSolo2xCount
                         : c.premium2xCount;
-                      const col3x = sameClassOnly
-                        ? c.sameClass3xCount
+                      const col3x = isCleanMode
+                        ? c.cleanSolo3xCount
                         : c.premium3xCount;
-                      const colRate = sameClassOnly
+                      const colRate = isCleanMode
                         ? c.sameClassAvgRate
                         : c.avgExchangeRate;
                       return (
@@ -1053,10 +1181,10 @@ function TradesPage() {
                   {(
                     [
                       ["all", "All Swaps"],
-                      ["asymmetric", "Asymmetric"],
+                      ["cleanSolo", "Clean N:1"],
+                      ["asymmetric", "Asymmetric (≤6:1)"],
                       ["2x", "2:1+ Swaps"],
                       ["3x", "3:1+ Swaps"],
-                      ["sameClassAsym", "Same-Class Asym"],
                     ] as const
                   ).map(([key, label]) => (
                     <button
@@ -1114,10 +1242,17 @@ function TradesPage() {
                                 ? `${ratioLabel} asymmetric`
                                 : `${rt.sideACount} ↔ ${rt.sideBCount} swap`}
                             </span>
-                            {rt.isAsymmetric && rt.isSameClass && (
+                            {rt.isCleanSolo ? (
                               <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">
-                                Same Class
+                                Clean N:1
                               </span>
+                            ) : (
+                              rt.isAsymmetric &&
+                              rt.isSameClass && (
+                                <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">
+                                  Same Class
+                                </span>
+                              )
                             )}
                             <span className="text-zinc-500">
                               {formatDuration(rt.durationSeconds)}

@@ -37,6 +37,13 @@ export const DEFAULT_EXCLUDED_TRADE_ADDRESSES = new Set<string>([
 export const DEFAULT_TRADE_MAX_GAP_SECONDS = 1_800; // 30 minutes between consecutive legs
 export const DEFAULT_TRADE_MAX_SPAN_SECONDS = 3_600; // 60 minutes max total session duration
 
+/**
+ * Guardrails against alt-wallet consolidations / OTC cash bulk moves masquerading
+ * as extreme asymmetric trades (e.g. 66 cards sent one way, 1 random card sent back).
+ */
+export const MAX_ASYMMETRIC_PREMIUM_RATIO = 6;
+export const MAX_ASYMMETRIC_SIDE_SIZE = 10;
+
 export interface P2PTransferEvent {
   txHash: string;
   logIndex: number;
@@ -409,6 +416,66 @@ export function isSameClassSwap(
   const [classA] = setA;
   const [classB] = setB;
   return classA === classB;
+}
+
+/**
+ * Returns true if an asymmetric swap falls within realistic P2P trade bounds
+ * (`ratio <= 6:1` and neither side exceeds 10 cards), excluding alt-wallet batch
+ * consolidations like 66:1 or 39:3 from skewing exchange-rate averages.
+ */
+export function isRealisticAsymmetricSwap(
+  sideACount: number,
+  sideBCount: number,
+): boolean {
+  const sym = classifyTradeSymmetry(sideACount, sideBCount);
+  if (!sym.isAsymmetric) return false;
+  const hi = Math.max(sideACount, sideBCount);
+  return (
+    sym.ratioMultiple <= MAX_ASYMMETRIC_PREMIUM_RATIO &&
+    hi <= MAX_ASYMMETRIC_SIDE_SIZE
+  );
+}
+
+export interface CleanSoloLegMeta {
+  objektClass?: string | null;
+  onOffline?: string | null;
+  memberId?: string | null;
+}
+
+/**
+ * Evaluates whether a trade is a clean, unambiguous apples-to-apples **Solo `N:1`**
+ * member-premium swap:
+ * - Exactly 1 Objekt on the favorable (scarcer) side and 2..6 Objekts on the bulk side
+ * - Both sides share the exact same Objekt Class (e.g. First <-> First)
+ * - Both sides share the exact same format (Digital `Z` <-> Digital `Z`, or Physical `A` <-> `A`)
+ * - Not all bulk cards belong to the exact same member as the scarce card (cross-member demand)
+ */
+export function isCleanSoloPremiumSwap(
+  premiumSideMetas: readonly (CleanSoloLegMeta | null | undefined)[],
+  bulkSideMetas: readonly (CleanSoloLegMeta | null | undefined)[],
+): boolean {
+  if (premiumSideMetas.length !== 1) return false;
+  if (
+    bulkSideMetas.length < 2 ||
+    bulkSideMetas.length > MAX_ASYMMETRIC_PREMIUM_RATIO
+  ) {
+    return false;
+  }
+
+  const prem = premiumSideMetas[0];
+  if (!prem?.objektClass || !prem.onOffline) return false;
+
+  let hasOtherMember = false;
+  for (const b of bulkSideMetas) {
+    if (!b?.objektClass || !b.onOffline) return false;
+    if (b.objektClass !== prem.objektClass) return false;
+    if (b.onOffline !== prem.onOffline) return false;
+    if (!prem.memberId || !b.memberId || b.memberId !== prem.memberId) {
+      hasOtherMember = true;
+    }
+  }
+
+  return hasOtherMember;
 }
 
 export interface MemberTradeMetricInput {

@@ -43,6 +43,13 @@
       "when": 1795442036967,
       "tag": "0005_dazzling_blob",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795449465247,
+      "tag": "0006_aspiring_alice",
+      "breakpoints": true
     }
   ]
 }

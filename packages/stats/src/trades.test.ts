@@ -6,7 +6,9 @@ import {
   classifyTradeSymmetry,
   computeMemberTradeRankings,
   detectTradesFromTransfers,
+  isCleanSoloPremiumSwap,
   isEligibleP2PTransfer,
+  isRealisticAsymmetricSwap,
   isSameClassSwap,
   type P2PTransferEvent,
 } from "./trades.js";
@@ -216,5 +218,74 @@ describe("classifyTradeSymmetry & isSameClassSwap", () => {
     expect(isSameClassSwap(["Special"], ["First", "First", "First"])).toBe(false);
     expect(isSameClassSwap(["First", "Double"], ["First"])).toBe(false);
     expect(isSameClassSwap([], ["First"])).toBe(false);
+  });
+
+  it("filters out extreme alt-wallet dumps (>6:1 or >10 cards) and validates clean solo N:1 swaps", () => {
+    expect(isRealisticAsymmetricSwap(1, 2)).toBe(true);
+    expect(isRealisticAsymmetricSwap(1, 6)).toBe(true);
+    expect(isRealisticAsymmetricSwap(1, 66)).toBe(false);
+    expect(isRealisticAsymmetricSwap(3, 39)).toBe(false);
+    expect(isRealisticAsymmetricSwap(1, 1)).toBe(false);
+
+    // Valid 2:1 clean solo swap (2 First online cards of other members -> 1 YooYeon First online)
+    expect(
+      isCleanSoloPremiumSwap(
+        [{ objektClass: "First", onOffline: "online", memberId: "triples-yooyeon" }],
+        [
+          { objektClass: "First", onOffline: "online", memberId: "triples-shion" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-mayu" },
+        ],
+      ),
+    ).toBe(true);
+
+    // Rejects bundled M:N (>1 card on scarce side)
+    expect(
+      isCleanSoloPremiumSwap(
+        [
+          { objektClass: "First", onOffline: "online", memberId: "triples-yooyeon" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-shion" },
+        ],
+        [
+          { objektClass: "First", onOffline: "online", memberId: "triples-mayu" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-nien" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-kaede" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-lynn" },
+        ],
+      ),
+    ).toBe(false);
+
+    // Rejects physical -> digital format mismatch
+    expect(
+      isCleanSoloPremiumSwap(
+        [{ objektClass: "First", onOffline: "online", memberId: "triples-yooyeon" }],
+        [
+          { objektClass: "First", onOffline: "offline", memberId: "triples-shion" },
+          { objektClass: "First", onOffline: "offline", memberId: "triples-mayu" },
+        ],
+      ),
+    ).toBe(false);
+
+    // Rejects same-member-only swaps (2 older YuBins -> 1 newer YuBin)
+    expect(
+      isCleanSoloPremiumSwap(
+        [{ objektClass: "First", onOffline: "online", memberId: "triples-yubin" }],
+        [
+          { objektClass: "First", onOffline: "online", memberId: "triples-yubin" },
+          { objektClass: "First", onOffline: "online", memberId: "triples-yubin" },
+        ],
+      ),
+    ).toBe(false);
+
+    // Rejects extreme 7:1 dumps (> MAX_ASYMMETRIC_PREMIUM_RATIO)
+    expect(
+      isCleanSoloPremiumSwap(
+        [{ objektClass: "First", onOffline: "online", memberId: "triples-shion" }],
+        Array.from({ length: 7 }, () => ({
+          objektClass: "First",
+          onOffline: "online",
+          memberId: "triples-mayu",
+        })),
+      ),
+    ).toBe(false);
   });
 });

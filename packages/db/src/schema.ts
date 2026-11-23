@@ -269,6 +269,9 @@ export const collectionTradeStats = sqliteTable(
     sameClass2xCount: integer("same_class_2x_count").notNull().default(0),
     sameClass3xCount: integer("same_class_3x_count").notNull().default(0),
     sameClassAvgRate: real("same_class_avg_rate").notNull().default(1),
+    cleanSolo2xCount: integer("clean_solo_2x_count").notNull().default(0),
+    cleanSolo3xCount: integer("clean_solo_3x_count").notNull().default(0),
+    uniqueOverpayers: integer("unique_overpayers").notNull().default(0),
     firstTradeAt: text("first_trade_at"),
     lastTradeAt: text("last_trade_at"),
     updatedAt: text("updated_at").notNull(),
@@ -309,6 +312,11 @@ export const memberTradeStats = sqliteTable(
     sameClass2xCount: integer("same_class_2x_count").notNull().default(0),
     sameClass3xCount: integer("same_class_3x_count").notNull().default(0),
     sameClassAvgRate: real("same_class_avg_rate").notNull().default(1),
+    cleanSolo2xCount: integer("clean_solo_2x_count").notNull().default(0),
+    cleanSolo3xCount: integer("clean_solo_3x_count").notNull().default(0),
+    cleanSoloBulkCount: integer("clean_solo_bulk_count").notNull().default(0),
+    uniqueOverpayers: integer("unique_overpayers").notNull().default(0),
+    topOverpayerSharePct: real("top_overpayer_share_pct"),
     lastTradeAt: text("last_trade_at"),
     updatedAt: text("updated_at").notNull(),
   },
@@ -355,6 +363,9 @@ export const recentTrades = sqliteTable(
       .notNull()
       .default(false),
     isSameClass: integer("is_same_class", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    isCleanSolo: integer("is_clean_solo", { mode: "boolean" })
       .notNull()
       .default(false),
     ratioMultiple: real("ratio_multiple").notNull().default(1),
