@@ -162,17 +162,32 @@ async function turboResolveMetadata(
     `Turbo AIMD metadata resolver starting: remaining=${initialRemaining.toLocaleString()}, limit=${options.limit.toLocaleString()}, startConc=${targetConc}, maxConc=${options.maxConc}, order=${options.order}${options.chain ? `, chain=${options.chain}` : ""}`,
   );
 
+  let cursorTokenId: number | undefined = undefined;
+  let wrappedOnce = false;
+
   while (totalResolved + totalMissing < options.limit) {
     const remainingBudget = options.limit - (totalResolved + totalMissing);
-    const pending = store.getUnresolvedTokenIds(
+    let pending = store.getUnresolvedTokenIds(
       Math.min(options.batchSize, remainingBudget),
       options.order,
       options.chain,
+      cursorTokenId,
     );
+    if (pending.length === 0 && cursorTokenId !== undefined && !wrappedOnce) {
+      // Sweep once from the beginning to catch any newly-merged or failed-retry tokens
+      cursorTokenId = undefined;
+      wrappedOnce = true;
+      pending = store.getUnresolvedTokenIds(
+        Math.min(options.batchSize, remainingBudget),
+        options.order,
+        options.chain,
+      );
+    }
     if (pending.length === 0) {
       console.log("✓ 100% of mint tokens resolved! Zero unresolved remaining.");
       break;
     }
+    cursorTokenId = pending[pending.length - 1];
 
     // Queue of { tokenId, attempts } so transient 502/429s are ALWAYS retried cleanly
     const queue: Array<{ tokenId: number; attempts: number }> = pending.map((tokenId) => ({

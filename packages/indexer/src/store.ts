@@ -655,22 +655,34 @@ export class IndexerStore {
     limit: number,
     order: "newest" | "oldest" = "newest",
     chainFilter?: "polygon" | "abstract",
+    cursorTokenId?: number,
   ): number[] {
     const dir = order === "newest" ? "DESC" : "ASC";
-    const chainClause = chainFilter ? "AND rm.chain = ?" : "";
+    const conditions: string[] = [
+      "tc.token_id IS NULL",
+      "mm.token_id IS NULL",
+    ];
+    const params: Array<string | number> = [];
+    if (chainFilter) {
+      conditions.push("rm.chain = ?");
+      params.push(chainFilter);
+    }
+    if (cursorTokenId !== undefined) {
+      conditions.push(order === "newest" ? "rm.token_id < ?" : "rm.token_id > ?");
+      params.push(cursorTokenId);
+    }
+    params.push(limit);
     const sql = `
       SELECT rm.token_id
       FROM raw_mints rm
       LEFT JOIN token_collections tc ON tc.token_id = rm.token_id
       LEFT JOIN missing_metadata mm ON mm.token_id = rm.token_id
-      WHERE tc.token_id IS NULL AND mm.token_id IS NULL ${chainClause}
+      WHERE ${conditions.join(" AND ")}
       ORDER BY rm.token_id ${dir}
       LIMIT ?`;
-    const rows = (
-      chainFilter
-        ? this.db.prepare(sql).all(chainFilter, limit)
-        : this.db.prepare(sql).all(limit)
-    ) as Array<{ token_id: number }>;
+    const rows = this.db.prepare(sql).all(...params) as Array<{
+      token_id: number;
+    }>;
     return rows.map((r) => r.token_id);
   }
 
