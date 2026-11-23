@@ -1,5 +1,6 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft } from "lucide-react";
+import { useState } from "react";
 import { getMemberDetail } from "../../lib/server/queries";
 
 export const Route = createFileRoute("/members/$memberId")({
@@ -31,6 +32,7 @@ export const Route = createFileRoute("/members/$memberId")({
 
 function MemberDetailPage() {
   const data = Route.useLoaderData();
+  const [chartMetric, setChartMetric] = useState<"buyers" | "mints">("buyers");
 
   if (!data) {
     return (
@@ -53,19 +55,30 @@ function MemberDetailPage() {
     .filter((r) => r.includeInPopularity)
     .reverse(); // chronological for trajectory chart
   const totalMints = collections.reduce((s, c) => s + c.totalMints, 0);
-  const avgRank =
+  const popMintsSum = popHistory.reduce((s, r) => s + r.mintCount, 0);
+  const popBuyersSum = popHistory.reduce((s, r) => s + r.uniqueBuyers, 0);
+  const avgBuyersRank =
+    popHistory.length > 0
+      ? (
+          popHistory.reduce((s, r) => s + r.uniqueBuyersRank, 0) /
+          popHistory.length
+        ).toFixed(1)
+      : "—";
+  const avgMintsRank =
     popHistory.length > 0
       ? (
           popHistory.reduce((s, r) => s + r.rank, 0) / popHistory.length
         ).toFixed(1)
       : "—";
-  const avgRel =
+  const avgBuyersRel =
     popHistory.length > 0
       ? (
-          popHistory.reduce((s, r) => s + r.relativeIndex, 0) /
+          popHistory.reduce((s, r) => s + r.uniqueBuyersRelativeIndex, 0) /
           popHistory.length
         ).toFixed(2) + "×"
       : "—";
+  const avgMintsPerBuyer =
+    popBuyersSum > 0 ? `${(popMintsSum / popBuyersSum).toFixed(2)}×` : "—";
 
   const maxRank = member.artistId === "artms" ? 5 : 24;
 
@@ -99,17 +112,26 @@ function MemberDetailPage() {
               <p className="text-sm text-zinc-400">{member.fullName}</p>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3.5 py-2.5">
-                <div className="text-[11px] text-zinc-400">Avg Rank</div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-xl border border-sky-500/40 bg-sky-500/10 px-3.5 py-2.5">
+                <div className="text-[11px] text-zinc-300">Avg Buyers Rank</div>
                 <div className="font-mono text-lg font-bold text-white">
-                  {avgRank === "—" ? "—" : `#${avgRank}`}
+                  {avgBuyersRank === "—" ? "—" : `#${avgBuyersRank}`}
+                </div>
+                <div className="font-mono text-[10px] text-zinc-400">
+                  Mints: {avgMintsRank === "—" ? "—" : `#${avgMintsRank}`}
                 </div>
               </div>
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3.5 py-2.5">
-                <div className="text-[11px] text-zinc-400">Rel. Index</div>
+                <div className="text-[11px] text-zinc-400">Buyers Index</div>
                 <div className="font-mono text-lg font-bold text-white">
-                  {avgRel}
+                  {avgBuyersRel}
+                </div>
+              </div>
+              <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3.5 py-2.5">
+                <div className="text-[11px] text-zinc-400">Mints / Buyer</div>
+                <div className="font-mono text-lg font-bold text-white">
+                  {avgMintsPerBuyer}
                 </div>
               </div>
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3.5 py-2.5">
@@ -126,15 +148,39 @@ function MemberDetailPage() {
       {/* Career Rank Trajectory Chart */}
       {popHistory.length >= 2 && (
         <section className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold text-white">
-                Rank Trajectory Across Popularity Rounds
+                Rank Trajectory Across Paid Popularity Rounds
               </h2>
               <p className="text-xs text-zinc-400">
                 Higher is better (#1 at top). White-ringed dots indicate
                 statistically flagged surges or drops.
               </p>
+            </div>
+            <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setChartMetric("buyers")}
+                className={`rounded-md px-2.5 py-1 font-medium transition ${
+                  chartMetric === "buyers"
+                    ? "bg-white text-zinc-950"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                Buyers Rank
+              </button>
+              <button
+                type="button"
+                onClick={() => setChartMetric("mints")}
+                className={`rounded-md px-2.5 py-1 font-medium transition ${
+                  chartMetric === "mints"
+                    ? "bg-white text-zinc-950"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                Mints Rank
+              </button>
             </div>
           </div>
           <div className="w-full overflow-x-auto">
@@ -168,10 +214,12 @@ function MemberDetailPage() {
               <path
                 d={popHistory
                   .map((r, i) => {
+                    const rankVal =
+                      chartMetric === "buyers" ? r.uniqueBuyersRank : r.rank;
                     const x =
                       52 + (i / Math.max(1, popHistory.length - 1)) * 676;
                     const y =
-                      20 + ((r.rank - 1) / Math.max(1, maxRank - 1)) * 150;
+                      20 + ((rankVal - 1) / Math.max(1, maxRank - 1)) * 150;
                     return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
                   })
                   .join(" ")}
@@ -183,8 +231,11 @@ function MemberDetailPage() {
               />
 
               {popHistory.map((r, i) => {
+                const rankVal =
+                  chartMetric === "buyers" ? r.uniqueBuyersRank : r.rank;
                 const x = 52 + (i / Math.max(1, popHistory.length - 1)) * 676;
-                const y = 20 + ((r.rank - 1) / Math.max(1, maxRank - 1)) * 150;
+                const y =
+                  20 + ((rankVal - 1) / Math.max(1, maxRank - 1)) * 150;
                 return (
                   <circle
                     key={r.roundSlug}
@@ -195,7 +246,7 @@ function MemberDetailPage() {
                     stroke={r.isAnomaly ? "#ffffff" : "#09090b"}
                     strokeWidth={2}
                   >
-                    <title>{`${r.title} (${r.startAt.slice(0, 10)}): #${r.rank}/${r.participatingMembers} (${r.relativeIndex.toFixed(2)}×, ${r.mintCount} mints)`}</title>
+                    <title>{`${r.title} (${r.startAt.slice(0, 10)}): Buyers #${r.uniqueBuyersRank} (${r.uniqueBuyers} buyers) · Mints #${r.rank} (${r.mintCount} mints, ${r.mintsPerBuyer.toFixed(1)}/w)`}</title>
                   </circle>
                 );
               })}
@@ -222,13 +273,14 @@ function MemberDetailPage() {
                       {c.objektClass} Class ({c.rounds} rounds)
                     </p>
                     <p className="font-mono text-lg font-bold text-white">
-                      #{c.avgRank}{" "}
+                      #{c.avgBuyersRank}{" "}
                       <span className="text-xs font-normal text-zinc-400">
-                        avg ({c.avgRelativeIndex.toFixed(2)}×)
+                        buyers avg (Mints #{c.avgRank})
                       </span>
                     </p>
                     <p className="font-mono text-[11px] text-zinc-500">
-                      {c.totalMints.toLocaleString()} mints
+                      {c.totalMints.toLocaleString()} mints ·{" "}
+                      {c.avgMintsPerBuyer.toFixed(2)}/buyer
                     </p>
                   </div>
                 ))}
@@ -297,10 +349,13 @@ function MemberDetailPage() {
                 <tr>
                   <th className="px-4 py-3">Round</th>
                   <th className="px-4 py-3">Date</th>
-                  <th className="px-4 py-3 text-right">Rank</th>
+                  <th className="px-4 py-3 text-right">Buyers Rank</th>
+                  <th className="px-4 py-3 text-right">Mints Rank</th>
+                  <th className="px-4 py-3 text-right">Buyers</th>
                   <th className="px-4 py-3 text-right">Mints</th>
-                  <th className="px-4 py-3 text-right">Share</th>
-                  <th className="px-4 py-3 text-right">Rel. Index</th>
+                  <th className="px-4 py-3 text-right">Mints/Buyer</th>
+                  <th className="px-4 py-3 text-right">Top Wallet</th>
+                  <th className="px-4 py-3 text-right">Buyers Index</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/70">
@@ -314,24 +369,50 @@ function MemberDetailPage() {
                       >
                         {r.title}
                       </Link>
+                      {!r.includeInPopularity && (
+                        <span className="ml-2 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                          {r.saleMechanic}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-zinc-400">
                       {r.startAt.slice(0, 10)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-semibold text-white">
-                      #{r.rank}{" "}
+                      #{r.uniqueBuyersRank}{" "}
                       <span className="text-zinc-500 font-normal">
                         /{r.participatingMembers}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-zinc-200 tabular-nums">
+                    <td className="px-4 py-3 text-right font-mono text-zinc-400">
+                      #{r.rank}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono font-semibold text-zinc-100 tabular-nums">
+                      {r.uniqueBuyers.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono text-zinc-300 tabular-nums">
                       {r.mintCount.toLocaleString()}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-zinc-400 tabular-nums">
-                      {r.sharePct.toFixed(1)}%
+                      {r.mintsPerBuyer.toFixed(1)}×
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono text-xs tabular-nums">
+                      {r.topBuyerSharePct !== null ? (
+                        <span
+                          className={
+                            r.topBuyerSharePct >= 35 && r.mintCount >= 5
+                              ? "font-semibold text-amber-300"
+                              : "text-zinc-400"
+                          }
+                        >
+                          {r.topBuyerSharePct.toFixed(0)}%
+                        </span>
+                      ) : (
+                        <span className="text-zinc-600">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-semibold text-zinc-200 tabular-nums">
-                      {r.relativeIndex.toFixed(2)}×
+                      {r.uniqueBuyersRelativeIndex.toFixed(2)}×
                     </td>
                   </tr>
                 ))}

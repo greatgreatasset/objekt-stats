@@ -21,6 +21,17 @@ export interface RawSpinRow {
   spunAt: string;
 }
 
+export interface RawTransferRow {
+  txHash: string;
+  logIndex: number;
+  tokenId: number;
+  chain: "polygon" | "abstract";
+  blockNumber: number;
+  transferredAt: string; // ISO UTC
+  fromAddr: string;
+  toAddr: string;
+}
+
 /**
  * Resumable local SQLite checkpoint store powered by Node 24's built-in `node:sqlite`.
  * Keeps raw per-token chain logs & immutable metadata locally so Cloudflare D1 only
@@ -68,6 +79,25 @@ export class IndexerStore {
 
       CREATE INDEX IF NOT EXISTS idx_raw_spins_token
         ON raw_spins (token_id);
+
+      CREATE TABLE IF NOT EXISTS raw_transfers (
+        tx_hash TEXT NOT NULL,
+        log_index INTEGER NOT NULL,
+        token_id INTEGER NOT NULL,
+        chain TEXT NOT NULL,
+        block_number INTEGER NOT NULL,
+        transferred_at TEXT NOT NULL,
+        from_addr TEXT NOT NULL,
+        to_addr TEXT NOT NULL,
+        PRIMARY KEY (tx_hash, log_index)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_raw_transfers_chain_block
+        ON raw_transfers (chain, block_number);
+      CREATE INDEX IF NOT EXISTS idx_raw_transfers_token
+        ON raw_transfers (token_id);
+      CREATE INDEX IF NOT EXISTS idx_raw_transfers_time
+        ON raw_transfers (transferred_at);
 
       CREATE TABLE IF NOT EXISTS token_metadata (
         token_id INTEGER PRIMARY KEY,
@@ -164,6 +194,119 @@ export class IndexerStore {
     return spins.length;
   }
 
+  insertTransfers(transfers: RawTransferRow[]): number {
+    if (transfers.length === 0) return 0;
+    const stmt = this.db.prepare(`
+      INSERT OR IGNORE INTO raw_transfers
+        (tx_hash, log_index, token_id, chain, block_number, transferred_at, from_addr, to_addr)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    this.db.exec("BEGIN");
+    try {
+      for (const t of transfers) {
+        stmt.run(
+          t.txHash,
+          t.logIndex,
+          t.tokenId,
+          t.chain,
+          t.blockNumber,
+          t.transferredAt,
+          t.fromAddr.toLowerCase(),
+          t.toAddr.toLowerCase(),
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+    return transfers.length;
+  }
+
+  getAllTransfers(): RawTransferRow[] {
+    const rows = this.db
+      .prepare(
+        `SELECT tx_hash, log_index, token_id, chain, block_number, transferred_at, from_addr, to_addr
+         FROM raw_transfers
+         ORDER BY transferred_at ASC, block_number ASC, log_index ASC`,
+      )
+      .all() as Array<{
+      tx_hash: string;
+      log_index: number;
+      token_id: number;
+      chain: "polygon" | "abstract";
+      block_number: number;
+      transferred_at: string;
+      from_addr: string;
+      to_addr: string;
+    }>;
+
+    return rows.map((r) => ({
+      txHash: r.tx_hash,
+      logIndex: r.log_index,
+      tokenId: r.token_id,
+      chain: r.chain,
+      blockNumber: r.block_number,
+      transferredAt: r.transferred_at,
+      fromAddr: r.from_addr,
+      toAddr: r.to_addr,
+    }));
+  }
+
+  /**
+   * Filters a candidate list of tokenIds down to those not yet in `token_metadata`
+   * or `missing_metadata`, preserving input priority order.
+   */
+  getUnresolvedTokenIdsFromList(tokenIds: number[], limit = 50_000): number[] {
+    if (tokenIds.length === 0) return [];
+    const unique = Array.from(new Set(tokenIds));
+    const resolvedSet = new Set<number>();
+
+    const chunkSize = 500;
+    for (let i = 0; i < unique.length; i += chunkSize) {
+      const slice = unique.slice(i, i + chunkSize);
+      const placeholders = slice.map(() => "?").join(",");
+      const metaRows = this.db
+        .prepare(`SELECT token_id FROM token_metadata WHERE token_id IN (${placeholders})`)
+        .all(...slice) as Array<{ token_id: number }>;
+      for (const r of metaRows) resolvedSet.add(r.token_id);
+
+      const missRows = this.db
+        .prepare(`SELECT token_id FROM missing_metadata WHERE token_id IN (${placeholders})`)
+        .all(...slice) as Array<{ token_id: number }>;
+      for (const r of missRows) resolvedSet.add(r.token_id);
+    }
+
+    const out: number[] = [];
+    for (const id of unique) {
+      if (!resolvedSet.has(id)) {
+        out.push(id);
+        if (out.length >= limit) break;
+      }
+    }
+    return out;
+  }
+
+  getUnresolvedTransferTokenIds(
+    limit: number,
+    order: "newest" | "oldest" = "newest",
+  ): number[] {
+    const dir = order === "newest" ? "DESC" : "ASC";
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT rt.token_id
+         FROM raw_transfers rt
+         LEFT JOIN token_metadata tm ON tm.token_id = rt.token_id
+         LEFT JOIN missing_metadata mm ON mm.token_id = rt.token_id
+         WHERE tm.token_id IS NULL AND mm.token_id IS NULL
+         ORDER BY rt.transferred_at ${dir}, rt.token_id ${dir}
+         LIMIT ?`,
+      )
+      .all(limit) as Array<{ token_id: number }>;
+    return rows.map((r) => r.token_id);
+  }
+
   upsertMetadataBatch(items: NormalizedTokenMetadata[]): void {
     if (items.length === 0) return;
     const now = new Date().toISOString();
@@ -239,13 +382,16 @@ export class IndexerStore {
     const spins = (
       this.db.prepare("SELECT COUNT(*) as c FROM raw_spins").get() as { c: number }
     ).c;
+    const transfers = (
+      this.db.prepare("SELECT COUNT(*) as c FROM raw_transfers").get() as { c: number }
+    ).c;
     const resolved = (
       this.db.prepare("SELECT COUNT(*) as c FROM token_metadata").get() as { c: number }
     ).c;
     const missing = (
       this.db.prepare("SELECT COUNT(*) as c FROM missing_metadata").get() as { c: number }
     ).c;
-    return { mints, spins, resolved, missing };
+    return { mints, spins, transfers, resolved, missing };
   }
 
   close(): void {

@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 import { loadCurationData } from "@objekt-stats/db/curation-loader";
 import {
   computeArtistSeriesStats,
+  computeMemberTradeRankings,
+  detectTradesFromTransfers,
+  makeTransferKey,
+  shortenAddress,
+  type P2PTransferEvent,
   type SaleRoundInput,
 } from "@objekt-stats/stats";
 import type { IndexerStore } from "./store.js";
@@ -153,7 +158,12 @@ export interface AggregateOutputSummary {
   dailyRowsCount: number;
   roundsCount: number;
   roundMemberStatRows: number;
+  confirmedTradesCount: number;
+  confirmedTradedObjekts: number;
+  directP2PTransfersCount: number;
+  tradeCollectionsCount: number;
   outFile: string;
+  tradesOutFile: string;
   snapshotFile: string;
 }
 
@@ -162,6 +172,7 @@ export function aggregateAndEmitSql(
   options: {
     dataRoot?: string;
     outFile?: string;
+    tradesOutFile?: string;
     snapshotFile?: string;
   } = {},
 ): AggregateOutputSummary {
@@ -169,6 +180,9 @@ export function aggregateAndEmitSql(
   const outFile =
     options.outFile ??
     resolve(process.cwd(), "packages/db/generated/sync-onchain.sql");
+  const tradesOutFile =
+    options.tradesOutFile ??
+    resolve(process.cwd(), "packages/db/generated/sync-trades.sql");
   const snapshotFile =
     options.snapshotFile ??
     resolve(process.cwd(), "packages/db/generated/snapshot-summary.json");
@@ -177,6 +191,7 @@ export function aggregateAndEmitSql(
   const trackedArtists = new Set(curation.artists.map((a) => a.id));
 
   const memberLookup = new Map<string, string>();
+  const memberInfoById = new Map<string, { name: string; hexColor: string; artistId: string }>();
   const artistMemberTotals = new Map<string, number>();
   for (const artist of curation.artists) {
     artistMemberTotals.set(artist.id, artist.members.length);
@@ -184,6 +199,11 @@ export function aggregateAndEmitSql(
       memberLookup.set(`${artist.id}:${normalizeMemberLookupKey(m.name)}`, m.id);
       memberLookup.set(`${artist.id}:${normalizeMemberLookupKey(m.cosmoName)}`, m.id);
       memberLookup.set(`${artist.id}:${normalizeMemberLookupKey(m.fullName)}`, m.id);
+      memberInfoById.set(m.id, {
+        name: m.name,
+        hexColor: m.hexColor,
+        artistId: artist.id,
+      });
     }
   }
 
@@ -269,7 +289,7 @@ export function aggregateAndEmitSql(
   const validSlugs = new Set(filteredCollections.map((c) => c.slug));
   const filteredDaily = dailyRows.filter((d) => validSlugs.has(d.collection_slug));
 
-  // 3. Group collections into Sale Rounds (curated YAML overrides + auto-detection)
+  // 3. Group collections into Sale Rounds + compute TRUE deduplicated unique buyers & top-wallet concentration
   interface RoundAccumulator {
     slug: string;
     artistId: string;
@@ -286,9 +306,12 @@ export function aggregateAndEmitSql(
     notes: string | null;
     collectionSlugs: string[];
     memberMints: Map<string, number>;
+    roundBuyers: Set<string>;
+    memberBuyerCounts: Map<string, Map<string, number>>; // memberId -> (wallet -> mintCount)
   }
 
   const rounds = new Map<string, RoundAccumulator>();
+  const colToRoundMember = new Map<string, { roundSlug: string; memberId: string }>();
 
   for (const col of filteredCollections) {
     const memberId =
@@ -348,6 +371,8 @@ export function aggregateAndEmitSql(
         notes: meta.notes,
         collectionSlugs: [],
         memberMints: new Map(),
+        roundBuyers: new Set(),
+        memberBuyerCounts: new Map(),
       };
       rounds.set(meta.slug, acc);
     }
@@ -357,8 +382,34 @@ export function aggregateAndEmitSql(
       memberId,
       (acc.memberMints.get(memberId) ?? 0) + col.total_mints,
     );
+    colToRoundMember.set(col.slug, { roundSlug: acc.slug, memberId });
     if (col.first_mint_at < acc.startAt) acc.startAt = col.first_mint_at;
     if (col.last_mint_at > acc.endAt) acc.endAt = col.last_mint_at;
+  }
+
+  // Single O(N) grouped scan to compute exact deduplicated unique buyers & max single-wallet count per round+member
+  const walletMintRows = store.db
+    .prepare(
+      `SELECT tm.slug AS slug, rm.minter AS minter, COUNT(*) AS cnt
+       FROM token_metadata tm
+       JOIN raw_mints rm ON rm.token_id = tm.token_id
+       WHERE tm.artist_id IN ('triples', 'artms')
+       GROUP BY tm.slug, rm.minter`,
+    )
+    .all() as Array<{ slug: string; minter: string; cnt: number }>;
+
+  for (const row of walletMintRows) {
+    const mapping = colToRoundMember.get(row.slug);
+    if (!mapping) continue;
+    const acc = rounds.get(mapping.roundSlug);
+    if (!acc) continue;
+    acc.roundBuyers.add(row.minter);
+    let mWallets = acc.memberBuyerCounts.get(mapping.memberId);
+    if (!mWallets) {
+      mWallets = new Map();
+      acc.memberBuyerCounts.set(mapping.memberId, mWallets);
+    }
+    mWallets.set(row.minter, (mWallets.get(row.minter) ?? 0) + row.cnt);
   }
 
   const validRounds = Array.from(rounds.values()).filter(
@@ -394,7 +445,22 @@ export function aggregateAndEmitSql(
         startAt: r.startAt,
         includeInPopularity: r.includeInPopularity,
         memberMints: Array.from(r.memberMints.entries()).map(
-          ([memberId, mintCount]) => ({ memberId, mintCount }),
+          ([memberId, mintCount]) => {
+            const walletMap = r.memberBuyerCounts.get(memberId);
+            const uniqueBuyers = walletMap ? walletMap.size : 0;
+            let topBuyerMints = 0;
+            if (walletMap) {
+              for (const c of walletMap.values()) {
+                if (c > topBuyerMints) topBuyerMints = c;
+              }
+            }
+            return {
+              memberId,
+              mintCount,
+              uniqueBuyers,
+              topBuyerMints,
+            };
+          },
         ),
       }));
 
@@ -443,7 +509,7 @@ export function aggregateAndEmitSql(
       0,
     );
     lines.push(
-      `INSERT OR REPLACE INTO sale_rounds (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, participating_members, include_in_popularity, is_auto_detected, notes) VALUES (${sqlStr(r.slug)}, ${sqlStr(r.artistId)}, ${sqlStr(r.title)}, ${sqlStr(r.season)}, ${sqlStr(r.objektClass)}, ${sqlStr(r.onOffline)}, ${sqlStr(r.saleMechanic)}, ${sqlStr(r.startAt)}, ${sqlStr(r.endAt)}, ${sqlNum(r.unitPriceUsd)}, ${totalMints}, ${r.memberMints.size}, ${sqlBool(r.includeInPopularity)}, ${sqlBool(r.isAutoDetected)}, ${sqlStr(r.notes)});`,
+      `INSERT OR REPLACE INTO sale_rounds (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, unique_buyers, participating_members, include_in_popularity, is_auto_detected, notes) VALUES (${sqlStr(r.slug)}, ${sqlStr(r.artistId)}, ${sqlStr(r.title)}, ${sqlStr(r.season)}, ${sqlStr(r.objektClass)}, ${sqlStr(r.onOffline)}, ${sqlStr(r.saleMechanic)}, ${sqlStr(r.startAt)}, ${sqlStr(r.endAt)}, ${sqlNum(r.unitPriceUsd)}, ${totalMints}, ${r.roundBuyers.size}, ${r.memberMints.size}, ${sqlBool(r.includeInPopularity)}, ${sqlBool(r.isAutoDetected)}, ${sqlStr(r.notes)});`,
     );
 
     for (const cSlug of r.collectionSlugs) {
@@ -456,7 +522,7 @@ export function aggregateAndEmitSql(
     for (const s of stats) {
       roundMemberStatRows++;
       lines.push(
-        `INSERT OR REPLACE INTO sale_round_member_stats (round_slug, member_id, mint_count, rank, share_pct, relative_index, z_score, rank_delta_prev, rolling5_rank, rolling10_rank, rolling5_relative_index, rolling10_relative_index, is_anomaly, anomaly_direction, anomaly_reason) VALUES (${sqlStr(s.roundSlug)}, ${sqlStr(s.memberId)}, ${s.mintCount}, ${s.rank}, ${s.sharePct}, ${s.relativeIndex}, ${s.zScore}, ${sqlNum(s.rankDeltaPrev)}, ${sqlNum(s.rolling5Rank)}, ${sqlNum(s.rolling10Rank)}, ${sqlNum(s.rolling5RelativeIndex)}, ${sqlNum(s.rolling10RelativeIndex)}, ${sqlBool(s.isAnomaly)}, ${sqlStr(s.anomalyDirection)}, ${sqlStr(s.anomalyReason)});`,
+        `INSERT OR REPLACE INTO sale_round_member_stats (round_slug, member_id, mint_count, unique_buyers, mints_per_buyer, top_buyer_share_pct, rank, unique_buyers_rank, share_pct, unique_buyers_share_pct, relative_index, unique_buyers_relative_index, z_score, rank_delta_prev, rolling5_rank, rolling10_rank, rolling5_relative_index, rolling10_relative_index, is_anomaly, anomaly_direction, anomaly_reason) VALUES (${sqlStr(s.roundSlug)}, ${sqlStr(s.memberId)}, ${s.mintCount}, ${s.uniqueBuyers}, ${s.mintsPerBuyer}, ${sqlNum(s.topBuyerSharePct)}, ${s.rank}, ${s.uniqueBuyersRank}, ${s.sharePct}, ${s.uniqueBuyersSharePct}, ${s.relativeIndex}, ${s.uniqueBuyersRelativeIndex}, ${s.zScore}, ${sqlNum(s.rankDeltaPrev)}, ${sqlNum(s.rolling5Rank)}, ${sqlNum(s.rolling10Rank)}, ${sqlNum(s.rolling5RelativeIndex)}, ${sqlNum(s.rolling10RelativeIndex)}, ${sqlBool(s.isAnomaly)}, ${sqlStr(s.anomalyDirection)}, ${sqlStr(s.anomalyReason)});`,
       );
     }
   }
@@ -491,7 +557,379 @@ export function aggregateAndEmitSql(
   mkdirSync(resolve(outFile, ".."), { recursive: true });
   writeFileSync(outFile, lines.join("\n") + "\n", "utf8");
 
-  // Also write compact JSON snapshot for Cloudflare R2 archival
+  // 6. Secondary User-to-User Trade Aggregation (STRICTLY isolated from raw_mints!)
+  const rawTransfers = store.getAllTransfers();
+  const detectedTrades = detectTradesFromTransfers(
+    rawTransfers.map((t) => ({
+      txHash: t.txHash,
+      logIndex: t.logIndex,
+      chain: t.chain,
+      blockNumber: t.blockNumber,
+      transferredAt: t.transferredAt,
+      from: t.fromAddr,
+      to: t.toAddr,
+      tokenId: t.tokenId,
+    })),
+  );
+
+  // Load metadata for all tokens referenced in raw_transfers in one indexed join
+  interface TokenMetaRow {
+    token_id: number;
+    slug: string;
+    collection_id: string;
+    artist_id: string;
+    raw_member: string;
+    season: string;
+    objekt_class: string;
+    collection_no: string;
+    on_offline: "online" | "offline";
+    image_url: string;
+    background_color: string;
+  }
+
+  const metaByToken = new Map<number, TokenMetaRow>();
+  if (detectedTrades.eligibleTransfers.length > 0) {
+    const metaRows = store.db
+      .prepare(
+        `SELECT DISTINCT
+           tm.token_id, tm.slug, tm.collection_id, tm.artist_id, tm.raw_member,
+           tm.season, tm.objekt_class, tm.collection_no, tm.on_offline,
+           tm.image_url, tm.background_color
+         FROM token_metadata tm
+         WHERE tm.token_id IN (SELECT DISTINCT token_id FROM raw_transfers)`,
+      )
+      .all() as unknown as TokenMetaRow[];
+    for (const row of metaRows) {
+      metaByToken.set(row.token_id, row);
+    }
+  }
+
+  interface ColTradeAcc {
+    meta: TokenMetaRow;
+    memberId: string | null;
+    tradedCount: number;
+    tradeSessions: number;
+    directTransferCount: number;
+    traders: Set<string>;
+    firstTradeAt: string | null;
+    lastTradeAt: string | null;
+  }
+
+  interface MemberTradeAcc {
+    memberId: string;
+    artistId: string;
+    tradedCount: number;
+    tradeSessions: number;
+    directTransferCount: number;
+    traders: Set<string>;
+    collections: Set<string>;
+    lastTradeAt: string | null;
+  }
+
+  interface DailyTradeAcc {
+    artistId: string;
+    tradeDate: string;
+    tradeSessions: number;
+    tradedObjekts: number;
+    directTransfers: number;
+    traders: Set<string>;
+  }
+
+  const colTradeMap = new Map<string, ColTradeAcc>();
+  const memberTradeMap = new Map<string, MemberTradeAcc>();
+  const dailyTradeMap = new Map<string, DailyTradeAcc>();
+
+  const ensureColAcc = (meta: TokenMetaRow): ColTradeAcc => {
+    let acc = colTradeMap.get(meta.slug);
+    if (!acc) {
+      const memberId =
+        memberLookup.get(
+          `${meta.artist_id}:${normalizeMemberLookupKey(meta.raw_member)}`,
+        ) ?? null;
+      acc = {
+        meta,
+        memberId,
+        tradedCount: 0,
+        tradeSessions: 0,
+        directTransferCount: 0,
+        traders: new Set(),
+        firstTradeAt: null,
+        lastTradeAt: null,
+      };
+      colTradeMap.set(meta.slug, acc);
+    }
+    return acc;
+  };
+
+  const ensureMemberAcc = (memberId: string, artistId: string): MemberTradeAcc => {
+    let acc = memberTradeMap.get(memberId);
+    if (!acc) {
+      acc = {
+        memberId,
+        artistId,
+        tradedCount: 0,
+        tradeSessions: 0,
+        directTransferCount: 0,
+        traders: new Set(),
+        collections: new Set(),
+        lastTradeAt: null,
+      };
+      memberTradeMap.set(memberId, acc);
+    }
+    return acc;
+  };
+
+  const ensureDailyAcc = (artistId: string, tradeDate: string): DailyTradeAcc => {
+    const key = `${artistId}|${tradeDate}`;
+    let acc = dailyTradeMap.get(key);
+    if (!acc) {
+      acc = {
+        artistId,
+        tradeDate,
+        tradeSessions: 0,
+        tradedObjekts: 0,
+        directTransfers: 0,
+        traders: new Set(),
+      };
+      dailyTradeMap.set(key, acc);
+    }
+    return acc;
+  };
+
+  // Count all eligible P2P direct transfers per collection/member/day
+  let directP2PTransfersCount = 0;
+  for (const t of detectedTrades.eligibleTransfers) {
+    directP2PTransfersCount++;
+    const meta = metaByToken.get(t.tokenId);
+    if (!meta || !trackedArtists.has(meta.artist_id as "triples" | "artms")) {
+      continue;
+    }
+    const isConfirmed = detectedTrades.tradedTransferKeys.has(
+      makeTransferKey(t.txHash, t.logIndex),
+    );
+    const colAcc = ensureColAcc(meta);
+    colAcc.directTransferCount++;
+    if (isConfirmed) {
+      colAcc.traders.add(t.from);
+      colAcc.traders.add(t.to);
+    }
+    if (colAcc.memberId) {
+      const mAcc = ensureMemberAcc(colAcc.memberId, meta.artist_id);
+      mAcc.directTransferCount++;
+    }
+    const dayAcc = ensureDailyAcc(meta.artist_id, t.transferredAt.slice(0, 10));
+    dayAcc.directTransfers++;
+  }
+
+  // Count confirmed reciprocal trades and build recent trade feed
+  let confirmedTradedObjekts = 0;
+  const recentTradeRows: Array<{
+    tradeId: string;
+    artistId: string;
+    chain: string;
+    tradedAt: string;
+    durationSeconds: number;
+    sideACount: number;
+    sideBCount: number;
+    walletAShort: string;
+    walletBShort: string;
+    sideASummary: string;
+    sideBSummary: string;
+  }> = [];
+
+  const summarizeLegs = (legs: readonly P2PTransferEvent[]) => {
+    const grouped = new Map<
+      string,
+      {
+        slug: string;
+        collectionId: string;
+        artistId: string;
+        memberId: string | null;
+        memberName: string;
+        hexColor: string;
+        imageUrl: string | null;
+        count: number;
+      }
+    >();
+    for (const leg of legs) {
+      const meta = metaByToken.get(leg.tokenId);
+      const slug = meta?.slug ?? `token-${leg.tokenId}`;
+      const existing = grouped.get(slug);
+      if (existing) {
+        existing.count++;
+        continue;
+      }
+      const memberId = meta
+        ? (memberLookup.get(
+            `${meta.artist_id}:${normalizeMemberLookupKey(meta.raw_member)}`,
+          ) ?? null)
+        : null;
+      const mInfo = memberId ? memberInfoById.get(memberId) : null;
+      grouped.set(slug, {
+        slug,
+        collectionId: meta?.collection_id ?? `Objekt #${leg.tokenId}`,
+        artistId: meta?.artist_id ?? "unknown",
+        memberId,
+        memberName: mInfo?.name ?? meta?.raw_member ?? "Unknown",
+        hexColor: mInfo?.hexColor ?? "#71717a",
+        imageUrl: meta?.image_url || null,
+        count: 1,
+      });
+    }
+    return JSON.stringify(Array.from(grouped.values()));
+  };
+
+  for (const trade of detectedTrades.trades) {
+    const touchedArtists = new Set<string>();
+    const touchedCols = new Set<string>();
+    const touchedMembers = new Set<string>();
+    const tradeDate = trade.completedAt.slice(0, 10);
+
+    for (const leg of trade.allLegs) {
+      const meta = metaByToken.get(leg.tokenId);
+      if (!meta || !trackedArtists.has(meta.artist_id as "triples" | "artms")) {
+        continue;
+      }
+      confirmedTradedObjekts++;
+      touchedArtists.add(meta.artist_id);
+
+      const colAcc = ensureColAcc(meta);
+      colAcc.tradedCount++;
+      colAcc.traders.add(leg.from);
+      colAcc.traders.add(leg.to);
+      if (!colAcc.firstTradeAt || leg.transferredAt < colAcc.firstTradeAt) {
+        colAcc.firstTradeAt = leg.transferredAt;
+      }
+      if (!colAcc.lastTradeAt || leg.transferredAt > colAcc.lastTradeAt) {
+        colAcc.lastTradeAt = leg.transferredAt;
+      }
+      if (!touchedCols.has(meta.slug)) {
+        colAcc.tradeSessions++;
+        touchedCols.add(meta.slug);
+      }
+
+      if (colAcc.memberId) {
+        const mAcc = ensureMemberAcc(colAcc.memberId, meta.artist_id);
+        mAcc.tradedCount++;
+        mAcc.traders.add(leg.from);
+        mAcc.traders.add(leg.to);
+        mAcc.collections.add(meta.slug);
+        if (!mAcc.lastTradeAt || leg.transferredAt > mAcc.lastTradeAt) {
+          mAcc.lastTradeAt = leg.transferredAt;
+        }
+        if (!touchedMembers.has(colAcc.memberId)) {
+          mAcc.tradeSessions++;
+          touchedMembers.add(colAcc.memberId);
+        }
+      }
+
+      const dayAcc = ensureDailyAcc(meta.artist_id, tradeDate);
+      dayAcc.tradedObjekts++;
+      dayAcc.traders.add(leg.from);
+      dayAcc.traders.add(leg.to);
+    }
+
+    if (touchedArtists.size > 0) {
+      const sideASummary = summarizeLegs(trade.sideALegs);
+      const sideBSummary = summarizeLegs(trade.sideBLegs);
+      for (const artistId of touchedArtists) {
+        const dayAcc = ensureDailyAcc(artistId, tradeDate);
+        dayAcc.tradeSessions++;
+        recentTradeRows.push({
+          tradeId: trade.tradeId,
+          artistId,
+          chain: trade.chain,
+          tradedAt: trade.completedAt,
+          durationSeconds: trade.durationSeconds,
+          sideACount: trade.sideALegs.length,
+          sideBCount: trade.sideBLegs.length,
+          walletAShort: shortenAddress(trade.walletA),
+          walletBShort: shortenAddress(trade.walletB),
+          sideASummary,
+          sideBSummary,
+        });
+      }
+    }
+  }
+
+  // Emit deterministic sync-trades.sql
+  const tradeLines: string[] = [
+    `-- Auto-generated secondary trade aggregates (${now})`,
+    "",
+    "DELETE FROM recent_trades;",
+    "DELETE FROM daily_trade_stats;",
+    "DELETE FROM member_trade_stats;",
+    "DELETE FROM collection_trade_stats;",
+    "",
+  ];
+
+  for (const col of colTradeMap.values()) {
+    tradeLines.push(
+      `INSERT OR REPLACE INTO collection_trade_stats (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, first_trade_at, last_trade_at, updated_at) VALUES (${sqlStr(col.meta.slug)}, ${sqlStr(col.meta.collection_id)}, ${sqlStr(col.meta.artist_id)}, ${sqlStr(col.memberId)}, ${sqlStr(col.meta.raw_member)}, ${sqlStr(col.meta.season)}, ${sqlStr(col.meta.objekt_class)}, ${sqlStr(col.meta.collection_no)}, ${sqlStr(col.meta.on_offline)}, ${sqlStr(col.meta.image_url)}, ${sqlStr(col.meta.background_color)}, ${col.tradedCount}, ${col.tradeSessions}, ${col.directTransferCount}, ${col.traders.size}, ${sqlStr(col.firstTradeAt)}, ${sqlStr(col.lastTradeAt)}, ${sqlStr(now)});`,
+    );
+  }
+
+  tradeLines.push("");
+  for (const artist of curation.artists) {
+    const artistMemberAccs = artist.members.map((m) => {
+      const existing = memberTradeMap.get(m.id);
+      return (
+        existing ?? {
+          memberId: m.id,
+          artistId: artist.id,
+          tradedCount: 0,
+          tradeSessions: 0,
+          directTransferCount: 0,
+          traders: new Set<string>(),
+          collections: new Set<string>(),
+          lastTradeAt: null,
+        }
+      );
+    });
+    const hasAnyArtistTrades = artistMemberAccs.some(
+      (a) => a.tradedCount > 0 || a.directTransferCount > 0,
+    );
+    if (!hasAnyArtistTrades) continue;
+
+    const ranked = computeMemberTradeRankings(
+      artistMemberAccs.map((a) => ({
+        memberId: a.memberId,
+        tradedCount: a.tradedCount,
+      })),
+    );
+    const rankByMember = new Map(ranked.map((r) => [r.memberId, r]));
+
+    for (const a of artistMemberAccs) {
+      const r = rankByMember.get(a.memberId);
+      if (!r) continue;
+      tradeLines.push(
+        `INSERT OR REPLACE INTO member_trade_stats (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, last_trade_at, updated_at) VALUES (${sqlStr(a.memberId)}, ${sqlStr(a.artistId)}, ${a.tradedCount}, ${a.tradeSessions}, ${a.directTransferCount}, ${a.traders.size}, ${a.collections.size}, ${r.tradeRank}, ${r.tradeSharePct}, ${r.tradeRelativeIndex}, ${sqlStr(a.lastTradeAt)}, ${sqlStr(now)});`,
+      );
+    }
+  }
+
+  tradeLines.push("");
+  for (const d of dailyTradeMap.values()) {
+    tradeLines.push(
+      `INSERT OR REPLACE INTO daily_trade_stats (artist_id, trade_date, trade_sessions, traded_objekts, direct_transfers, unique_traders) VALUES (${sqlStr(d.artistId)}, ${sqlStr(d.tradeDate)}, ${d.tradeSessions}, ${d.tradedObjekts}, ${d.directTransfers}, ${d.traders.size});`,
+    );
+  }
+
+  tradeLines.push("");
+  const perArtistRecentCount = new Map<string, number>();
+  recentTradeRows.sort((a, b) => b.tradedAt.localeCompare(a.tradedAt));
+  for (const rt of recentTradeRows) {
+    const count = perArtistRecentCount.get(rt.artistId) ?? 0;
+    if (count >= 100) continue;
+    perArtistRecentCount.set(rt.artistId, count + 1);
+    tradeLines.push(
+      `INSERT OR REPLACE INTO recent_trades (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary) VALUES (${sqlStr(rt.tradeId)}, ${sqlStr(rt.artistId)}, ${sqlStr(rt.chain)}, ${sqlStr(rt.tradedAt)}, ${rt.durationSeconds}, ${rt.sideACount}, ${rt.sideBCount}, ${sqlStr(rt.walletAShort)}, ${sqlStr(rt.walletBShort)}, ${sqlStr(rt.sideASummary)}, ${sqlStr(rt.sideBSummary)});`,
+    );
+  }
+
+  mkdirSync(resolve(tradesOutFile, ".."), { recursive: true });
+  writeFileSync(tradesOutFile, tradeLines.join("\n") + "\n", "utf8");
+
   const snapshot = {
     generatedAt: now,
     chains: chainSummaries,
@@ -500,6 +938,10 @@ export function aggregateAndEmitSql(
       dailyRows: filteredDaily.length,
       rounds: validRounds.length,
       roundMemberStatRows,
+      confirmedTradesCount: detectedTrades.trades.length,
+      confirmedTradedObjekts,
+      directP2PTransfersCount,
+      tradeCollectionsCount: colTradeMap.size,
     },
     rounds: validRounds
       .sort((a, b) => b.startAt.localeCompare(a.startAt))
@@ -513,6 +955,7 @@ export function aggregateAndEmitSql(
         startAt: r.startAt,
         endAt: r.endAt,
         totalMints: Array.from(r.memberMints.values()).reduce((a, b) => a + b, 0),
+        uniqueBuyers: r.roundBuyers.size,
         participatingMembers: r.memberMints.size,
         includeInPopularity: r.includeInPopularity,
         stats: statsByRoundSlug.get(r.slug) ?? [],
@@ -525,7 +968,12 @@ export function aggregateAndEmitSql(
     dailyRowsCount: filteredDaily.length,
     roundsCount: validRounds.length,
     roundMemberStatRows,
+    confirmedTradesCount: detectedTrades.trades.length,
+    confirmedTradedObjekts,
+    directP2PTransfersCount,
+    tradeCollectionsCount: colTradeMap.size,
     outFile,
+    tradesOutFile,
     snapshotFile,
   };
 }

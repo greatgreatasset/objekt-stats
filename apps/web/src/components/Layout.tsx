@@ -1,5 +1,12 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { BarChart3, Calendar, Compass, Layers, Users } from "lucide-react";
+import {
+  ArrowLeftRight,
+  BarChart3,
+  Calendar,
+  Compass,
+  Layers,
+  Users,
+} from "lucide-react";
 import type { ReactNode } from "react";
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -84,6 +91,13 @@ export function Layout({ children }: { children: ReactNode }) {
               active={location.pathname === "/rounds"}
               icon={<Layers className="h-3.5 w-3.5" />}
               label="Sale Rounds"
+            />
+            <NavLink
+              to="/trades"
+              search={artistQuery}
+              active={location.pathname === "/trades"}
+              icon={<ArrowLeftRight className="h-3.5 w-3.5" />}
+              label="Most Traded"
             />
             <NavLink
               to="/members"

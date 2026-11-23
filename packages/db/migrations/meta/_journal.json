@@ -15,6 +15,20 @@
       "when": 1795424520237,
       "tag": "0001_mean_bill_hollister",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795435084707,
+      "tag": "0002_white_moon_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1795436475586,
+      "tag": "0003_fair_chimera",
+      "breakpoints": true
     }
   ]
 }

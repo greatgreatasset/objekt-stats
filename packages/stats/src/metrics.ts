@@ -1,6 +1,8 @@
 export interface MemberMintInput {
   memberId: string;
   mintCount: number;
+  uniqueBuyers?: number;
+  topBuyerMints?: number;
 }
 
 export interface SaleRoundInput {
@@ -15,9 +17,15 @@ export interface ComputedRoundMemberStat {
   roundSlug: string;
   memberId: string;
   mintCount: number;
+  uniqueBuyers: number;
+  mintsPerBuyer: number;
+  topBuyerSharePct: number | null;
   rank: number;
+  uniqueBuyersRank: number;
   sharePct: number;
+  uniqueBuyersSharePct: number;
   relativeIndex: number;
+  uniqueBuyersRelativeIndex: number;
   zScore: number;
   rankDeltaPrev: number | null;
   rolling5Rank: number | null;
@@ -71,29 +79,59 @@ function roundTo(value: number, decimals: number): number {
 }
 
 /**
- * Computes single-round normalized metrics for each participating member:
- * - Standard competition ranking (1, 2, 2, 4 on ties)
- * - sharePct (0..100)
- * - relativeIndex (1.0 = exact mean regardless of roster size S4..S24 or sub-unit size)
+ * Computes single-round normalized metrics for each participating member across BOTH
+ * Total Mints and Unique Buyers (separating broad fanbase popularity from whale spend):
+ * - Standard competition ranking (1, 2, 2, 4 on ties) for both mints and unique buyers
+ * - sharePct & uniqueBuyersSharePct (0..100)
+ * - relativeIndex & uniqueBuyersRelativeIndex (1.0 = exact round average)
+ * - mintsPerBuyer & topBuyerSharePct (whale concentration indicator)
  * - zScore (standard deviations from round mean)
  */
-export function computeSingleRoundMetrics(round: SaleRoundInput): ComputedRoundMemberStat[] {
-  const entries = [...round.memberMints];
+export function computeSingleRoundMetrics(
+  round: SaleRoundInput,
+): ComputedRoundMemberStat[] {
+  const entries = round.memberMints.map((e) => ({
+    memberId: e.memberId,
+    mintCount: e.mintCount,
+    uniqueBuyers: e.uniqueBuyers ?? e.mintCount,
+    topBuyerMints: e.topBuyerMints,
+  }));
   const n = entries.length;
   if (n === 0) return [];
 
   const totalMints = entries.reduce((sum, e) => sum + e.mintCount, 0);
   const mean = totalMints / n;
-
   const variance =
     entries.reduce((sum, e) => sum + (e.mintCount - mean) ** 2, 0) / n;
   const stdDev = Math.sqrt(variance);
 
-  // Sort descending by mintCount, deterministic tie-break by memberId
+  const totalUniqueSum = entries.reduce((sum, e) => sum + e.uniqueBuyers, 0);
+  const meanUnique = totalUniqueSum / n;
+
+  // Competition rank for unique buyers
+  const byUnique = [...entries].sort((a, b) =>
+    b.uniqueBuyers !== a.uniqueBuyers
+      ? b.uniqueBuyers - a.uniqueBuyers
+      : b.mintCount !== a.mintCount
+        ? b.mintCount - a.mintCount
+        : a.memberId.localeCompare(b.memberId),
+  );
+  const uniqueRankByMember = new Map<string, number>();
+  let uRank = 1;
+  byUnique.forEach((entry, idx) => {
+    if (idx > 0 && entry.uniqueBuyers < byUnique[idx - 1]!.uniqueBuyers) {
+      uRank = idx + 1;
+    }
+    uniqueRankByMember.set(entry.memberId, uRank);
+  });
+
+  // Sort descending by mintCount, tie-break by uniqueBuyers DESC, then memberId
   entries.sort((a, b) =>
     b.mintCount !== a.mintCount
       ? b.mintCount - a.mintCount
-      : a.memberId.localeCompare(b.memberId),
+      : b.uniqueBuyers !== a.uniqueBuyers
+        ? b.uniqueBuyers - a.uniqueBuyers
+        : a.memberId.localeCompare(b.memberId),
   );
 
   let currentRank = 1;
@@ -106,13 +144,30 @@ export function computeSingleRoundMetrics(round: SaleRoundInput): ComputedRoundM
     const relativeIndex = mean > 0 ? entry.mintCount / mean : 1;
     const zScore = stdDev > 0 ? (entry.mintCount - mean) / stdDev : 0;
 
+    const uniqueBuyersSharePct =
+      totalUniqueSum > 0 ? (entry.uniqueBuyers / totalUniqueSum) * 100 : 0;
+    const uniqueBuyersRelativeIndex =
+      meanUnique > 0 ? entry.uniqueBuyers / meanUnique : 1;
+    const mintsPerBuyer =
+      entry.uniqueBuyers > 0 ? entry.mintCount / entry.uniqueBuyers : 1;
+    const topBuyerSharePct =
+      entry.topBuyerMints !== undefined && entry.mintCount > 0
+        ? roundTo((entry.topBuyerMints / entry.mintCount) * 100, 2)
+        : null;
+
     return {
       roundSlug: round.slug,
       memberId: entry.memberId,
       mintCount: entry.mintCount,
+      uniqueBuyers: entry.uniqueBuyers,
+      mintsPerBuyer: roundTo(mintsPerBuyer, 2),
+      topBuyerSharePct,
       rank: currentRank,
+      uniqueBuyersRank: uniqueRankByMember.get(entry.memberId) ?? currentRank,
       sharePct: roundTo(sharePct, 4),
+      uniqueBuyersSharePct: roundTo(uniqueBuyersSharePct, 4),
       relativeIndex: roundTo(relativeIndex, 4),
+      uniqueBuyersRelativeIndex: roundTo(uniqueBuyersRelativeIndex, 4),
       zScore: roundTo(zScore, 4),
       rankDeltaPrev: null,
       rolling5Rank: null,
@@ -136,7 +191,7 @@ function meanOf(values: number[]): number {
  * rank deltas, and automated surge/drop anomaly detection across an artist's rounds.
  *
  * Only rounds with `includeInPopularity === true` feed into rolling baselines and
- * previous-round deltas (so random packs don't distort member popularity baselines).
+ * previous-round deltas (so random packs & rewards don't distort member baselines).
  */
 export function computeArtistSeriesStats(
   rounds: SaleRoundInput[],
@@ -169,18 +224,16 @@ export function computeArtistSeriesStats(
       if (round.includeInPopularity) {
         const prev = history[history.length - 1];
         if (prev) {
-          // Positive delta means rank improved (e.g. #5 -> #2 = +3)
           stat.rankDeltaPrev = prev.rank - stat.rank;
         }
 
-        // Compare current round against PRIOR trailing baseline (before pushing current)
         if (history.length >= 2) {
           const prior5 = history.slice(-5);
           const baselineRank = meanOf(prior5.map((h) => h.rank));
           const baselineRelIdx = meanOf(prior5.map((h) => h.relativeIndex));
           const baselineZ = meanOf(prior5.map((h) => h.zScore));
 
-          const rankShift = baselineRank - stat.rank; // positive = better rank (surge)
+          const rankShift = baselineRank - stat.rank;
           const relIdxPctShift =
             baselineRelIdx > 0
               ? (stat.relativeIndex - baselineRelIdx) / baselineRelIdx
@@ -206,7 +259,6 @@ export function computeArtistSeriesStats(
 
           if (reasons.length > 0) {
             stat.isAnomaly = true;
-            // Use relativeIndex shift as primary sign, fall back to rankShift
             const netSignal =
               Math.abs(relIdxPctShift) >= 0.05 ? relIdxPctShift : rankShift;
             stat.anomalyDirection = netSignal >= 0 ? "surge" : "drop";
@@ -247,10 +299,6 @@ export function computeArtistSeriesStats(
 
 const MS_PER_DAY = 86_400_000;
 
-/**
- * Finds real-world events occurring near a sale round (`[-daysBefore, +daysAfter]`),
- * prioritizing member-specific events before group-wide milestones.
- */
 export function correlateEventsForMemberRound(
   roundStartAt: string,
   artistId: string,
@@ -277,7 +325,6 @@ export function correlateEventsForMemberRound(
       : evStartMs;
     if (Number.isNaN(evStartMs)) continue;
 
-    // Closest point of event interval relative to roundStartAt
     let effectiveMs = evStartMs;
     if (roundMs >= evStartMs && roundMs <= evEndMs) {
       effectiveMs = roundMs;
@@ -295,7 +342,6 @@ export function correlateEventsForMemberRound(
     }
   }
 
-  // Prefer member-specific events first, then closest in time
   matches.sort((a, b) => {
     if (a.scope !== b.scope) return a.scope === "member" ? -1 : 1;
     return Math.abs(a.dayOffset) - Math.abs(b.dayOffset);
@@ -359,10 +405,7 @@ export function computeMemberCareerSummary(
     allTimeAvgRank: roundTo(avgRank, 2),
     bestRank: Math.min(...ranks),
     worstRank: Math.max(...ranks),
-    avgRelativeIndex: roundTo(
-      meanOf(mine.map((s) => s.relativeIndex)),
-      4,
-    ),
+    avgRelativeIndex: roundTo(meanOf(mine.map((s) => s.relativeIndex)), 4),
     rankVolatility: roundTo(Math.sqrt(variance), 2),
     anomalyCount: mine.filter((s) => s.isAnomaly).length,
   };

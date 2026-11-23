@@ -69,11 +69,15 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .from(saleRounds)
       .where(eq(saleRounds.artistId, artistId))
       .orderBy(desc(saleRounds.startAt), desc(saleRounds.totalMints))
-      .limit(100);
+      .limit(150);
 
-    const roundTopSellers = new Map<
+    const roundTopByMints = new Map<
       string,
       { memberId: string; mintCount: number; sharePct: number }
+    >();
+    const roundTopByBuyers = new Map<
+      string,
+      { memberId: string; uniqueBuyers: number; sharePct: number }
     >();
 
     if (roundList.length > 0) {
@@ -83,6 +87,10 @@ export const getArtistOverview = createServerFn({ method: "GET" })
           memberId: saleRoundMemberStats.memberId,
           mintCount: saleRoundMemberStats.mintCount,
           sharePct: saleRoundMemberStats.sharePct,
+          rank: saleRoundMemberStats.rank,
+          uniqueBuyers: saleRoundMemberStats.uniqueBuyers,
+          uniqueBuyersSharePct: saleRoundMemberStats.uniqueBuyersSharePct,
+          uniqueBuyersRank: saleRoundMemberStats.uniqueBuyersRank,
         })
         .from(saleRoundMemberStats)
         .innerJoin(
@@ -90,16 +98,29 @@ export const getArtistOverview = createServerFn({ method: "GET" })
           eq(saleRounds.slug, saleRoundMemberStats.roundSlug),
         )
         .where(
-          sql`${saleRounds.artistId} = ${artistId} AND ${saleRoundMemberStats.rank} = 1`,
+          sql`${saleRounds.artistId} = ${artistId} AND (${saleRoundMemberStats.rank} = 1 OR ${saleRoundMemberStats.uniqueBuyersRank} = 1)`,
         );
 
       for (const row of rank1Rows) {
-        if (!roundTopSellers.has(row.roundSlug)) {
-          roundTopSellers.set(row.roundSlug, {
-            memberId: row.memberId,
-            mintCount: row.mintCount,
-            sharePct: row.sharePct,
-          });
+        if (row.rank === 1) {
+          const prev = roundTopByMints.get(row.roundSlug);
+          if (!prev || row.mintCount > prev.mintCount) {
+            roundTopByMints.set(row.roundSlug, {
+              memberId: row.memberId,
+              mintCount: row.mintCount,
+              sharePct: row.sharePct,
+            });
+          }
+        }
+        if (row.uniqueBuyersRank === 1) {
+          const prev = roundTopByBuyers.get(row.roundSlug);
+          if (!prev || row.uniqueBuyers > prev.uniqueBuyers) {
+            roundTopByBuyers.set(row.roundSlug, {
+              memberId: row.memberId,
+              uniqueBuyers: row.uniqueBuyers,
+              sharePct: row.uniqueBuyersSharePct,
+            });
+          }
         }
       }
     }
@@ -108,9 +129,13 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .select({
         memberId: saleRoundMemberStats.memberId,
         totalMints: sql<number>`coalesce(sum(${saleRoundMemberStats.mintCount}), 0)`,
+        totalUniqueBuyers: sql<number>`coalesce(sum(${saleRoundMemberStats.uniqueBuyers}), 0)`,
         roundsCount: sql<number>`count(*)`,
         avgRank: sql<number>`avg(${saleRoundMemberStats.rank})`,
+        avgBuyersRank: sql<number>`avg(${saleRoundMemberStats.uniqueBuyersRank})`,
         avgRelativeIndex: sql<number>`avg(${saleRoundMemberStats.relativeIndex})`,
+        avgBuyersRelativeIndex: sql<number>`avg(${saleRoundMemberStats.uniqueBuyersRelativeIndex})`,
+        avgMintsPerBuyer: sql<number>`avg(${saleRoundMemberStats.mintsPerBuyer})`,
         bestRank: sql<number>`min(${saleRoundMemberStats.rank})`,
       })
       .from(saleRoundMemberStats)
@@ -128,11 +153,22 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         r.memberId,
         {
           totalMints: Number(r.totalMints),
+          totalUniqueBuyers: Number(r.totalUniqueBuyers),
           roundsCount: Number(r.roundsCount),
           avgRank: r.avgRank !== null ? Number(r.avgRank.toFixed(2)) : null,
+          avgBuyersRank:
+            r.avgBuyersRank !== null ? Number(r.avgBuyersRank.toFixed(2)) : null,
           avgRelativeIndex:
             r.avgRelativeIndex !== null
               ? Number(r.avgRelativeIndex.toFixed(3))
+              : null,
+          avgBuyersRelativeIndex:
+            r.avgBuyersRelativeIndex !== null
+              ? Number(r.avgBuyersRelativeIndex.toFixed(3))
+              : null,
+          avgMintsPerBuyer:
+            r.avgMintsPerBuyer !== null
+              ? Number(r.avgMintsPerBuyer.toFixed(2))
               : null,
           bestRank: r.bestRank !== null ? Number(r.bestRank) : null,
         },
@@ -145,7 +181,6 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       members: e.memberIds,
     }));
 
-    // Flagged statistical anomalies across popularity rounds
     const anomalyRows = await db
       .select({
         roundSlug: saleRoundMemberStats.roundSlug,
@@ -156,6 +191,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         rankDeltaPrev: saleRoundMemberStats.rankDeltaPrev,
         relativeIndex: saleRoundMemberStats.relativeIndex,
         mintCount: saleRoundMemberStats.mintCount,
+        uniqueBuyers: saleRoundMemberStats.uniqueBuyers,
         anomalyDirection: saleRoundMemberStats.anomalyDirection,
         anomalyReason: saleRoundMemberStats.anomalyReason,
       })
@@ -197,7 +233,6 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       };
     });
 
-    // Biggest rank movers in the most recent popularity round that has deltas
     const recentMoversRows = await db
       .select({
         roundSlug: saleRoundMemberStats.roundSlug,
@@ -280,7 +315,8 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       })),
       rounds: roundList.map((r) => ({
         ...r,
-        topSeller: roundTopSellers.get(r.slug) ?? null,
+        topSeller: roundTopByMints.get(r.slug) ?? null,
+        topSellerByBuyers: roundTopByBuyers.get(r.slug) ?? null,
       })),
       anomalies,
       movers: {
@@ -325,7 +361,10 @@ export const getRoundDetail = createServerFn({ method: "GET" })
       .select()
       .from(saleRoundMemberStats)
       .where(eq(saleRoundMemberStats.roundSlug, slug))
-      .orderBy(asc(saleRoundMemberStats.rank), desc(saleRoundMemberStats.mintCount));
+      .orderBy(
+        asc(saleRoundMemberStats.rank),
+        desc(saleRoundMemberStats.uniqueBuyers),
+      );
 
     const linkedCols = await db
       .select({
@@ -334,6 +373,7 @@ export const getRoundDetail = createServerFn({ method: "GET" })
         memberId: collections.memberId,
         collectionNo: collections.collectionNo,
         totalMints: collections.totalMints,
+        uniqueMinters: collections.uniqueMinters,
         spunCount: collections.spunCount,
         frontImageUrl: collections.frontImageUrl,
         backgroundColor: collections.backgroundColor,
@@ -439,9 +479,16 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
               roundSlug: saleRoundMemberStats.roundSlug,
               memberId: saleRoundMemberStats.memberId,
               mintCount: saleRoundMemberStats.mintCount,
+              uniqueBuyers: saleRoundMemberStats.uniqueBuyers,
+              mintsPerBuyer: saleRoundMemberStats.mintsPerBuyer,
+              topBuyerSharePct: saleRoundMemberStats.topBuyerSharePct,
               rank: saleRoundMemberStats.rank,
+              uniqueBuyersRank: saleRoundMemberStats.uniqueBuyersRank,
               sharePct: saleRoundMemberStats.sharePct,
+              uniqueBuyersSharePct: saleRoundMemberStats.uniqueBuyersSharePct,
               relativeIndex: saleRoundMemberStats.relativeIndex,
+              uniqueBuyersRelativeIndex:
+                saleRoundMemberStats.uniqueBuyersRelativeIndex,
               zScore: saleRoundMemberStats.zScore,
               rankDeltaPrev: saleRoundMemberStats.rankDeltaPrev,
               rolling5Rank: saleRoundMemberStats.rolling5Rank,
@@ -481,9 +528,14 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
       );
       const latest = rows[rows.length - 1];
       const totalMints = rows.reduce((acc, r) => acc + r.mintCount, 0);
+      const totalUniqueBuyers = rows.reduce((acc, r) => acc + r.uniqueBuyers, 0);
       const avgRankVal =
         rows.length > 0
           ? rows.reduce((acc, r) => acc + r.rank, 0) / rows.length
+          : null;
+      const avgBuyersRankVal =
+        rows.length > 0
+          ? rows.reduce((acc, r) => acc + r.uniqueBuyersRank, 0) / rows.length
           : null;
       const rankVolatility =
         rows.length >= 2 && avgRankVal !== null
@@ -502,6 +554,19 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
               ).toFixed(3),
             )
           : null;
+      const avgBuyersRelativeIndex =
+        rows.length > 0
+          ? Number(
+              (
+                rows.reduce((acc, r) => acc + r.uniqueBuyersRelativeIndex, 0) /
+                rows.length
+              ).toFixed(3),
+            )
+          : null;
+      const avgMintsPerBuyer =
+        totalUniqueBuyers > 0
+          ? Number((totalMints / totalUniqueBuyers).toFixed(2))
+          : null;
       const bestRank =
         rows.length > 0 ? Math.min(...rows.map((r) => r.rank)) : null;
 
@@ -509,21 +574,30 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
         ...m,
         roundsCount: rows.length,
         totalMints,
+        totalUniqueBuyers,
+        avgMintsPerBuyer,
         latestRank: latest?.rank ?? null,
+        latestBuyersRank: latest?.uniqueBuyersRank ?? null,
         latestRankDelta: latest?.rankDeltaPrev ?? null,
         rolling5Rank:
           latest?.rolling5Rank ??
           (avgRankVal !== null ? Number(avgRankVal.toFixed(2)) : null),
         avgRank: avgRankVal !== null ? Number(avgRankVal.toFixed(2)) : null,
+        avgBuyersRank:
+          avgBuyersRankVal !== null ? Number(avgBuyersRankVal.toFixed(2)) : null,
         avgRelativeIndex,
+        avgBuyersRelativeIndex,
         bestRank,
         rankVolatility,
         anomaliesCount: rows.filter((r) => r.isAnomaly).length,
         history: rows.map((r) => ({
           roundSlug: r.roundSlug,
           rank: r.rank,
+          uniqueBuyersRank: r.uniqueBuyersRank,
           relativeIndex: r.relativeIndex,
+          uniqueBuyersRelativeIndex: r.uniqueBuyersRelativeIndex,
           mintCount: r.mintCount,
+          uniqueBuyers: r.uniqueBuyers,
           sharePct: r.sharePct,
           isAnomaly: r.isAnomaly,
           anomalyDirection: r.anomalyDirection,
@@ -539,6 +613,7 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
         season: r.season,
         startAt: r.startAt,
         totalMints: r.totalMints,
+        uniqueBuyers: r.uniqueBuyers,
         participatingMembers: r.participatingMembers,
       })),
       events: eventsWithMembers.map((e) => ({
@@ -576,9 +651,16 @@ export const getMemberDetail = createServerFn({ method: "GET" })
         participatingMembers: saleRounds.participatingMembers,
         roundTotalMints: saleRounds.totalMints,
         mintCount: saleRoundMemberStats.mintCount,
+        uniqueBuyers: saleRoundMemberStats.uniqueBuyers,
+        mintsPerBuyer: saleRoundMemberStats.mintsPerBuyer,
+        topBuyerSharePct: saleRoundMemberStats.topBuyerSharePct,
         rank: saleRoundMemberStats.rank,
+        uniqueBuyersRank: saleRoundMemberStats.uniqueBuyersRank,
         sharePct: saleRoundMemberStats.sharePct,
+        uniqueBuyersSharePct: saleRoundMemberStats.uniqueBuyersSharePct,
         relativeIndex: saleRoundMemberStats.relativeIndex,
+        uniqueBuyersRelativeIndex:
+          saleRoundMemberStats.uniqueBuyersRelativeIndex,
         zScore: saleRoundMemberStats.zScore,
         rankDeltaPrev: saleRoundMemberStats.rankDeltaPrev,
         rolling5Rank: saleRoundMemberStats.rolling5Rank,
@@ -594,10 +676,17 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       .where(eq(saleRoundMemberStats.memberId, memberId))
       .orderBy(desc(saleRounds.startAt));
 
-    // Class performance breakdown (First vs Double vs Premier vs Physical)
     const classMap = new Map<
       string,
-      { objektClass: string; rounds: number; totalMints: number; rankSum: number; relSum: number }
+      {
+        objektClass: string;
+        rounds: number;
+        totalMints: number;
+        uniqueBuyersSum: number;
+        rankSum: number;
+        buyersRankSum: number;
+        relSum: number;
+      }
     >();
     for (const r of roundHistory) {
       if (!r.includeInPopularity) continue;
@@ -605,12 +694,16 @@ export const getMemberDetail = createServerFn({ method: "GET" })
         objektClass: r.objektClass,
         rounds: 0,
         totalMints: 0,
+        uniqueBuyersSum: 0,
         rankSum: 0,
+        buyersRankSum: 0,
         relSum: 0,
       };
       prev.rounds++;
       prev.totalMints += r.mintCount;
+      prev.uniqueBuyersSum += r.uniqueBuyers;
       prev.rankSum += r.rank;
+      prev.buyersRankSum += r.uniqueBuyersRank;
       prev.relSum += r.relativeIndex;
       classMap.set(r.objektClass, prev);
     }
@@ -620,7 +713,12 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       rounds: c.rounds,
       totalMints: c.totalMints,
       avgRank: Number((c.rankSum / c.rounds).toFixed(2)),
+      avgBuyersRank: Number((c.buyersRankSum / c.rounds).toFixed(2)),
       avgRelativeIndex: Number((c.relSum / c.rounds).toFixed(2)),
+      avgMintsPerBuyer:
+        c.uniqueBuyersSum > 0
+          ? Number((c.totalMints / c.uniqueBuyersSum).toFixed(2))
+          : 1,
     }));
 
     const memberCollections = await db
@@ -700,6 +798,7 @@ export const getEventsWithImpact = createServerFn({ method: "GET" })
         season: saleRounds.season,
         startAt: saleRounds.startAt,
         totalMints: saleRounds.totalMints,
+        uniqueBuyers: saleRounds.uniqueBuyers,
         includeInPopularity: saleRounds.includeInPopularity,
       })
       .from(saleRounds)

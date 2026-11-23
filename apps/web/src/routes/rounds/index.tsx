@@ -16,11 +16,13 @@ function RoundsPage() {
   const data = Route.useLoaderData();
   const { artist } = Route.useSearch();
   const [filter, setFilter] = useState<
-    "all" | "popularity" | "First" | "Double" | "physical" | "reward"
-  >("all");
+    "popularity" | "all" | "First" | "Double" | "physical" | "reward"
+  >("popularity");
   const [seasonFilter, setSeasonFilter] = useState<string>("all");
   const [query, setQuery] = useState("");
-  const [sortBy, setSortBy] = useState<"date" | "mints" | "members">("mints");
+  const [sortBy, setSortBy] = useState<"buyers" | "mints" | "date" | "members">(
+    "buyers",
+  );
 
   const artistName = data.artist?.name ?? (artist === "artms" ? "ARTMS" : "tripleS");
   const memberById = new Map(data.members.map((m) => [m.id, m]));
@@ -50,6 +52,7 @@ function RoundsPage() {
         return true;
       })
       .sort((a, b) => {
+        if (sortBy === "buyers") return b.uniqueBuyers - a.uniqueBuyers || b.totalMints - a.totalMints;
         if (sortBy === "mints") return b.totalMints - a.totalMints;
         if (sortBy === "members") return b.participatingMembers - a.participatingMembers;
         return b.startAt.localeCompare(a.startAt);
@@ -63,9 +66,9 @@ function RoundsPage() {
           {artistName} Sale Rounds
         </h1>
         <p className="text-sm text-zinc-400">
-          Every indexed COSMO Objekt drop grouped into comparable rounds. Click
-          any round for member-by-member charts, share indices, and card
-          previews.
+          Defaults to <strong className="text-zinc-200">Paid Public Sales</strong>{" "}
+          (member-selectable shop drops). Switch tabs to inspect SCO grid
+          rewards, Welcome drops, or Physical QR scans.
         </p>
       </div>
 
@@ -100,12 +103,15 @@ function RoundsPage() {
           <select
             value={sortBy}
             onChange={(e) =>
-              setSortBy(e.target.value as "date" | "mints" | "members")
+              setSortBy(
+                e.target.value as "buyers" | "mints" | "date" | "members",
+              )
             }
             aria-label="Sort sale rounds"
             className="rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
           >
-            <option value="mints">Sort: Highest Volume</option>
+            <option value="buyers">Sort: Most Unique Buyers</option>
+            <option value="mints">Sort: Highest Mint Volume</option>
             <option value="date">Sort: Most Recent</option>
             <option value="members">Sort: Most Members</option>
           </select>
@@ -114,15 +120,15 @@ function RoundsPage() {
         <div className="flex flex-wrap gap-1.5">
           {(
             [
-              ["all", `All (${data.rounds.length})`],
               [
                 "popularity",
-                `Popularity-Tracked (${data.rounds.filter((r) => r.includeInPopularity).length})`,
+                `Paid Public Sales (${data.rounds.filter((r) => r.includeInPopularity).length})`,
               ],
+              ["all", `All Indexed (${data.rounds.length})`],
               ["First", "First (FCO)"],
               ["Double", "Double (DCO)"],
               ["physical", "Physical (A)"],
-              ["reward", "Rewards / Welcome"],
+              ["reward", "Rewards / SCO / Welcome"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -159,17 +165,25 @@ function RoundsPage() {
                 <th className="px-4 py-3">Round</th>
                 <th className="px-4 py-3">Class</th>
                 <th className="px-4 py-3">Mechanic</th>
-                <th className="px-4 py-3">#1 Seller</th>
+                <th className="px-4 py-3">#1 by Unique Buyers</th>
                 <th className="px-4 py-3">Window</th>
                 <th className="px-4 py-3 text-right">Members</th>
+                <th className="px-4 py-3 text-right">Unique Buyers</th>
                 <th className="px-4 py-3 text-right">Total Mints</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/70">
               {filtered.map((r) => {
-                const topMember = r.topSeller
+                const topBuyerMember = r.topSellerByBuyers
+                  ? memberById.get(r.topSellerByBuyers.memberId)
+                  : null;
+                const topMintMember = r.topSeller
                   ? memberById.get(r.topSeller.memberId)
                   : null;
+                const leaderDiffers =
+                  topBuyerMember &&
+                  topMintMember &&
+                  topBuyerMember.id !== topMintMember.id;
                 return (
                   <tr
                     key={r.slug}
@@ -202,18 +216,27 @@ function RoundsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-xs">
-                      {topMember && r.topSeller ? (
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="h-2.5 w-2.5 rounded-full"
-                            style={{ backgroundColor: topMember.hexColor }}
-                          />
-                          <span className="font-medium text-zinc-100">
-                            {topMember.name}
-                          </span>
-                          <span className="font-mono text-zinc-500">
-                            {r.topSeller.sharePct.toFixed(1)}%
-                          </span>
+                      {topBuyerMember && r.topSellerByBuyers ? (
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="h-2.5 w-2.5 rounded-full"
+                              style={{
+                                backgroundColor: topBuyerMember.hexColor,
+                              }}
+                            />
+                            <span className="font-medium text-zinc-100">
+                              {topBuyerMember.name}
+                            </span>
+                            <span className="font-mono text-zinc-500">
+                              {r.topSellerByBuyers.uniqueBuyers.toLocaleString()}
+                            </span>
+                          </div>
+                          {leaderDiffers && topMintMember && (
+                            <div className="font-mono text-[10px] text-amber-300/90">
+                              Mints #1: {topMintMember.name}
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <span className="text-zinc-500">—</span>
@@ -226,6 +249,9 @@ function RoundsPage() {
                       {r.participatingMembers}
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-semibold text-white tabular-nums">
+                      {r.uniqueBuyers.toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono text-xs text-zinc-300 tabular-nums">
                       {r.totalMints.toLocaleString()}
                     </td>
                   </tr>

@@ -6,6 +6,7 @@ export interface TrendChartRound {
   season: string;
   startAt: string;
   totalMints: number;
+  uniqueBuyers: number;
   participatingMembers: number;
 }
 
@@ -15,11 +16,15 @@ export interface TrendChartMember {
   name: string;
   hexColor: string;
   avgRelativeIndex: number | null;
+  avgBuyersRelativeIndex: number | null;
   history: Array<{
     roundSlug: string;
     rank: number;
+    uniqueBuyersRank: number;
     relativeIndex: number;
+    uniqueBuyersRelativeIndex: number;
     mintCount: number;
+    uniqueBuyers: number;
     sharePct: number;
     isAnomaly: boolean;
     anomalyDirection: string | null;
@@ -33,6 +38,8 @@ export interface TrendChartEvent {
   title: string;
 }
 
+type ChartMode = "buyersRank" | "mintsRank" | "relativeIndex";
+
 export function TrendChart({
   rounds,
   members,
@@ -44,12 +51,16 @@ export function TrendChart({
   events: TrendChartEvent[];
   artistId: string;
 }) {
-  const [mode, setMode] = useState<"rank" | "relativeIndex">("rank");
+  const [mode, setMode] = useState<ChartMode>("buyersRank");
   const [showEvents, setShowEvents] = useState(true);
   const [hoveredRoundIdx, setHoveredRoundIdx] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>(() =>
     [...members]
-      .sort((a, b) => (b.avgRelativeIndex ?? 0) - (a.avgRelativeIndex ?? 0))
+      .sort(
+        (a, b) =>
+          (b.avgBuyersRelativeIndex ?? b.avgRelativeIndex ?? 0) -
+          (a.avgBuyersRelativeIndex ?? a.avgRelativeIndex ?? 0),
+      )
       .slice(0, artistId === "artms" ? 5 : 6)
       .map((m) => m.id),
   );
@@ -64,6 +75,7 @@ export function TrendChart({
   );
   const roundIdxBySlug = new Map(rounds.map((r, i) => [r.slug, i]));
   const selectedMembers = members.filter((m) => selectedIds.includes(m.id));
+  const isRankMode = mode === "buyersRank" || mode === "mintsRank";
 
   const toggleMember = (id: string) => {
     setSelectedIds((prev) =>
@@ -80,14 +92,15 @@ export function TrendChart({
       setSelectedIds([]);
       return;
     }
-    const sorted = [...members].sort(
-      (a, b) => (b.avgRelativeIndex ?? 0) - (a.avgRelativeIndex ?? 0),
+    const sorted = [...members].sort((a, b) =>
+      mode === "buyersRank"
+        ? (b.avgBuyersRelativeIndex ?? 0) - (a.avgBuyersRelativeIndex ?? 0)
+        : (b.avgRelativeIndex ?? 0) - (a.avgRelativeIndex ?? 0),
     );
     const count = preset === "top10" ? 10 : preset === "all5" ? 5 : 6;
     setSelectedIds(sorted.slice(0, count).map((m) => m.id));
   };
 
-  // Chart layout constants
   const W = 860;
   const H = 310;
   const padL = 52;
@@ -101,17 +114,14 @@ export function TrendChart({
     padL + (rounds.length > 1 ? (idx / (rounds.length - 1)) * plotW : plotW / 2);
 
   const yForValue = (val: number) => {
-    if (mode === "rank") {
-      // Rank #1 at top, maxRank at bottom
+    if (isRankMode) {
       const clamped = Math.max(1, Math.min(maxRank, val));
       return padT + ((clamped - 1) / Math.max(1, maxRank - 1)) * plotH;
     }
-    // Relative index: 2.2x at top, 0.2x at bottom
     const clamped = Math.max(0.2, Math.min(2.2, val));
     return padT + ((2.2 - clamped) / 2.0) * plotH;
   };
 
-  // Map events that fall inside the displayed rounds' date window onto the X axis
   const firstMs = Date.parse(rounds[0]!.startAt.slice(0, 10) + "T00:00:00Z");
   const lastMs = Date.parse(
     rounds[rounds.length - 1]!.startAt.slice(0, 10) + "T00:00:00Z",
@@ -128,12 +138,11 @@ export function TrendChart({
           .filter((x): x is NonNullable<typeof x> => x !== null)
       : [];
 
-  const yTicks =
-    mode === "rank"
-      ? artistId === "artms"
-        ? [1, 2, 3, 4, 5]
-        : [1, 6, 12, 18, 24]
-      : [2.0, 1.5, 1.0, 0.5];
+  const yTicks = isRankMode
+    ? artistId === "artms"
+      ? [1, 2, 3, 4, 5]
+      : [1, 6, 12, 18, 24]
+    : [2.0, 1.5, 1.0, 0.5];
 
   const hoveredRound =
     hoveredRoundIdx !== null ? rounds[hoveredRoundIdx] ?? null : null;
@@ -145,7 +154,11 @@ export function TrendChart({
             return h ? { member: m, stat: h } : null;
           })
           .filter((x): x is NonNullable<typeof x> => x !== null)
-          .sort((a, b) => a.stat.rank - b.stat.rank)
+          .sort((a, b) =>
+            mode === "buyersRank"
+              ? a.stat.uniqueBuyersRank - b.stat.uniqueBuyersRank
+              : a.stat.rank - b.stat.rank,
+          )
       : [];
 
   return (
@@ -153,13 +166,16 @@ export function TrendChart({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold text-white">
-            {mode === "rank"
-              ? `Member Rank Bump Chart (#1 – #${maxRank})`
-              : "Relative Share Index Trajectory (1.00× = Average)"}
+            {mode === "buyersRank"
+              ? `Unique Buyers Rank Bump Chart (#1 – #${maxRank})`
+              : mode === "mintsRank"
+                ? `Total Mints Rank Bump Chart (#1 – #${maxRank})`
+                : "Relative Share Index Trajectory (1.00× = Average)"}
           </h2>
           <p className="text-xs text-zinc-400">
-            Hover any round column to compare exact placements. Select up to 10
-            members below.
+            {mode === "buyersRank"
+              ? "Ranks members by distinct wallets buying each round — eliminates whale skew."
+              : "Hover any round column to compare exact placements. Select up to 10 members."}
           </p>
         </div>
 
@@ -167,14 +183,25 @@ export function TrendChart({
           <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5 text-xs">
             <button
               type="button"
-              onClick={() => setMode("rank")}
+              onClick={() => setMode("buyersRank")}
               className={`rounded-md px-2.5 py-1 font-medium transition ${
-                mode === "rank"
+                mode === "buyersRank"
                   ? "bg-white text-zinc-950"
                   : "text-zinc-400 hover:text-zinc-200"
               }`}
             >
-              Rank Bump
+              Unique Buyers
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("mintsRank")}
+              className={`rounded-md px-2.5 py-1 font-medium transition ${
+                mode === "mintsRank"
+                  ? "bg-white text-zinc-950"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              Total Mints
             </button>
             <button
               type="button"
@@ -185,7 +212,7 @@ export function TrendChart({
                   : "text-zinc-400 hover:text-zinc-200"
               }`}
             >
-              Relative Index
+              Rel. Index
             </button>
           </div>
 
@@ -266,7 +293,6 @@ export function TrendChart({
           aria-label="Member popularity trajectory chart"
           onMouseLeave={() => setHoveredRoundIdx(null)}
         >
-          {/* Horizontal grid lines */}
           {yTicks.map((tick) => {
             const y = yForValue(tick);
             const isAvg = mode === "relativeIndex" && tick === 1.0;
@@ -289,13 +315,12 @@ export function TrendChart({
                   fontSize={10}
                   fontFamily="monospace"
                 >
-                  {mode === "rank" ? `#${tick}` : `${tick.toFixed(1)}×`}
+                  {isRankMode ? `#${tick}` : `${tick.toFixed(1)}×`}
                 </text>
               </g>
             );
           })}
 
-          {/* Vertical real-world event overlay lines */}
           {eventPins.map((pin) => (
             <g key={pin.id}>
               <line
@@ -314,7 +339,6 @@ export function TrendChart({
             </g>
           ))}
 
-          {/* Hover vertical guide */}
           {hoveredRoundIdx !== null && (
             <line
               x1={xForRound(hoveredRoundIdx)}
@@ -327,17 +351,18 @@ export function TrendChart({
             />
           )}
 
-          {/* Member trajectories */}
           {selectedMembers.map((m) => {
             const pts = m.history
               .map((h) => {
                 const idx = roundIdxBySlug.get(h.roundSlug);
                 if (idx === undefined) return null;
-                return {
-                  x: xForRound(idx),
-                  y: yForValue(mode === "rank" ? h.rank : h.relativeIndex),
-                  h,
-                };
+                const val =
+                  mode === "buyersRank"
+                    ? h.uniqueBuyersRank
+                    : mode === "mintsRank"
+                      ? h.rank
+                      : h.relativeIndex;
+                return { x: xForRound(idx), y: yForValue(val), h };
               })
               .filter((p): p is NonNullable<typeof p> => p !== null);
 
@@ -369,14 +394,13 @@ export function TrendChart({
                     stroke={p.h.isAnomaly ? "#ffffff" : "#09090b"}
                     strokeWidth={p.h.isAnomaly ? 2 : 1.5}
                   >
-                    <title>{`${m.name} — ${p.h.roundSlug}: #${p.h.rank} (${p.h.relativeIndex.toFixed(2)}×, ${p.h.mintCount} mints)`}</title>
+                    <title>{`${m.name} — ${p.h.roundSlug}: #${p.h.uniqueBuyersRank} buyers (${p.h.uniqueBuyers} wallets) | #${p.h.rank} mints (${p.h.mintCount} mints)`}</title>
                   </circle>
                 ))}
               </g>
             );
           })}
 
-          {/* Invisible column hit zones for smooth hovering */}
           {rounds.map((r, i) => {
             const x = xForRound(i);
             const colW = rounds.length > 1 ? plotW / (rounds.length - 1) : plotW;
@@ -393,7 +417,6 @@ export function TrendChart({
             );
           })}
 
-          {/* X-axis round labels */}
           {rounds.map((r, i) => {
             const maxLabels = 9;
             if (
@@ -432,13 +455,13 @@ export function TrendChart({
         </svg>
       </div>
 
-      {/* Live Hover Inspection Strip */}
       {hoveredRound && hoveredEntries.length > 0 && (
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/90 p-3.5 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
             <span className="font-semibold text-white">{hoveredRound.title}</span>
             <span className="font-mono text-zinc-400">
               {hoveredRound.startAt.slice(0, 10)} •{" "}
+              {hoveredRound.uniqueBuyers.toLocaleString()} buyers •{" "}
               {hoveredRound.totalMints.toLocaleString()} mints
             </span>
           </div>
@@ -452,10 +475,12 @@ export function TrendChart({
                   className="h-2 w-2 rounded-full"
                   style={{ backgroundColor: member.hexColor }}
                 />
-                <span className="text-zinc-400">#{stat.rank}</span>
+                <span className="text-zinc-400">
+                  #{mode === "buyersRank" ? stat.uniqueBuyersRank : stat.rank}
+                </span>
                 <span>{member.name}</span>
                 <span className="text-zinc-500">
-                  ({stat.relativeIndex.toFixed(2)}× / {stat.mintCount})
+                  ({stat.uniqueBuyers} buyers / {stat.mintCount} mints)
                 </span>
               </span>
             ))}

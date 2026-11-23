@@ -12,6 +12,7 @@ import {
   Trophy,
   Users,
 } from "lucide-react";
+import { useState } from "react";
 
 export interface OverviewData {
   artist: {
@@ -30,9 +31,13 @@ export interface OverviewData {
     revealDate: string;
     stats: {
       totalMints: number;
+      totalUniqueBuyers: number;
       roundsCount: number;
       avgRank: number | null;
+      avgBuyersRank: number | null;
       avgRelativeIndex: number | null;
+      avgBuyersRelativeIndex: number | null;
+      avgMintsPerBuyer: number | null;
       bestRank: number | null;
     } | null;
   }>;
@@ -44,11 +49,17 @@ export interface OverviewData {
     saleMechanic: string;
     startAt: string;
     totalMints: number;
+    uniqueBuyers: number;
     participatingMembers: number;
     includeInPopularity: boolean;
     topSeller: {
       memberId: string;
       mintCount: number;
+      sharePct: number;
+    } | null;
+    topSellerByBuyers: {
+      memberId: string;
+      uniqueBuyers: number;
       sharePct: number;
     } | null;
   }>;
@@ -64,6 +75,7 @@ export interface OverviewData {
     rankDeltaPrev: number | null;
     relativeIndex: number;
     mintCount: number;
+    uniqueBuyers: number;
     anomalyDirection: string | null;
     anomalyReason: string | null;
     nearestEvent: {
@@ -138,6 +150,7 @@ export function OverviewView({
   data: OverviewData;
   artistSlug: "triples" | "artms";
 }) {
+  const [boardMetric, setBoardMetric] = useState<"buyers" | "mints">("buyers");
   const isArtms = artistSlug === "artms";
   const accent = data.artist?.accentColor ?? (isArtms ? "#ED0090" : "#22AEFF");
   const memberById = new Map(data.members.map((m) => [m.id, m]));
@@ -145,13 +158,19 @@ export function OverviewView({
 
   const rankedMembers = [...data.members]
     .filter((m) => m.stats && m.stats.totalMints > 0)
-    .sort(
-      (a, b) =>
-        (b.stats?.avgRelativeIndex ?? 0) - (a.stats?.avgRelativeIndex ?? 0),
+    .sort((a, b) =>
+      boardMetric === "buyers"
+        ? (b.stats?.avgBuyersRelativeIndex ?? 0) -
+          (a.stats?.avgBuyersRelativeIndex ?? 0)
+        : (b.stats?.avgRelativeIndex ?? 0) - (a.stats?.avgRelativeIndex ?? 0),
     );
   const maxRelIdx = Math.max(
-    1.5,
-    ...rankedMembers.map((m) => m.stats?.avgRelativeIndex ?? 1),
+    1.4,
+    ...rankedMembers.map((m) =>
+      boardMetric === "buyers"
+        ? (m.stats?.avgBuyersRelativeIndex ?? 1)
+        : (m.stats?.avgRelativeIndex ?? 1),
+    ),
   );
 
   const featuredRounds = data.rounds
@@ -202,9 +221,10 @@ export function OverviewView({
 
             <p className="text-sm leading-relaxed text-zinc-400 sm:text-base">
               Tracking Modhaus COSMO Objekt releases across Polygon (2022–2025)
-              and Abstract (2025–present). Compare member rank trajectories,
-              roster-normalized demand shares, rolling averages, and correlate
-              surges or drops with real-world milestones.
+              and Abstract (2025–present). Separate{" "}
+              <strong className="text-zinc-200">unique purchasers</strong> from
+              whale spend, compare member rank trajectories, and correlate
+              demand shifts with real-world events.
             </p>
           </div>
 
@@ -239,9 +259,9 @@ export function OverviewView({
         />
         <KpiCard
           icon={<Layers className="h-4 w-4 text-zinc-400" />}
-          label="Indexed Sale Rounds"
-          value={data.totals.roundCount.toLocaleString()}
-          subtext={`${data.totals.popularityRoundCount} popularity-ranked rounds`}
+          label="Paid Sale Rounds"
+          value={data.totals.popularityRoundCount.toLocaleString()}
+          subtext={`${data.totals.roundCount.toLocaleString()} total incl. physical & SCO`}
         />
         <KpiCard
           icon={<Activity className="h-4 w-4 text-zinc-400" />}
@@ -265,28 +285,50 @@ export function OverviewView({
       {rankedMembers.length > 0 ? (
         <section className="grid gap-6 lg:grid-cols-5">
           <div className="lg:col-span-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
-            <div className="flex items-end justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h2 className="text-base font-semibold text-white flex items-center gap-2">
                   <Trophy className="h-4 w-4 text-amber-400" />
-                  Demand Index Leaderboard (Popularity Rounds)
+                  Demand Index Leaderboard
                 </h2>
                 <p className="text-xs text-zinc-400">
-                  Average Relative Share Index (1.00× = exact round average).
+                  {boardMetric === "buyers"
+                    ? "Ranked by Unique Purchasers Relative Index (1.00× = average fanbase breadth)."
+                    : "Ranked by Total Mints Relative Index (1.00× = average total volume)."}
                 </p>
               </div>
-              <Link
-                to="/members"
-                search={searchParam}
-                className="text-xs font-medium text-zinc-400 hover:text-white"
-              >
-                Bump Chart →
-              </Link>
+              <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setBoardMetric("buyers")}
+                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                    boardMetric === "buyers"
+                      ? "bg-white text-zinc-950"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Unique Buyers
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBoardMetric("mints")}
+                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                    boardMetric === "mints"
+                      ? "bg-white text-zinc-950"
+                      : "text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  Total Mints
+                </button>
+              </div>
             </div>
 
             <div className="space-y-2.5">
               {rankedMembers.slice(0, 10).map((m, i) => {
-                const rel = m.stats?.avgRelativeIndex ?? 1;
+                const rel =
+                  boardMetric === "buyers"
+                    ? (m.stats?.avgBuyersRelativeIndex ?? 1)
+                    : (m.stats?.avgRelativeIndex ?? 1);
                 const widthPct = Math.max(8, Math.min(100, (rel / maxRelIdx) * 100));
                 return (
                   <Link
@@ -313,8 +355,15 @@ export function OverviewView({
                       </div>
                       <div className="flex items-center gap-3 font-mono tabular-nums">
                         <span className="text-zinc-400">
-                          {m.stats?.totalMints.toLocaleString()} mints
+                          {boardMetric === "buyers"
+                            ? `${(m.stats?.totalUniqueBuyers ?? 0).toLocaleString()} buyers`
+                            : `${(m.stats?.totalMints ?? 0).toLocaleString()} mints`}
                         </span>
+                        {m.stats?.avgMintsPerBuyer && (
+                          <span className="hidden sm:inline text-[11px] text-zinc-500">
+                            {m.stats.avgMintsPerBuyer.toFixed(1)}/w
+                          </span>
+                        )}
                         <span className="w-12 text-right font-semibold text-white">
                           {rel.toFixed(2)}×
                         </span>
@@ -339,10 +388,10 @@ export function OverviewView({
             <div className="flex items-end justify-between">
               <div>
                 <h2 className="text-base font-semibold text-white">
-                  Recent Sale Rounds
+                  Paid Sale Rounds
                 </h2>
                 <p className="text-xs text-zinc-400">
-                  Click any round for full member breakdown.
+                  Click any round to compare Unique Buyers vs. Total Mints.
                 </p>
               </div>
               <Link
@@ -356,9 +405,16 @@ export function OverviewView({
 
             <div className="space-y-2.5">
               {displayRounds.map((r) => {
-                const topMember = r.topSeller
+                const topBuyerMember = r.topSellerByBuyers
+                  ? memberById.get(r.topSellerByBuyers.memberId)
+                  : null;
+                const topMintMember = r.topSeller
                   ? memberById.get(r.topSeller.memberId)
                   : null;
+                const leader =
+                  boardMetric === "buyers"
+                    ? topBuyerMember ?? topMintMember
+                    : topMintMember;
                 return (
                   <Link
                     key={r.slug}
@@ -372,29 +428,32 @@ export function OverviewView({
                           {r.title}
                         </p>
                         <p className="font-mono text-[11px] text-zinc-500">
-                          {r.startAt.slice(0, 10)} • {r.participatingMembers}{" "}
-                          members
+                          {r.startAt.slice(0, 10)} •{" "}
+                          {r.uniqueBuyers.toLocaleString()} buyers •{" "}
+                          {r.totalMints.toLocaleString()} mints
                         </p>
                       </div>
-                      <span className="font-mono text-xs font-semibold text-zinc-200 tabular-nums">
-                        {r.totalMints.toLocaleString()}
-                      </span>
                     </div>
-                    {topMember && r.topSeller && (
+                    {leader && (
                       <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-400">
                         <span className="inline-flex items-center gap-1.5">
-                          <span className="text-amber-400 font-mono">#1</span>
+                          <span className="text-amber-400 font-mono">
+                            #1 {boardMetric === "buyers" ? "Buyers" : "Mints"}
+                          </span>
                           <span
                             className="h-2 w-2 rounded-full"
-                            style={{ backgroundColor: topMember.hexColor }}
+                            style={{ backgroundColor: leader.hexColor }}
                           />
                           <span className="text-zinc-200 font-medium">
-                            {topMember.name}
+                            {leader.name}
                           </span>
                         </span>
                         <span className="font-mono tabular-nums">
-                          {r.topSeller.mintCount.toLocaleString()} (
-                          {r.topSeller.sharePct.toFixed(1)}%)
+                          {boardMetric === "buyers" && r.topSellerByBuyers
+                            ? `${r.topSellerByBuyers.uniqueBuyers.toLocaleString()} wallets`
+                            : r.topSeller
+                              ? `${r.topSeller.mintCount.toLocaleString()} (${r.topSeller.sharePct.toFixed(1)}%)`
+                              : ""}
                         </span>
                       </div>
                     )}
@@ -426,30 +485,27 @@ export function OverviewView({
         data.movers.risers.length > 0 ||
         data.movers.fallers.length > 0) && (
         <section className="grid gap-6 lg:grid-cols-2">
-          {/* Biggest Movers */}
           {(data.movers.risers.length > 0 || data.movers.fallers.length > 0) && (
             <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
-              <div className="flex items-end justify-between gap-2">
-                <div>
-                  <h2 className="text-base font-semibold text-white">
-                    Biggest Rank Movers
-                  </h2>
-                  <p className="text-xs text-zinc-400">
-                    Rank jumps &amp; drops in{" "}
-                    {data.movers.roundSlug ? (
-                      <Link
-                        to="/rounds/$slug"
-                        params={{ slug: data.movers.roundSlug }}
-                        className="text-zinc-200 underline decoration-zinc-600 hover:text-white"
-                      >
-                        {data.movers.roundTitle}
-                      </Link>
-                    ) : (
-                      "latest round"
-                    )}
-                    .
-                  </p>
-                </div>
+              <div>
+                <h2 className="text-base font-semibold text-white">
+                  Biggest Rank Movers
+                </h2>
+                <p className="text-xs text-zinc-400">
+                  Rank jumps &amp; drops in{" "}
+                  {data.movers.roundSlug ? (
+                    <Link
+                      to="/rounds/$slug"
+                      params={{ slug: data.movers.roundSlug }}
+                      className="text-zinc-200 underline decoration-zinc-600 hover:text-white"
+                    >
+                      {data.movers.roundTitle}
+                    </Link>
+                  ) : (
+                    "latest round"
+                  )}
+                  .
+                </p>
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
@@ -510,7 +566,6 @@ export function OverviewView({
             </div>
           )}
 
-          {/* Flagged Anomalies */}
           {data.anomalies.length > 0 && (
             <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
               <div>
@@ -541,7 +596,7 @@ export function OverviewView({
                         />
                         {a.memberName}
                         <span className="font-mono text-zinc-500">
-                          #{a.rank} ({a.relativeIndex.toFixed(2)}×)
+                          #{a.rank} ({a.uniqueBuyers} buyers)
                         </span>
                       </Link>
                       <span
@@ -587,8 +642,8 @@ export function OverviewView({
               {isArtms ? "ARTMS Members" : "tripleS S1–S24 Roster"}
             </h2>
             <p className="text-xs text-zinc-400">
-              Click any member to inspect their round history, FCO vs. DCO
-              split, and indexed Objekts.
+              Click any member to inspect their round history, unique buyer
+              breadth, and indexed Objekts.
             </p>
           </div>
           <Link
@@ -630,11 +685,12 @@ export function OverviewView({
               </div>
               <div className="mt-2 flex items-center justify-between font-mono text-[10px] text-zinc-500">
                 <span>{m.revealDate}</span>
-                {m.stats?.avgRank !== null && m.stats?.avgRank !== undefined && (
-                  <span className="text-zinc-300">
-                    avg #{m.stats.avgRank.toFixed(1)}
-                  </span>
-                )}
+                {m.stats?.avgBuyersRank !== null &&
+                  m.stats?.avgBuyersRank !== undefined && (
+                    <span className="text-zinc-300">
+                      avg #{m.stats.avgBuyersRank.toFixed(1)}
+                    </span>
+                  )}
               </div>
             </Link>
           ))}

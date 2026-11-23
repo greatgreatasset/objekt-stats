@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { detectTradesFromTransfers } from "@objekt-stats/stats";
 import { stringify as stringifyYaml } from "yaml";
 import { aggregateAndEmitSql, inferAutoRoundGroup } from "./aggregate.js";
 import { getAbstractHeadBlock, syncAbstractLogs } from "./chains/abstract.js";
@@ -32,20 +33,19 @@ function parseArgs(argv: string[]) {
   return { command: positional[0] ?? "status", args };
 }
 
-async function resolveMetadataBatch(
+async function resolveSpecificTokenIds(
   store: IndexerStore,
-  limit: number,
+  tokenIds: number[],
   concurrency: number,
-  order: "newest" | "oldest",
+  label = "tokens",
 ) {
-  const pending = store.getUnresolvedTokenIds(limit, order);
-  if (pending.length === 0) {
-    console.log("✓ No unresolved tokens remaining.");
+  if (tokenIds.length === 0) {
+    console.log(`✓ No unresolved ${label} remaining.`);
     return { okCount: 0, missingCount: 0, errCount: 0 };
   }
 
   console.log(
-    `Resolving metadata for ${pending.length.toLocaleString()} tokens (concurrency=${concurrency}, order=${order})...`,
+    `Resolving metadata for ${tokenIds.length.toLocaleString()} ${label} (concurrency=${concurrency})...`,
   );
 
   const startedAt = Date.now();
@@ -70,9 +70,9 @@ async function resolveMetadataBatch(
 
   await Promise.all(
     Array.from({ length: concurrency }, async () => {
-      while (idx < pending.length) {
+      while (idx < tokenIds.length) {
         const myIndex = idx++;
-        const tokenId = pending[myIndex]!;
+        const tokenId = tokenIds[myIndex]!;
         try {
           const meta = await fetchCosmoTokenMetadata(tokenId);
           consecutiveErrs = 0;
@@ -100,9 +100,9 @@ async function resolveMetadataBatch(
           const done = okCount + missingCount + errCount;
           const elapsedSec = Math.max(1, (Date.now() - startedAt) / 1000);
           const rps = Math.round(done / elapsedSec);
-          const etaSec = rps > 0 ? Math.round((pending.length - done) / rps) : 0;
+          const etaSec = rps > 0 ? Math.round((tokenIds.length - done) / rps) : 0;
           console.log(
-            `  progress: ${done.toLocaleString()}/${pending.length.toLocaleString()} (${rps} req/s, ETA ${etaSec}s, ok=${okCount}, 404=${missingCount}, err=${errCount})`,
+            `  progress: ${done.toLocaleString()}/${tokenIds.length.toLocaleString()} (${rps} req/s, ETA ${etaSec}s, ok=${okCount}, 404=${missingCount}, err=${errCount})`,
           );
         }
       }
@@ -112,9 +112,19 @@ async function resolveMetadataBatch(
   flush();
   const totalSec = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(
-    `✓ Resolved ${okCount.toLocaleString()} tokens (+${missingCount} 404, ${errCount} errors) in ${totalSec}s`,
+    `✓ Resolved ${okCount.toLocaleString()} ${label} (+${missingCount} 404, ${errCount} errors) in ${totalSec}s`,
   );
   return { okCount, missingCount, errCount };
+}
+
+async function resolveMetadataBatch(
+  store: IndexerStore,
+  limit: number,
+  concurrency: number,
+  order: "newest" | "oldest",
+) {
+  const pending = store.getUnresolvedTokenIds(limit, order);
+  return resolveSpecificTokenIds(store, pending, concurrency, `mint tokens (${order})`);
 }
 
 function exportRoundsDraftYaml(store: IndexerStore, rootDir: string) {
@@ -253,14 +263,110 @@ async function main() {
            FROM raw_mints GROUP BY chain`,
         )
         .all();
+      const transferRanges = store.db
+        .prepare(
+          `SELECT chain, COUNT(*) AS cnt, MIN(block_number) AS min_b, MAX(block_number) AS max_b,
+                  MIN(transferred_at) AS min_t, MAX(transferred_at) AS max_t
+           FROM raw_transfers GROUP BY chain`,
+        )
+        .all();
       console.log("Indexer SQLite:", store.dbPath);
       console.log("Counts:", counts);
-      console.log("Chain ranges:", ranges);
+      console.log("Mint chain ranges:", ranges);
+      console.log("Transfer chain ranges:", transferRanges);
       console.log("Cursors:", {
         abstract: store.getCursor("abstract:last_block"),
+        abstractTransfers: store.getCursor("abstract:transfers_last_block"),
         abstractBackfillMin: store.getCursor("abstract:backfill_min_block"),
         polygon: store.getCursor("polygon:last_block"),
+        polygonTransfers: store.getCursor("polygon:transfers_last_block"),
       });
+      return;
+    }
+
+    if (command === "sync-transfers") {
+      // Backfills P2P user-to-user transfers ONLY (never writes to raw_mints) and resolves
+      // COSMO metadata for all tokens involved in confirmed reciprocal trades first.
+      const head = await getAbstractHeadBlock();
+      const existingRange = store.db
+        .prepare(
+          "SELECT MIN(block_number) AS min_b, MAX(block_number) AS max_b FROM raw_mints WHERE chain = 'abstract'",
+        )
+        .get() as { min_b: number | null; max_b: number | null };
+
+      const blocksArg = args.get("blocks");
+      const toBlock = args.get("to")
+        ? Number(args.get("to"))
+        : blocksArg
+          ? head
+          : (existingRange.max_b ?? head);
+      const fromBlock = args.get("from")
+        ? Number(args.get("from"))
+        : blocksArg
+          ? Math.max(ABSTRACT_START_BLOCK, toBlock - Number(blocksArg))
+          : (existingRange.min_b ?? Math.max(ABSTRACT_START_BLOCK, head - 50_000));
+
+      console.log(
+        `Syncing Abstract P2P transfers ONLY: ${fromBlock.toLocaleString()} → ${toBlock.toLocaleString()}...`,
+      );
+      const res = await syncAbstractLogs(store, {
+        fromBlock,
+        toBlock,
+        chunkSize: Number(args.get("chunk") ?? "3000"),
+        includeTransfers: true,
+        transfersOnly: true,
+        onProgress: ({ block, transfersAdded }) => {
+          console.log(
+            `  block ${block.toLocaleString()} | +${transfersAdded} P2P transfers`,
+          );
+        },
+      });
+      console.log("✓ Abstract P2P transfer sync complete:", res);
+
+      if (args.get("resolve") !== "false") {
+        const allTransfers = store.getAllTransfers();
+        const detected = detectTradesFromTransfers(
+          allTransfers.map((t) => ({
+            txHash: t.txHash,
+            logIndex: t.logIndex,
+            chain: t.chain,
+            blockNumber: t.blockNumber,
+            transferredAt: t.transferredAt,
+            from: t.fromAddr,
+            to: t.toAddr,
+            tokenId: t.tokenId,
+          })),
+        );
+        const tradedTokenIds = Array.from(
+          new Set(detected.trades.flatMap((tr) => tr.allLegs.map((l) => l.tokenId))),
+        );
+        console.log(
+          `Detected ${detected.trades.length.toLocaleString()} confirmed trades (${tradedTokenIds.length.toLocaleString()} unique tokens) across ${detected.eligibleTransfers.length.toLocaleString()} P2P transfers.`,
+        );
+
+        const concurrency = Number(args.get("concurrency") ?? "40");
+        const limit = Number(args.get("limit") ?? "50000");
+        const unresolvedTraded = store.getUnresolvedTokenIdsFromList(
+          tradedTokenIds,
+          limit,
+        );
+        await resolveSpecificTokenIds(
+          store,
+          unresolvedTraded,
+          concurrency,
+          "confirmed-trade tokens",
+        );
+
+        if (args.get("resolve-all-transfers") === "true") {
+          const remaining = store.getUnresolvedTransferTokenIds(limit, "newest");
+          await resolveSpecificTokenIds(
+            store,
+            remaining,
+            concurrency,
+            "all P2P transfer tokens",
+          );
+        }
+      }
       return;
     }
 
@@ -287,10 +393,11 @@ async function main() {
       const res = await syncAbstractLogs(store, {
         fromBlock,
         toBlock,
-        chunkSize: Number(args.get("chunk") ?? "5000"),
-        onProgress: ({ block, mintsAdded, spinsAdded }) => {
+        chunkSize: Number(args.get("chunk") ?? "3000"),
+        includeTransfers: args.get("transfers") !== "false",
+        onProgress: ({ block, mintsAdded, spinsAdded, transfersAdded }) => {
           console.log(
-            `  block ${block.toLocaleString()} | +${mintsAdded} mints, +${spinsAdded} spins`,
+            `  block ${block.toLocaleString()} | +${mintsAdded} mints, +${spinsAdded} spins, +${transfersAdded} P2P transfers`,
           );
         },
       });
@@ -303,6 +410,33 @@ async function main() {
           Number(args.get("concurrency") ?? "35"),
           "newest",
         );
+        if (args.get("transfers") !== "false") {
+          const detected = detectTradesFromTransfers(
+            store.getAllTransfers().map((t) => ({
+              txHash: t.txHash,
+              logIndex: t.logIndex,
+              chain: t.chain,
+              blockNumber: t.blockNumber,
+              transferredAt: t.transferredAt,
+              from: t.fromAddr,
+              to: t.toAddr,
+              tokenId: t.tokenId,
+            })),
+          );
+          const tradedIds = detected.trades.flatMap((tr) =>
+            tr.allLegs.map((l) => l.tokenId),
+          );
+          const unresolvedTraded = store.getUnresolvedTokenIdsFromList(
+            tradedIds,
+            Number(args.get("limit") ?? "20000"),
+          );
+          await resolveSpecificTokenIds(
+            store,
+            unresolvedTraded,
+            Number(args.get("concurrency") ?? "35"),
+            "confirmed-trade tokens",
+          );
+        }
       }
       return;
     }
@@ -342,16 +476,17 @@ async function main() {
         const logRes = await syncAbstractLogs(store, {
           fromBlock: lowerBlock,
           toBlock: upperBlock,
-          chunkSize: 5_000,
-          onProgress: ({ block, mintsAdded, spinsAdded }) => {
+          chunkSize: 3_000,
+          includeTransfers: args.get("transfers") !== "false",
+          onProgress: ({ block, mintsAdded, spinsAdded, transfersAdded }) => {
             console.log(
-              `  block ${block.toLocaleString()} | +${mintsAdded} mints, +${spinsAdded} spins`,
+              `  block ${block.toLocaleString()} | +${mintsAdded} mints, +${spinsAdded} spins, +${transfersAdded} P2P transfers`,
             );
           },
         });
         store.setCursor("abstract:backfill_min_block", String(lowerBlock));
         console.log(
-          `✓ Window logs done: +${logRes.totalMints.toLocaleString()} mints, +${logRes.totalSpins.toLocaleString()} spins`,
+          `✓ Window logs done: +${logRes.totalMints.toLocaleString()} mints, +${logRes.totalSpins.toLocaleString()} spins, +${logRes.totalTransfers.toLocaleString()} P2P transfers`,
         );
 
         if (resolvePerWindow) {
@@ -381,9 +516,10 @@ async function main() {
         fromBlock,
         toBlock,
         chunkSize: Number(args.get("chunk") ?? "100000"),
-        onProgress: ({ block, mintsAdded, spinsAdded }) => {
+        includeTransfers: args.get("transfers") !== "false",
+        onProgress: ({ block, mintsAdded, spinsAdded, transfersAdded }) => {
           console.log(
-            `  polygon block ${block.toLocaleString()} | +${mintsAdded} mints, +${spinsAdded} spins`,
+            `  polygon block ${block.toLocaleString()} | +${mintsAdded} mints, +${spinsAdded} spins, +${transfersAdded} P2P transfers`,
           );
         },
       });
@@ -418,6 +554,7 @@ async function main() {
       const summary = aggregateAndEmitSql(store, {
         dataRoot: resolve(rootDir, "data"),
         outFile: resolve(rootDir, "packages/db/generated/sync-onchain.sql"),
+        tradesOutFile: resolve(rootDir, "packages/db/generated/sync-trades.sql"),
         snapshotFile: resolve(rootDir, "packages/db/generated/snapshot-summary.json"),
       });
       console.log("✓ Aggregation complete:", summary);

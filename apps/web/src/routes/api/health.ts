@@ -3,11 +3,13 @@ import { sql } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import {
   artists,
+  collectionTradeStats,
   collections,
   createDb,
   events,
   members,
   processedLiveMints,
+  recentTrades,
   saleRounds,
   syncState,
 } from "@objekt-stats/db";
@@ -35,6 +37,14 @@ export const Route = createFileRoute("/api/health")({
         const [liveDedupeRow] = await db
           .select({ count: sql<number>`count(*)` })
           .from(processedLiveMints);
+        const [tradeColRow] = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(collectionTradeStats)
+          .catch(() => [{ count: 0 }]);
+        const [recentTradeRow] = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(recentTrades)
+          .catch(() => [{ count: 0 }]);
         const chains = await db.select().from(syncState);
 
         return Response.json({
@@ -53,6 +63,8 @@ export const Route = createFileRoute("/api/health")({
             events: Number(eventRow?.count ?? 0),
             saleRounds: Number(roundRow?.count ?? 0),
             collections: Number(collectionRow?.count ?? 0),
+            tradedCollections: Number(tradeColRow?.count ?? 0),
+            recentDetectedTrades: Number(recentTradeRow?.count ?? 0),
           },
           syncState: chains,
         });

@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ArtmsRouteImport } from './routes/artms'
 import { Route as EventsRouteImport } from './routes/events'
 import { Route as MethodologyRouteImport } from './routes/methodology'
+import { Route as TradesRouteImport } from './routes/trades'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as MembersIndexRouteImport } from './routes/members/index'
 import { Route as MembersMemberIdRouteImport } from './routes/members/$memberId'
@@ -37,6 +38,11 @@ const EventsRoute = EventsRouteImport.update({
 const MethodologyRoute = MethodologyRouteImport.update({
   id: '/methodology',
   path: '/methodology',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TradesRoute = TradesRouteImport.update({
+  id: '/trades',
+  path: '/trades',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -70,6 +76,7 @@ export interface FileRoutesByFullPath {
   '/artms': typeof ArtmsRoute
   '/events': typeof EventsRoute
   '/methodology': typeof MethodologyRoute
+  '/trades': typeof TradesRoute
   '/api/health': typeof ApiHealthRoute
   '/members/$memberId': typeof MembersMemberIdRoute
   '/rounds/$slug': typeof RoundsSlugRoute
@@ -81,6 +88,7 @@ export interface FileRoutesByTo {
   '/artms': typeof ArtmsRoute
   '/events': typeof EventsRoute
   '/methodology': typeof MethodologyRoute
+  '/trades': typeof TradesRoute
   '/api/health': typeof ApiHealthRoute
   '/members/$memberId': typeof MembersMemberIdRoute
   '/rounds/$slug': typeof RoundsSlugRoute
@@ -93,6 +101,7 @@ export interface FileRoutesById {
   '/artms': typeof ArtmsRoute
   '/events': typeof EventsRoute
   '/methodology': typeof MethodologyRoute
+  '/trades': typeof TradesRoute
   '/api/health': typeof ApiHealthRoute
   '/members/$memberId': typeof MembersMemberIdRoute
   '/rounds/$slug': typeof RoundsSlugRoute
@@ -106,6 +115,7 @@ export interface FileRouteTypes {
     | '/artms'
     | '/events'
     | '/methodology'
+    | '/trades'
     | '/api/health'
     | '/members/$memberId'
     | '/rounds/$slug'
@@ -117,6 +127,7 @@ export interface FileRouteTypes {
     | '/artms'
     | '/events'
     | '/methodology'
+    | '/trades'
     | '/api/health'
     | '/members/$memberId'
     | '/rounds/$slug'
@@ -128,6 +139,7 @@ export interface FileRouteTypes {
     | '/artms'
     | '/events'
     | '/methodology'
+    | '/trades'
     | '/api/health'
     | '/members/$memberId'
     | '/rounds/$slug'
@@ -140,6 +152,7 @@ export interface RootRouteChildren {
   ArtmsRoute: typeof ArtmsRoute
   EventsRoute: typeof EventsRoute
   MethodologyRoute: typeof MethodologyRoute
+  TradesRoute: typeof TradesRoute
   ApiHealthRoute: typeof ApiHealthRoute
   MembersMemberIdRoute: typeof MembersMemberIdRoute
   RoundsSlugRoute: typeof RoundsSlugRoute
@@ -175,6 +188,13 @@ declare module '@tanstack/react-router' {
       path: '/methodology'
       fullPath: '/methodology'
       preLoaderRoute: typeof MethodologyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/trades': {
+      id: '/trades'
+      path: '/trades'
+      fullPath: '/trades'
+      preLoaderRoute: typeof TradesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/health': {
@@ -220,6 +240,7 @@ const rootRouteChildren: RootRouteChildren = {
   ArtmsRoute: ArtmsRoute,
   EventsRoute: EventsRoute,
   MethodologyRoute: MethodologyRoute,
+  TradesRoute: TradesRoute,
   ApiHealthRoute: ApiHealthRoute,
   MembersMemberIdRoute: MembersMemberIdRoute,
   RoundsSlugRoute: RoundsSlugRoute,

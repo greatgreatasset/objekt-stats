@@ -69,7 +69,42 @@ function MethodologyPage() {
 
       <section className="space-y-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-6">
         <h2 className="text-lg font-semibold text-white">
-          3. Roster-Normalized Popularity &amp; Anomaly Detection
+          3. Unique Purchasers vs. Total Mints &amp; Whale Concentration
+        </h2>
+        <p className="text-sm leading-relaxed text-zinc-300">
+          Raw mint totals measure revenue volume, but a single wealthy collector
+          minting 40+ copies of one card can temporarily vault a member to #1 in
+          a small or low-volume batch. To separate broad fandom popularity from
+          spending depth, every round computes both{" "}
+          <strong>Unique Buyers</strong> (deduplicated receiving wallets) and{" "}
+          <strong>Total Mints</strong>:
+        </p>
+        <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-400">
+          <li>
+            <strong>Unique Buyers (Default Popularity View):</strong> Counts
+            distinct wallets that minted a member&apos;s Objekt in a round,
+            along with a dedicated <em>Unique Buyers Rank</em> and{" "}
+            <em>Buyers Relative Index</em>.
+          </li>
+          <li>
+            <strong>Mints / Buyer:</strong> Measures average purchase depth per
+            collector (<code className="text-zinc-200">mints / unique_buyers</code>
+            ). Higher ratios indicate stronger bulk collecting or grid hunting.
+          </li>
+          <li>
+            <strong>Top Wallet Share % (Whale Flag):</strong> Exact share of a
+            member&apos;s round mints coming from the single largest minting
+            wallet. When a single wallet accounts for ≥ 35% of a member&apos;s
+            mints in a round, Objekt Stats highlights a{" "}
+            <span className="font-mono text-amber-300">Top wallet XX%</span>{" "}
+            concentration badge.
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-6">
+        <h2 className="text-lg font-semibold text-white">
+          4. Roster-Normalized Popularity &amp; Anomaly Detection
         </h2>
         <p className="text-sm leading-relaxed text-zinc-300">
           tripleS grew from S1 to S24 over two years while fandom volume scaled
@@ -88,6 +123,47 @@ function MethodologyPage() {
           <strong>Surge</strong> or <strong>Drop</strong> and cross-link nearby
           curated events within a −14 to +7 day window.
         </p>
+      </section>
+
+      <section className="space-y-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-6">
+        <h2 className="text-lg font-semibold text-white">
+          5. Secondary Trade Detection (User-to-User Swaps)
+        </h2>
+        <p className="text-sm leading-relaxed text-zinc-300">
+          Because COSMO does not use an on-chain swap escrow contract, secondary
+          trading appears on-chain as direct ERC-721{" "}
+          <code className="text-zinc-200">Transfer(from, to, tokenId)</code>{" "}
+          events between user wallets. We detect and isolate trades as follows:
+        </p>
+        <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-400">
+          <li>
+            <strong>Strict Separation from Newly Minted Sales:</strong>{" "}
+            Primary sales and sale rounds only count{" "}
+            <code className="text-zinc-200">from = 0x0000…0000</code> mint
+            events. Secondary user-to-user transfers are indexed in dedicated
+            trade tables and never inflate primary mint counts or round
+            rankings.
+          </li>
+          <li>
+            <strong>Reciprocal Swap Clustering (Confirmed Trades):</strong>{" "}
+            Eligible user-to-user transfers (excluding{" "}
+            <code className="text-zinc-200">0x0</code> mints/burns,{" "}
+            <code className="text-zinc-200">0xdead</code>, the COSMO Spin
+            address, and self-transfers) are grouped by wallet pair{" "}
+            <code className="text-zinc-200">{"{A, B}"}</code> into rolling
+            sessions (≤ 30 min gap between legs, ≤ 60 min span). A session is
+            classified as a <strong>Confirmed Trade</strong> when both wallets
+            send at least 1 distinct Objekt to each other (capturing 1↔1, 2↔2,
+            3↔2, and asymmetric multi-card swaps while filtering out single-card
+            bounce-backs).
+          </li>
+          <li>
+            <strong>Direct Transfers Tracked Separately:</strong> One-way P2P
+            transfers (gifts, alt-wallet consolidation, or off-chain cash sales)
+            are excluded from Confirmed Trades and tracked separately under the{" "}
+            <em>All Direct Transfers</em> view.
+          </li>
+        </ul>
       </section>
     </div>
   );

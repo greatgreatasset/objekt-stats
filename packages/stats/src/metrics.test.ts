@@ -70,6 +70,39 @@ describe("computeSingleRoundMetrics", () => {
     expect(smallRound.find((s) => s.memberId === "m1")?.relativeIndex).toBe(1.5);
     expect(largeRound.find((s) => s.memberId === "m1")?.relativeIndex).toBe(1.5);
   });
+
+  it("separates unique buyer rankings and flags whale concentration accurately", () => {
+    const stats = computeSingleRoundMetrics({
+      slug: "sco-whale-check",
+      artistId: "triples",
+      startAt: "2026-11-21T00:00:00Z",
+      includeInPopularity: false,
+      memberMints: [
+        { memberId: "triples-joobin", mintCount: 48, uniqueBuyers: 3, topBuyerMints: 42 },
+        { memberId: "triples-sohyun", mintCount: 48, uniqueBuyers: 9, topBuyerMints: 15 },
+        { memberId: "triples-shion", mintCount: 37, uniqueBuyers: 17, topBuyerMints: 5 },
+      ],
+    });
+
+    const joobin = stats.find((s) => s.memberId === "triples-joobin")!;
+    const sohyun = stats.find((s) => s.memberId === "triples-sohyun")!;
+    const shion = stats.find((s) => s.memberId === "triples-shion")!;
+
+    // Tied #1 on mints, but SoHyun sorts ahead of JooBin because 9 > 3 unique buyers
+    expect(sohyun.rank).toBe(1);
+    expect(joobin.rank).toBe(1);
+    expect(stats[0]?.memberId).toBe("triples-sohyun");
+
+    // On unique buyers: ShiOn is #1, SoHyun #2, JooBin #3
+    expect(shion.uniqueBuyersRank).toBe(1);
+    expect(sohyun.uniqueBuyersRank).toBe(2);
+    expect(joobin.uniqueBuyersRank).toBe(3);
+
+    // Whale metrics
+    expect(joobin.mintsPerBuyer).toBe(16);
+    expect(joobin.topBuyerSharePct).toBe(87.5);
+    expect(shion.topBuyerSharePct).toBeCloseTo(13.51, 1);
+  });
 });
 
 describe("computeArtistSeriesStats", () => {

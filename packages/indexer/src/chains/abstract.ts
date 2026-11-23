@@ -1,3 +1,4 @@
+import { isEligibleP2PTransfer } from "@objekt-stats/stats";
 import {
   ABSTRACT_ADDRESSES,
   DEFAULT_ENDPOINTS,
@@ -6,7 +7,12 @@ import {
   addressToTopic,
   topicToAddress,
 } from "../constants.js";
-import type { IndexerStore, RawMintRow, RawSpinRow } from "../store.js";
+import type {
+  IndexerStore,
+  RawMintRow,
+  RawSpinRow,
+  RawTransferRow,
+} from "../store.js";
 
 interface RpcLog {
   blockNumber: string;
@@ -123,26 +129,38 @@ export interface SyncAbstractOptions {
   chunkSize?: number;
   rpcUrl?: string;
   includeSpins?: boolean;
+  includeTransfers?: boolean;
+  transfersOnly?: boolean;
   onProgress?: (info: {
     block: number;
     toBlock: number;
     mintsAdded: number;
     spinsAdded: number;
+    transfersAdded: number;
   }) => void;
 }
 
 export async function syncAbstractLogs(
   store: IndexerStore,
   options: SyncAbstractOptions,
-): Promise<{ totalMints: number; totalSpins: number; lastBlock: number }> {
+): Promise<{
+  totalMints: number;
+  totalSpins: number;
+  totalTransfers: number;
+  lastBlock: number;
+}> {
   const rpcUrl = options.rpcUrl ?? DEFAULT_ENDPOINTS.abstractRpc;
-  let chunkSize = options.chunkSize ?? 5_000;
+  const maxChunkSize = options.chunkSize ?? 3_000;
+  let chunkSize = maxChunkSize;
   const includeSpins = options.includeSpins ?? true;
+  const includeTransfers = options.includeTransfers ?? true;
+  const transfersOnly = options.transfersOnly ?? false;
   const spinTopic = addressToTopic(ABSTRACT_ADDRESSES.SPIN);
   const blockTimestampCache = new Map<number, string>();
 
   let totalMints = 0;
   let totalSpins = 0;
+  let totalTransfers = 0;
   let cursor = options.fromBlock;
 
   while (cursor <= options.toBlock) {
@@ -150,39 +168,50 @@ export async function syncAbstractLogs(
     const fromHex = "0x" + cursor.toString(16);
     const toHex = "0x" + end.toString(16);
 
-    let mintLogs: RpcLog[];
-    let spinLogs: RpcLog[] = [];
+    let allLogs: RpcLog[];
 
     try {
-      mintLogs = await rpcCall<RpcLog[]>(rpcUrl, "eth_getLogs", [
-        {
-          address: ABSTRACT_ADDRESSES.OBJEKT,
-          topics: [ERC721_TRANSFER_TOPIC, ZERO_TOPIC],
-          fromBlock: fromHex,
-          toBlock: toHex,
-        },
-      ]);
-
-      if (includeSpins) {
-        spinLogs = await rpcCall<RpcLog[]>(rpcUrl, "eth_getLogs", [
+      if (includeTransfers || transfersOnly) {
+        // Single RPC call fetches all Transfer logs; strictly partitioned below so
+        // P2P transfers NEVER contaminate raw_mints.
+        allLogs = await rpcCall<RpcLog[]>(rpcUrl, "eth_getLogs", [
           {
             address: ABSTRACT_ADDRESSES.OBJEKT,
-            topics: [ERC721_TRANSFER_TOPIC, null, spinTopic],
+            topics: [ERC721_TRANSFER_TOPIC],
             fromBlock: fromHex,
             toBlock: toHex,
           },
         ]);
+      } else {
+        const mintLogs = await rpcCall<RpcLog[]>(rpcUrl, "eth_getLogs", [
+          {
+            address: ABSTRACT_ADDRESSES.OBJEKT,
+            topics: [ERC721_TRANSFER_TOPIC, ZERO_TOPIC],
+            fromBlock: fromHex,
+            toBlock: toHex,
+          },
+        ]);
+        const spinLogs = includeSpins
+          ? await rpcCall<RpcLog[]>(rpcUrl, "eth_getLogs", [
+              {
+                address: ABSTRACT_ADDRESSES.OBJEKT,
+                topics: [ERC721_TRANSFER_TOPIC, null, spinTopic],
+                fromBlock: fromHex,
+                toBlock: toHex,
+              },
+            ])
+          : [];
+        allLogs = [...mintLogs, ...spinLogs];
       }
     } catch (err) {
       // Auto-halve chunk size if RPC rejects wide range / >10k logs
-      if (chunkSize > 500) {
-        chunkSize = Math.floor(chunkSize / 2);
+      if (chunkSize > 200) {
+        chunkSize = Math.max(200, Math.floor(chunkSize / 2));
         continue;
       }
       throw err;
     }
 
-    const allLogs = [...mintLogs, ...spinLogs];
     const blocksNeedingTimestamp = new Set<number>();
 
     for (const log of allLogs) {
@@ -198,12 +227,10 @@ export async function syncAbstractLogs(
     }
 
     if (blocksNeedingTimestamp.size > 0) {
-      // For high-throughput indexing, sample anchor blocks across the chunk if >80 unique blocks
       const sortedBlocks = Array.from(blocksNeedingTimestamp).sort((a, b) => a - b);
       if (sortedBlocks.length <= 80) {
         await fetchBlockTimestamps(rpcUrl, sortedBlocks, blockTimestampCache);
       } else {
-        // Fetch evenly spaced anchor blocks (~15 anchors across chunk) and interpolate accurately (<2s error)
         const anchors = new Set<number>([
           sortedBlocks[0]!,
           sortedBlocks[sortedBlocks.length - 1]!,
@@ -215,7 +242,6 @@ export async function syncAbstractLogs(
         const anchorList = Array.from(anchors).sort((a, b) => a - b);
         await fetchBlockTimestamps(rpcUrl, anchorList, blockTimestampCache);
 
-        // Interpolate remaining blocks between anchors
         let aIdx = 0;
         for (const bn of sortedBlocks) {
           if (blockTimestampCache.has(bn)) continue;
@@ -227,55 +253,98 @@ export async function syncAbstractLogs(
           const t0 = Date.parse(blockTimestampCache.get(b0)!);
           const t1 = Date.parse(blockTimestampCache.get(b1)!);
           const ratio = b1 > b0 ? (bn - b0) / (b1 - b0) : 0;
-          blockTimestampCache.set(bn, new Date(Math.round(t0 + ratio * (t1 - t0))).toISOString());
+          blockTimestampCache.set(
+            bn,
+            new Date(Math.round(t0 + ratio * (t1 - t0))).toISOString(),
+          );
         }
       }
     }
 
     const mintRows: RawMintRow[] = [];
-    for (const log of mintLogs) {
-      if (log.topics.length < 4) continue;
-      const bn = Number(BigInt(log.blockNumber));
-      mintRows.push({
-        tokenId: Number(BigInt(log.topics[3]!)),
-        chain: "abstract",
-        blockNumber: bn,
-        mintedAt: blockTimestampCache.get(bn) ?? new Date().toISOString(),
-        minter: topicToAddress(log.topics[2]!),
-        txHash: log.transactionHash.toLowerCase(),
-      });
-    }
-
     const spinRows: RawSpinRow[] = [];
-    for (const log of spinLogs) {
+    const transferRows: RawTransferRow[] = [];
+
+    for (const log of allLogs) {
       if (log.topics.length < 4) continue;
+      const fromTopic = log.topics[1]!.toLowerCase();
+      const toTopic = log.topics[2]!.toLowerCase();
+      const tokenId = Number(BigInt(log.topics[3]!));
       const bn = Number(BigInt(log.blockNumber));
-      spinRows.push({
-        txHash: log.transactionHash.toLowerCase(),
-        logIndex: Number(BigInt(log.logIndex)),
-        tokenId: Number(BigInt(log.topics[3]!)),
-        chain: "abstract",
-        blockNumber: bn,
-        spunAt: blockTimestampCache.get(bn) ?? new Date().toISOString(),
-      });
+      const txHash = log.transactionHash.toLowerCase();
+      const iso = blockTimestampCache.get(bn) ?? new Date().toISOString();
+
+      if (fromTopic === ZERO_TOPIC) {
+        // Strictly primary mints ONLY (never P2P trades)
+        if (!transfersOnly) {
+          mintRows.push({
+            tokenId,
+            chain: "abstract",
+            blockNumber: bn,
+            mintedAt: iso,
+            minter: topicToAddress(toTopic),
+            txHash,
+          });
+        }
+      } else if (toTopic === spinTopic) {
+        if (!transfersOnly && includeSpins) {
+          spinRows.push({
+            txHash,
+            logIndex: Number(BigInt(log.logIndex)),
+            tokenId,
+            chain: "abstract",
+            blockNumber: bn,
+            spunAt: iso,
+          });
+        }
+      } else if (includeTransfers || transfersOnly) {
+        const fromAddr = topicToAddress(fromTopic);
+        const toAddr = topicToAddress(toTopic);
+        if (isEligibleP2PTransfer(fromAddr, toAddr)) {
+          transferRows.push({
+            txHash,
+            logIndex: Number(BigInt(log.logIndex)),
+            tokenId,
+            chain: "abstract",
+            blockNumber: bn,
+            transferredAt: iso,
+            fromAddr,
+            toAddr,
+          });
+        }
+      }
     }
 
-    store.insertMints(mintRows);
-    store.insertSpins(spinRows);
-    store.setCursor("abstract:last_block", String(end));
+    if (!transfersOnly) {
+      store.insertMints(mintRows);
+      store.insertSpins(spinRows);
+      store.setCursor("abstract:last_block", String(end));
+    }
+    if (transferRows.length > 0) {
+      store.insertTransfers(transferRows);
+    }
+    if (includeTransfers || transfersOnly) {
+      store.setCursor("abstract:transfers_last_block", String(end));
+    }
 
     totalMints += mintRows.length;
     totalSpins += spinRows.length;
+    totalTransfers += transferRows.length;
 
     options.onProgress?.({
       block: end,
       toBlock: options.toBlock,
       mintsAdded: mintRows.length,
       spinsAdded: spinRows.length,
+      transfersAdded: transferRows.length,
     });
 
     cursor = end + 1;
+    // Gently recover chunk size after light chunks
+    if (allLogs.length < 3_500 && chunkSize < maxChunkSize) {
+      chunkSize = Math.min(maxChunkSize, Math.floor(chunkSize * 1.5));
+    }
   }
 
-  return { totalMints, totalSpins, lastBlock: options.toBlock };
+  return { totalMints, totalSpins, totalTransfers, lastBlock: options.toBlock };
 }

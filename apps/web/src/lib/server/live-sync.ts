@@ -3,7 +3,9 @@ import {
   collectionDailyMints,
   collections,
   createDb,
+  memberTradeStats,
   members,
+  pendingP2pTransfers,
   processedLiveMints,
   saleRoundCollections,
   saleRoundMemberStats,
@@ -13,6 +15,12 @@ import {
 } from "@objekt-stats/db";
 import {
   computeArtistSeriesStats,
+  computeMemberTradeRankings,
+  detectTradesFromTransfers,
+  isEligibleP2PTransfer,
+  makeWalletPairKey,
+  shortenAddress,
+  type P2PTransferEvent,
   type SaleRoundInput,
 } from "@objekt-stats/stats";
 
@@ -23,8 +31,14 @@ const ZERO_TOPIC =
   "0x0000000000000000000000000000000000000000000000000000000000000000";
 const COSMO_API = "https://api.cosmo.fans";
 
+function topicToAddress(topic: string): string {
+  return "0x" + topic.slice(-40).toLowerCase();
+}
+
 interface RpcLog {
   blockNumber: string;
+  transactionHash: string;
+  logIndex: string;
   topics: string[];
   blockTimestamp?: string;
 }
@@ -262,9 +276,19 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
     notes: string | null;
     collectionSlugs: string[];
     memberMints: Map<string, number>;
+    memberUniqueBuyers: Map<string, number>;
   }
 
   const rounds = new Map<string, RoundAcc>();
+
+  // Preserve exact deduplicated unique buyers & top-wallet share from deep indexer where available
+  const existingRoundStats = await db.select().from(saleRoundMemberStats);
+  const existingStatByKey = new Map(
+    existingRoundStats.map((s) => [`${s.roundSlug}|${s.memberId}`, s]),
+  );
+  const existingRoundBuyers = new Map(
+    existingRounds.map((r) => [r.slug, r.uniqueBuyers]),
+  );
 
   for (const col of allCols) {
     if (!col.memberId || col.totalMints <= 0) continue;
@@ -302,6 +326,7 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
         notes: curated?.notes ?? null,
         collectionSlugs: [],
         memberMints: new Map(),
+        memberUniqueBuyers: new Map(),
       };
       rounds.set(key, acc);
     }
@@ -310,6 +335,10 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
     acc.memberMints.set(
       col.memberId,
       (acc.memberMints.get(col.memberId) ?? 0) + col.totalMints,
+    );
+    acc.memberUniqueBuyers.set(
+      col.memberId,
+      Math.max(acc.memberUniqueBuyers.get(col.memberId) ?? 0, col.uniqueMinters),
     );
     if (firstTs < acc.startAt) acc.startAt = firstTs;
     if (lastTs > acc.endAt) acc.endAt = lastTs;
@@ -344,7 +373,25 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
         startAt: r.startAt,
         includeInPopularity: r.includeInPopularity,
         memberMints: Array.from(r.memberMints.entries()).map(
-          ([memberId, mintCount]) => ({ memberId, mintCount }),
+          ([memberId, mintCount]) => {
+            const prev = existingStatByKey.get(`${r.slug}|${memberId}`);
+            const estBuyers = Math.max(
+              prev?.uniqueBuyers ?? 0,
+              r.memberUniqueBuyers.get(memberId) ?? 1,
+            );
+            const topBuyerMints =
+              prev?.topBuyerSharePct !== null &&
+              prev?.topBuyerSharePct !== undefined &&
+              prev.mintCount === mintCount
+                ? Math.round((prev.topBuyerSharePct / 100) * mintCount)
+                : undefined;
+            return {
+              memberId,
+              mintCount,
+              uniqueBuyers: Math.min(mintCount, estBuyers),
+              topBuyerMints,
+            };
+          },
         ),
       }));
     const computed = computeArtistSeriesStats(input);
@@ -362,22 +409,30 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
 
   const insertRound = rawD1.prepare(
     `INSERT OR REPLACE INTO sale_rounds
-      (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, participating_members, include_in_popularity, is_auto_detected, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, unique_buyers, participating_members, include_in_popularity, is_auto_detected, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertRoundCol = rawD1.prepare(
     `INSERT OR IGNORE INTO sale_round_collections (round_slug, collection_slug) VALUES (?, ?)`,
   );
   const insertStat = rawD1.prepare(
     `INSERT OR REPLACE INTO sale_round_member_stats
-      (round_slug, member_id, mint_count, rank, share_pct, relative_index, z_score, rank_delta_prev, rolling5_rank, rolling10_rank, rolling5_relative_index, rolling10_relative_index, is_anomaly, anomaly_direction, anomaly_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (round_slug, member_id, mint_count, unique_buyers, mints_per_buyer, top_buyer_share_pct, rank, unique_buyers_rank, share_pct, unique_buyers_share_pct, relative_index, unique_buyers_relative_index, z_score, rank_delta_prev, rolling5_rank, rolling10_rank, rolling5_relative_index, rolling10_relative_index, is_anomaly, anomaly_direction, anomaly_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
 
   for (const r of validRounds) {
     const totalMints = Array.from(r.memberMints.values()).reduce(
       (a, b) => a + b,
       0,
+    );
+    const maxMemberBuyers = Math.max(
+      0,
+      ...Array.from(r.memberUniqueBuyers.values()),
+    );
+    const roundUniqueBuyers = Math.max(
+      existingRoundBuyers.get(r.slug) ?? 0,
+      maxMemberBuyers,
     );
     stmts.push(
       insertRound.bind(
@@ -392,6 +447,7 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
         r.endAt,
         r.unitPriceUsd,
         totalMints,
+        roundUniqueBuyers,
         r.memberMints.size,
         r.includeInPopularity ? 1 : 0,
         r.isAutoDetected ? 1 : 0,
@@ -407,9 +463,15 @@ export async function recomputeSaleRoundsInD1(db: AppDatabase, rawD1: D1Database
           s.roundSlug,
           s.memberId,
           s.mintCount,
+          s.uniqueBuyers,
+          s.mintsPerBuyer,
+          s.topBuyerSharePct,
           s.rank,
+          s.uniqueBuyersRank,
           s.sharePct,
+          s.uniqueBuyersSharePct,
           s.relativeIndex,
+          s.uniqueBuyersRelativeIndex,
           s.zScore,
           s.rankDeltaPrev,
           s.rolling5Rank,
@@ -438,13 +500,486 @@ export interface LiveSyncResult {
   tokensResolved: number;
   trackedMintsAdded: number;
   roundsUpdated: number;
+  p2pTransfersBuffered: number;
+  tradesDetected: number;
   skippedReason?: string;
+}
+
+const LIVE_TRADE_SETTLE_DELAY_SEC = 300; // Wait 5 min of inactivity so multi-leg swaps finish completely
+const LIVE_TRADE_EXPIRE_SEC = 2_100; // 35 min (> 30 min trade window)
+
+async function settlePendingTradesInD1(
+  db: AppDatabase,
+  rawD1: D1Database,
+  options: {
+    referenceIso: string;
+    maxMetaBudget: number;
+    memberLookup: Map<string, string>;
+    memberInfoById: Map<string, { name: string; hexColor: string }>;
+  },
+): Promise<{ tradesDetected: number }> {
+  const { referenceIso, maxMetaBudget, memberLookup, memberInfoById } = options;
+  const refMs = Date.parse(referenceIso);
+  if (Number.isNaN(refMs)) return { tradesDetected: 0 };
+
+  const openRows = await db
+    .select()
+    .from(pendingP2pTransfers)
+    .where(eq(pendingP2pTransfers.status, "open"))
+    .limit(2_000);
+
+  if (openRows.length === 0) return { tradesDetected: 0 };
+
+  const byPair = new Map<string, typeof openRows>();
+  for (const row of openRows) {
+    const arr = byPair.get(row.pairKey) ?? [];
+    arr.push(row);
+    byPair.set(row.pairKey, arr);
+  }
+
+  let budgetLeft = maxMetaBudget;
+  let tradesDetected = 0;
+  const now = new Date().toISOString();
+  const metaCache = new Map<number, ParsedMeta | null>();
+
+  const colTradeDeltas = new Map<
+    string,
+    {
+      meta: ParsedMeta;
+      memberId: string | null;
+      tradedCount: number;
+      tradeSessions: number;
+      directTransfers: number;
+      traders: Set<string>;
+      firstAt: string;
+      lastAt: string;
+    }
+  >();
+  const memberTradeDeltas = new Map<
+    string,
+    {
+      memberId: string;
+      artistId: string;
+      tradedCount: number;
+      tradeSessions: number;
+      directTransfers: number;
+      lastAt: string;
+    }
+  >();
+  const dailyDeltas = new Map<
+    string,
+    {
+      artistId: string;
+      date: string;
+      sessions: number;
+      tradedObjekts: number;
+      directTransfers: number;
+    }
+  >();
+  const recentInserts: Array<{
+    tradeId: string;
+    artistId: string;
+    chain: string;
+    tradedAt: string;
+    durationSeconds: number;
+    sideACount: number;
+    sideBCount: number;
+    walletAShort: string;
+    walletBShort: string;
+    sideASummary: string;
+    sideBSummary: string;
+  }> = [];
+
+  const markStatusStmts: D1PreparedStatement[] = [];
+  const updateStatusStmt = rawD1.prepare(
+    "UPDATE pending_p2p_transfers SET status = ? WHERE tx_hash = ? AND log_index = ?",
+  );
+
+  for (const rows of byPair.values()) {
+    const latestMs = Math.max(...rows.map((r) => Date.parse(r.transferredAt) || 0));
+    const ageSec = (refMs - latestMs) / 1000;
+    if (ageSec < LIVE_TRADE_SETTLE_DELAY_SEC) {
+      // Pair is still actively transferring; let multi-card swaps finish first
+      continue;
+    }
+
+    const events: P2PTransferEvent[] = rows.map((r) => ({
+      txHash: r.txHash,
+      logIndex: r.logIndex,
+      chain: r.chain === "polygon" ? "polygon" : "abstract",
+      blockNumber: r.blockNumber,
+      transferredAt: r.transferredAt,
+      from: r.fromAddr,
+      to: r.toAddr,
+      tokenId: r.tokenId,
+    }));
+
+    const res = detectTradesFromTransfers(events);
+
+    if (res.trades.length === 0) {
+      if (ageSec >= LIVE_TRADE_EXPIRE_SEC) {
+        for (const r of rows) {
+          markStatusStmts.push(updateStatusStmt.bind("expired", r.txHash, r.logIndex));
+        }
+      }
+      continue;
+    }
+
+    // Check remaining Worker subrequest budget for unique tokenIds in this pair's trades
+    const neededTokenIds = Array.from(
+      new Set(
+        res.trades
+          .flatMap((t) => t.allLegs.map((l) => l.tokenId))
+          .filter((id) => !metaCache.has(id)),
+      ),
+    );
+    if (neededTokenIds.length > budgetLeft) {
+      // Leave pair open for next 5-min tick so we stay safely within Worker subrequest limits
+      continue;
+    }
+
+    for (let i = 0; i < neededTokenIds.length; i += 6) {
+      const wave = neededTokenIds.slice(i, i + 6);
+      const fetched = await Promise.all(
+        wave.map(async (id) => ({
+          id,
+          meta: await fetchMetaV3(id).catch(() => null),
+        })),
+      );
+      for (const f of fetched) metaCache.set(f.id, f.meta);
+      budgetLeft -= wave.length;
+    }
+
+    for (const trade of res.trades) {
+      tradesDetected++;
+      const touchedArtists = new Set<string>();
+      const touchedCols = new Set<string>();
+      const touchedMembers = new Set<string>();
+      const tradeDate = trade.completedAt.slice(0, 10);
+
+      for (const leg of trade.allLegs) {
+        const meta = metaCache.get(leg.tokenId) ?? null;
+        if (!meta || (meta.artistId !== "triples" && meta.artistId !== "artms")) {
+          continue;
+        }
+        touchedArtists.add(meta.artistId);
+        const memberId =
+          memberLookup.get(
+            `${meta.artistId}:${normalizeMemberKey(meta.rawMember)}`,
+          ) ?? null;
+
+        let col = colTradeDeltas.get(meta.slug);
+        if (!col) {
+          col = {
+            meta,
+            memberId,
+            tradedCount: 0,
+            tradeSessions: 0,
+            directTransfers: 0,
+            traders: new Set(),
+            firstAt: leg.transferredAt,
+            lastAt: leg.transferredAt,
+          };
+          colTradeDeltas.set(meta.slug, col);
+        }
+        col.tradedCount++;
+        col.directTransfers++;
+        col.traders.add(leg.from);
+        col.traders.add(leg.to);
+        if (leg.transferredAt < col.firstAt) col.firstAt = leg.transferredAt;
+        if (leg.transferredAt > col.lastAt) col.lastAt = leg.transferredAt;
+        if (!touchedCols.has(meta.slug)) {
+          col.tradeSessions++;
+          touchedCols.add(meta.slug);
+        }
+
+        if (memberId) {
+          let mAcc = memberTradeDeltas.get(memberId);
+          if (!mAcc) {
+            mAcc = {
+              memberId,
+              artistId: meta.artistId,
+              tradedCount: 0,
+              tradeSessions: 0,
+              directTransfers: 0,
+              lastAt: leg.transferredAt,
+            };
+            memberTradeDeltas.set(memberId, mAcc);
+          }
+          mAcc.tradedCount++;
+          mAcc.directTransfers++;
+          if (leg.transferredAt > mAcc.lastAt) mAcc.lastAt = leg.transferredAt;
+          if (!touchedMembers.has(memberId)) {
+            mAcc.tradeSessions++;
+            touchedMembers.add(memberId);
+          }
+        }
+
+        const dKey = `${meta.artistId}|${tradeDate}`;
+        let dAcc = dailyDeltas.get(dKey);
+        if (!dAcc) {
+          dAcc = {
+            artistId: meta.artistId,
+            date: tradeDate,
+            sessions: 0,
+            tradedObjekts: 0,
+            directTransfers: 0,
+          };
+          dailyDeltas.set(dKey, dAcc);
+        }
+        dAcc.tradedObjekts++;
+        dAcc.directTransfers++;
+      }
+
+      const summarize = (legs: P2PTransferEvent[]) => {
+        const grouped = new Map<
+          string,
+          {
+            slug: string;
+            collectionId: string;
+            artistId: string;
+            memberId: string | null;
+            memberName: string;
+            hexColor: string;
+            imageUrl: string | null;
+            count: number;
+          }
+        >();
+        for (const leg of legs) {
+          const meta = metaCache.get(leg.tokenId) ?? null;
+          const slug = meta?.slug ?? `token-${leg.tokenId}`;
+          const prev = grouped.get(slug);
+          if (prev) {
+            prev.count++;
+            continue;
+          }
+          const memberId = meta
+            ? (memberLookup.get(
+                `${meta.artistId}:${normalizeMemberKey(meta.rawMember)}`,
+              ) ?? null)
+            : null;
+          const mInfo = memberId ? memberInfoById.get(memberId) : null;
+          grouped.set(slug, {
+            slug,
+            collectionId: meta?.collectionId ?? `Objekt #${leg.tokenId}`,
+            artistId: meta?.artistId ?? "unknown",
+            memberId,
+            memberName: mInfo?.name ?? meta?.rawMember ?? "Unknown",
+            hexColor: mInfo?.hexColor ?? "#71717a",
+            imageUrl: meta?.imageUrl || null,
+            count: 1,
+          });
+        }
+        return JSON.stringify(Array.from(grouped.values()));
+      };
+
+      const sideASummary = summarize(trade.sideALegs);
+      const sideBSummary = summarize(trade.sideBLegs);
+
+      for (const artistId of touchedArtists) {
+        const dKey = `${artistId}|${tradeDate}`;
+        const dAcc = dailyDeltas.get(dKey);
+        if (dAcc) dAcc.sessions++;
+
+        recentInserts.push({
+          tradeId: trade.tradeId,
+          artistId,
+          chain: trade.chain,
+          tradedAt: trade.completedAt,
+          durationSeconds: trade.durationSeconds,
+          sideACount: trade.sideALegs.length,
+          sideBCount: trade.sideBLegs.length,
+          walletAShort: shortenAddress(trade.walletA),
+          walletBShort: shortenAddress(trade.walletB),
+          sideASummary,
+          sideBSummary,
+        });
+      }
+
+      for (const leg of trade.allLegs) {
+        markStatusStmts.push(updateStatusStmt.bind("traded", leg.txHash, leg.logIndex));
+      }
+    }
+
+    if (ageSec >= LIVE_TRADE_EXPIRE_SEC) {
+      for (const nt of res.nonTradeTransfers) {
+        markStatusStmts.push(updateStatusStmt.bind("expired", nt.txHash, nt.logIndex));
+      }
+    }
+  }
+
+  const stmts: D1PreparedStatement[] = [...markStatusStmts];
+
+  const upsertColTrade = rawD1.prepare(
+    `INSERT INTO collection_trade_stats
+      (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, first_trade_at, last_trade_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(collection_slug) DO UPDATE SET
+       traded_count = collection_trade_stats.traded_count + excluded.traded_count,
+       trade_sessions = collection_trade_stats.trade_sessions + excluded.trade_sessions,
+       direct_transfer_count = collection_trade_stats.direct_transfer_count + excluded.direct_transfer_count,
+       unique_traders = collection_trade_stats.unique_traders + excluded.unique_traders,
+       first_trade_at = CASE WHEN collection_trade_stats.first_trade_at IS NULL OR excluded.first_trade_at < collection_trade_stats.first_trade_at THEN excluded.first_trade_at ELSE collection_trade_stats.first_trade_at END,
+       last_trade_at = CASE WHEN collection_trade_stats.last_trade_at IS NULL OR excluded.last_trade_at > collection_trade_stats.last_trade_at THEN excluded.last_trade_at ELSE collection_trade_stats.last_trade_at END,
+       front_image_url = COALESCE(NULLIF(collection_trade_stats.front_image_url, ''), excluded.front_image_url),
+       updated_at = excluded.updated_at`,
+  );
+
+  for (const d of colTradeDeltas.values()) {
+    stmts.push(
+      upsertColTrade.bind(
+        d.meta.slug,
+        d.meta.collectionId,
+        d.meta.artistId,
+        d.memberId,
+        d.meta.rawMember,
+        d.meta.season,
+        d.meta.objektClass,
+        d.meta.collectionNo,
+        d.meta.onOffline,
+        d.meta.imageUrl || null,
+        d.meta.backgroundColor || null,
+        d.tradedCount,
+        d.tradeSessions,
+        d.directTransfers,
+        d.traders.size,
+        d.firstAt,
+        d.lastAt,
+        now,
+      ),
+    );
+  }
+
+  const upsertMemberTrade = rawD1.prepare(
+    `INSERT INTO member_trade_stats
+      (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, last_trade_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, 1, 999, 0, 1, ?, ?)
+     ON CONFLICT(member_id) DO UPDATE SET
+       traded_count = member_trade_stats.traded_count + excluded.traded_count,
+       trade_sessions = member_trade_stats.trade_sessions + excluded.trade_sessions,
+       direct_transfer_count = member_trade_stats.direct_transfer_count + excluded.direct_transfer_count,
+       last_trade_at = CASE WHEN member_trade_stats.last_trade_at IS NULL OR excluded.last_trade_at > member_trade_stats.last_trade_at THEN excluded.last_trade_at ELSE member_trade_stats.last_trade_at END,
+       updated_at = excluded.updated_at`,
+  );
+
+  for (const m of memberTradeDeltas.values()) {
+    stmts.push(
+      upsertMemberTrade.bind(
+        m.memberId,
+        m.artistId,
+        m.tradedCount,
+        m.tradeSessions,
+        m.directTransfers,
+        m.lastAt,
+        now,
+      ),
+    );
+  }
+
+  const upsertDailyTrade = rawD1.prepare(
+    `INSERT INTO daily_trade_stats
+      (artist_id, trade_date, trade_sessions, traded_objekts, direct_transfers, unique_traders)
+     VALUES (?, ?, ?, ?, ?, 0)
+     ON CONFLICT(artist_id, trade_date) DO UPDATE SET
+       trade_sessions = daily_trade_stats.trade_sessions + excluded.trade_sessions,
+       traded_objekts = daily_trade_stats.traded_objekts + excluded.traded_objekts,
+       direct_transfers = daily_trade_stats.direct_transfers + excluded.direct_transfers`,
+  );
+
+  for (const d of dailyDeltas.values()) {
+    stmts.push(
+      upsertDailyTrade.bind(
+        d.artistId,
+        d.date,
+        d.sessions,
+        d.tradedObjekts,
+        d.directTransfers,
+      ),
+    );
+  }
+
+  const insertRecent = rawD1.prepare(
+    `INSERT OR REPLACE INTO recent_trades
+      (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const rt of recentInserts) {
+    stmts.push(
+      insertRecent.bind(
+        rt.tradeId,
+        rt.artistId,
+        rt.chain,
+        rt.tradedAt,
+        rt.durationSeconds,
+        rt.sideACount,
+        rt.sideBCount,
+        rt.walletAShort,
+        rt.walletBShort,
+        rt.sideASummary,
+        rt.sideBSummary,
+      ),
+    );
+  }
+
+  // Prune settled/expired rows from pending_p2p_transfers older than 24h
+  const pruneIso = new Date(refMs - 86_400_000).toISOString();
+  stmts.push(
+    rawD1
+      .prepare("DELETE FROM pending_p2p_transfers WHERE status != 'open' AND transferred_at < ?")
+      .bind(pruneIso),
+  );
+
+  for (let i = 0; i < stmts.length; i += 80) {
+    await rawD1.batch(stmts.slice(i, i + 80));
+  }
+
+  // Re-rank member_trade_stats cleanly when any member trades updated
+  if (memberTradeDeltas.size > 0) {
+    const rankStmts: D1PreparedStatement[] = [];
+    const updateRank = rawD1.prepare(
+      `UPDATE member_trade_stats
+       SET trade_rank = ?, trade_share_pct = ?, trade_relative_index = ?, updated_at = ?
+       WHERE member_id = ?`,
+    );
+
+    for (const artistId of ["triples", "artms"] as const) {
+      const rows = await db
+        .select({
+          memberId: memberTradeStats.memberId,
+          tradedCount: memberTradeStats.tradedCount,
+        })
+        .from(memberTradeStats)
+        .where(eq(memberTradeStats.artistId, artistId));
+      if (rows.length === 0) continue;
+
+      const ranked = computeMemberTradeRankings(rows);
+      for (const r of ranked) {
+        rankStmts.push(
+          updateRank.bind(
+            r.tradeRank,
+            r.tradeSharePct,
+            r.tradeRelativeIndex,
+            now,
+            r.memberId,
+          ),
+        );
+      }
+    }
+
+    for (let i = 0; i < rankStmts.length; i += 80) {
+      await rawD1.batch(rankStmts.slice(i, i + 80));
+    }
+  }
+
+  return { tradesDetected };
 }
 
 /**
  * Automated continuous live sync executed by Cloudflare Workers Cron Trigger.
  * Stays safely within Worker subrequest budgets via `SYNC_MAX_TOKENS` (default 35),
- * deduplicates via `processed_live_mints`, and never skips blocks mid-drop.
+ * deduplicates via `processed_live_mints`, and buffers P2P transfers into
+ * `pending_p2p_transfers` for secondary trade detection without EVER adding P2P
+ * transfers to primary newly-minted sales (`collections.total_mints` / `sale_rounds`).
  */
 export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
   const db = createDb(env.DB);
@@ -466,7 +1001,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
   const fromBlock = state?.lastIndexedBlock
     ? state.lastIndexedBlock
     : Math.max(6_363_806, headBlock - 500);
-  const toBlock = Math.min(headBlock, fromBlock + 1_500);
+  let toBlock = Math.min(headBlock, fromBlock + 1_200);
 
   if (fromBlock > headBlock) {
     return {
@@ -476,32 +1011,131 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
       tokensResolved: 0,
       trackedMintsAdded: 0,
       roundsUpdated: 0,
+      p2pTransfersBuffered: 0,
+      tradesDetected: 0,
       skippedReason: "already_at_head",
     };
   }
 
-  const logs = await rpc<RpcLog[]>(rpcUrl, "eth_getLogs", [
-    {
-      address: ABSTRACT_OBJEKT,
-      topics: [ERC721_TRANSFER_TOPIC, ZERO_TOPIC],
-      fromBlock: "0x" + fromBlock.toString(16),
-      toBlock: "0x" + toBlock.toString(16),
-    },
-  ]);
+  // Fetch all ERC-721 Transfer logs in a single RPC call; halve range if a massive drop hits log caps
+  let allTransferLogs: RpcLog[] = [];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      allTransferLogs = await rpc<RpcLog[]>(rpcUrl, "eth_getLogs", [
+        {
+          address: ABSTRACT_OBJEKT,
+          topics: [ERC721_TRANSFER_TOPIC],
+          fromBlock: "0x" + fromBlock.toString(16),
+          toBlock: "0x" + toBlock.toString(16),
+        },
+      ]);
+      break;
+    } catch (err) {
+      if (attempt < 2 && toBlock - fromBlock > 150) {
+        toBlock = fromBlock + Math.floor((toBlock - fromBlock) / 2);
+        continue;
+      }
+      throw err;
+    }
+  }
 
-  const parsedLogs = logs
-    .filter((l) => l.topics.length >= 4)
-    .map((l) => ({
-      blockNumber: Number(BigInt(l.blockNumber)),
-      tokenId: Number(BigInt(l.topics[3]!)),
-      timestampIso: l.blockTimestamp
-        ? new Date(Number(BigInt(l.blockTimestamp)) * 1000).toISOString()
-        : new Date().toISOString(),
-    }));
+  const parsedMintLogs: Array<{
+    blockNumber: number;
+    tokenId: number;
+    timestampIso: string;
+  }> = [];
+  const parsedP2PLogs: Array<{
+    txHash: string;
+    logIndex: number;
+    blockNumber: number;
+    transferredAt: string;
+    fromAddr: string;
+    toAddr: string;
+    pairKey: string;
+    tokenId: number;
+  }> = [];
 
-  // Deduplicate against processed_live_mints in <= 80-param chunks (D1 100-param safe)
+  let latestLogIso = new Date().toISOString();
+
+  for (const l of allTransferLogs) {
+    if (l.topics.length < 4) continue;
+    const fromTopic = l.topics[1]!.toLowerCase();
+    const toTopic = l.topics[2]!.toLowerCase();
+    const blockNumber = Number(BigInt(l.blockNumber));
+    const tokenId = Number(BigInt(l.topics[3]!));
+    const timestampIso = l.blockTimestamp
+      ? new Date(Number(BigInt(l.blockTimestamp)) * 1000).toISOString()
+      : new Date().toISOString();
+    if (timestampIso > latestLogIso) latestLogIso = timestampIso;
+
+    if (fromTopic === ZERO_TOPIC) {
+      // Strictly newly minted primary sales ONLY
+      parsedMintLogs.push({ blockNumber, tokenId, timestampIso });
+    } else if (toTopic !== ZERO_TOPIC) {
+      const fromAddr = topicToAddress(fromTopic);
+      const toAddr = topicToAddress(toTopic);
+      if (isEligibleP2PTransfer(fromAddr, toAddr)) {
+        const { pairKey } = makeWalletPairKey("abstract", fromAddr, toAddr);
+        parsedP2PLogs.push({
+          txHash: l.transactionHash.toLowerCase(),
+          logIndex: Number(BigInt(l.logIndex)),
+          blockNumber,
+          transferredAt: timestampIso,
+          fromAddr,
+          toAddr,
+          pairKey,
+          tokenId,
+        });
+      }
+    }
+  }
+
+  // Buffer eligible P2P transfers idempotently (never touches collections/sale_rounds)
+  let p2pTransfersBuffered = 0;
+  let tradesAvailable = true;
+  if (parsedP2PLogs.length > 0) {
+    try {
+      const insertP2p = env.DB.prepare(
+        `INSERT OR IGNORE INTO pending_p2p_transfers
+          (tx_hash, log_index, chain, block_number, transferred_at, from_addr, to_addr, pair_key, token_id, status)
+         VALUES (?, ?, 'abstract', ?, ?, ?, ?, ?, ?, 'open')`,
+      );
+      const p2pStmts = parsedP2PLogs.map((p) =>
+        insertP2p.bind(
+          p.txHash,
+          p.logIndex,
+          p.blockNumber,
+          p.transferredAt,
+          p.fromAddr,
+          p.toAddr,
+          p.pairKey,
+          p.tokenId,
+        ),
+      );
+      for (let i = 0; i < p2pStmts.length; i += 80) {
+        await env.DB.batch(p2pStmts.slice(i, i + 80));
+      }
+      p2pTransfersBuffered = parsedP2PLogs.length;
+    } catch {
+      // Allow graceful operation if migration 0002 has not been applied yet
+      tradesAvailable = false;
+    }
+  }
+
+  // Load member lookup map once (shared by both mint sync and trade settling)
+  const allMembers = await db.select().from(members);
+  const memberLookup = new Map<string, string>();
+  const memberInfoById = new Map<string, { name: string; hexColor: string }>();
+  for (const m of allMembers) {
+    memberInfoById.set(m.id, { name: m.name, hexColor: m.hexColor });
+    memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.name)}`, m.id);
+    memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.cosmoName)}`, m.id);
+    memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.fullName)}`, m.id);
+  }
+
+  // Deduplicate newly minted tokens against processed_live_mints in <= 80-param chunks
   const seen = new Set<number>();
-  const uniqueIds = Array.from(new Set(parsedLogs.map((l) => l.tokenId)));
+  const uniqueIds = Array.from(new Set(parsedMintLogs.map((l) => l.tokenId)));
   for (let i = 0; i < uniqueIds.length; i += 80) {
     const slice = uniqueIds.slice(i, i + 80);
     const rows = await db
@@ -511,11 +1145,21 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     for (const r of rows) seen.add(r.tokenId);
   }
 
-  const pending = parsedLogs.filter((l) => !seen.has(l.tokenId));
+  const pending = parsedMintLogs.filter((l) => !seen.has(l.tokenId));
   const batch = pending.slice(0, maxTokens);
 
   if (batch.length === 0) {
-    // Advance cursor cleanly to toBlock
+    let tradesDetected = 0;
+    if (tradesAvailable) {
+      const settled = await settlePendingTradesInD1(db, env.DB, {
+        referenceIso: latestLogIso,
+        maxMetaBudget: Math.min(20, maxTokens),
+        memberLookup,
+        memberInfoById,
+      }).catch(() => ({ tradesDetected: 0 }));
+      tradesDetected = settled.tradesDetected;
+    }
+
     await db
       .insert(syncState)
       .values({
@@ -540,11 +1184,13 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
       tokensResolved: 0,
       trackedMintsAdded: 0,
       roundsUpdated: 0,
+      p2pTransfersBuffered,
+      tradesDetected,
       skippedReason: "no_new_mints",
     };
   }
 
-  // Fetch metadata in polite waves of 10
+  // Fetch metadata for newly minted tokens in polite waves of 10
   const resolved: Array<{
     tokenId: number;
     blockNumber: number;
@@ -563,16 +1209,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     resolved.push(...waveRes);
   }
 
-  // Load member lookup map
-  const allMembers = await db.select().from(members);
-  const memberLookup = new Map<string, string>();
-  for (const m of allMembers) {
-    memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.name)}`, m.id);
-    memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.cosmoName)}`, m.id);
-    memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.fullName)}`, m.id);
-  }
-
-  // Aggregate deltas in-memory before writing cleanly to D1
+  // Aggregate primary mint deltas in-memory before writing cleanly to D1
   const colDeltas = new Map<
     string,
     {
@@ -728,7 +1365,19 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     roundsUpdated = rec.roundsUpdated;
   }
 
-  // Ensure sql import stays referenced cleanly
+  // Settle any ready P2P trade sessions using remaining Worker subrequest budget
+  let tradesDetected = 0;
+  const remainingTradeBudget = Math.max(0, Math.min(10, 42 - resolved.length));
+  if (tradesAvailable && remainingTradeBudget >= 2) {
+    const settled = await settlePendingTradesInD1(db, env.DB, {
+      referenceIso: latestLogIso,
+      maxMetaBudget: remainingTradeBudget,
+      memberLookup,
+      memberInfoById,
+    }).catch(() => ({ tradesDetected: 0 }));
+    tradesDetected = settled.tradesDetected;
+  }
+
   void sql;
 
   return {
@@ -738,5 +1387,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     tokensResolved: resolved.length,
     trackedMintsAdded,
     roundsUpdated,
+    p2pTransfersBuffered,
+    tradesDetected,
   };
 }
