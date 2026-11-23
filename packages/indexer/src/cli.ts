@@ -466,12 +466,15 @@ async function main() {
   if (command === "aggregate-trades-streaming") {
     const roDb = new DatabaseSync(dbPath, { readOnly: true });
     const metaDbArg = args.get("meta-db");
+    const outArg = args.get("out");
     const windowDays = Number(args.get("window-days") ?? "7");
     try {
       const summary = aggregateTradesStreaming(roDb, {
         dataRoot: resolve(rootDir, "data"),
         metadataDbPath: metaDbArg ? resolve(rootDir, metaDbArg) : undefined,
-        tradesOutFile: resolve(rootDir, "packages/db/generated/sync-trades.sql"),
+        tradesOutFile: outArg
+          ? resolve(rootDir, outArg)
+          : resolve(rootDir, "packages/db/generated/sync-trades.sql"),
         windowMs: windowDays * 24 * 3600 * 1000,
         onProgress: ({
           windowIndex,
