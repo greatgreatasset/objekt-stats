@@ -1,13 +1,22 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "objekt-stats",
-  "main": "@tanstack/react-start/server-entry",
+  "main": "./src/server.ts",
   "compatibility_date": "2026-11-23",
   "observability": {
     "enabled": true,
     "traces": {
       "enabled": true
     }
+  },
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
+  "vars": {
+    "ABSTRACT_RPC_URL": "https://api.mainnet.abs.xyz",
+    "SYNC_MAX_TOKENS": "35"
   },
   "routes": [
     {

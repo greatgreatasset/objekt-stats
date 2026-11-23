@@ -3,23 +3,44 @@ events:
   - id: triples-s1-reveal
     eventDate: "2022-05-01"
     category: reveal
-    title: "S1 Yoon SeoYeon Revealed"
-    summary: "First tripleS member revealed and Atom01 COSMO era begins."
+    title: "S1 Yoon SeoYeon Revealed & Atom01 Era Begins"
+    summary: "First tripleS member revealed; Modhaus launches the COSMO Atom01 Objekt season on Polygon."
     members: ["triples-seoyeon"]
+
+  - id: triples-s5-yooyeon-reveal
+    eventDate: "2022-07-15"
+    category: reveal
+    title: "S5 Kim YooYeon Revealed"
+    summary: "Former My Teenage Girl finalist Kim YooYeon joins tripleS, bringing a major wave of early fandom interest."
+    members: ["triples-yooyeon"]
 
   - id: triples-aaa-debut
     eventDate: "2022-10-28"
     category: subunit
     title: "Acid Angel from Asia Debut (Generation)"
-    summary: "First fan-voted DIMENSION sub-unit debuts with viral hit 'Generation'."
+    summary: "First fan-voted DIMENSION sub-unit debuts with breakout viral track 'Generation'."
     members: ["triples-hyerin", "triples-yooyeon", "triples-nakyoung", "triples-yubin"]
+
+  - id: triples-s11-kotone-reveal
+    eventDate: "2023-01-02"
+    category: reveal
+    title: "S11 Kotone Revealed (Tokyo Haus Era)"
+    summary: "Girls Planet 999 contestant Kamimoto Kotone revealed as S11."
+    members: ["triples-kotone"]
 
   - id: triples-assemble-debut
     eventDate: "2023-02-13"
     category: comeback
-    title: "ASSEMBLE Full 10-Member Debut (Rising)"
-    summary: "First OT10 full-group mini album ASSEMBLE with title track 'Rising'."
+    title: "ASSEMBLE OT10 Comeback (Rising) & Binary01 Launch"
+    summary: "First full-group mini album ASSEMBLE with Gravity-selected title track 'Rising'; Binary01 season opens."
     members: []
+
+  - id: triples-s14-sohyun-reveal
+    eventDate: "2023-04-14"
+    category: reveal
+    title: "S14 Park SoHyun Revealed"
+    summary: "Producer-composer member Park SoHyun joins tripleS."
+    members: ["triples-sohyun"]
 
   - id: triples-kre-debut
     eventDate: "2023-05-04"
@@ -28,60 +49,123 @@ events:
     summary: "Second DIMENSION sub-unit releases AESTHETIC."
     members: ["triples-seoyeon", "triples-jiwoo", "triples-chaeyeon", "triples-soomin"]
 
+  - id: triples-s15-xinyu-reveal
+    eventDate: "2023-07-02"
+    category: reveal
+    title: "S15 Zhou Xinyu Revealed"
+    summary: "Girls Planet 999 contestant Zhou Xinyu revealed as S15 ahead of LOVElution."
+    members: ["triples-xinyu"]
+
   - id: triples-lovelution-debut
     eventDate: "2023-08-17"
     category: subunit
     title: "LOVElution Debut (Girls' Capitalism)"
-    summary: "8-member DIMENSION releases ↀ with title track 'Girls' Capitalism'."
+    summary: "8-member DIMENSION releases ↀ with 'Girls' Capitalism' followed by US Authentic tour dates."
     members: ["triples-seoyeon", "triples-hyerin", "triples-yubin", "triples-kaede", "triples-dahyun", "triples-nien", "triples-sohyun", "triples-xinyu"]
 
   - id: triples-evolution-debut
     eventDate: "2023-10-11"
     category: subunit
-    title: "EVOLution Debut (Invincible)"
-    summary: "8-member DIMENSION releases ⟡ with title track 'Invincible'."
+    title: "EVOLution Debut (Invincible) & Cream01 Launch"
+    summary: "8-member DIMENSION releases ⟡ with 'Invincible'; Cream01 Objekt season begins."
     members: ["triples-jiwoo", "triples-chaeyeon", "triples-yooyeon", "triples-soomin", "triples-nakyoung", "triples-kotone", "triples-yeonji", "triples-mayu"]
+
+  - id: triples-mama-roty
+    eventDate: "2023-11-29"
+    category: viral
+    title: "MAMA Awards 2023 — Best New Female Artist"
+    summary: "tripleS wins Rookie of the Year (Best New Female Artist) at the 2023 MAMA Awards."
+    members: []
 
   - id: triples-nxt-reveal
     eventDate: "2023-12-26"
     endDate: "2023-12-29"
     category: reveal
     title: "NXT Members S17–S20 Revealed"
-    summary: "Lynn, JooBin, HaYeon, and ShiOn revealed across four consecutive days."
+    summary: "Lynn, JooBin, HaYeon, and ShiOn revealed across four consecutive days with 'Just Do It'."
     members: ["triples-lynn", "triples-joobin", "triples-hayeon", "triples-shion"]
+
+  - id: triples-aria-debut
+    eventDate: "2024-01-15"
+    category: subunit
+    title: "tripleS Aria Ballad Unit Debut (Door)"
+    summary: "Vocal-focused 5-member DIMENSION releases 'Door'."
+    members: ["triples-jiwoo", "triples-chaeyeon", "triples-kaede", "triples-dahyun", "triples-nien"]
 
   - id: triples-glow-reveal
     eventDate: "2024-04-01"
     endDate: "2024-04-04"
     category: reveal
     title: "Glow Members S21–S24 Revealed (Complete OT24)"
-    summary: "ChaeWon, Sullin, SeoAh, and JiYeon complete the 24-member tripleS lineup."
+    summary: "ChaeWon, Sullin, SeoAh, and JiYeon complete the 24-member tripleS roster."
     members: ["triples-chaewon", "triples-sullin", "triples-seoah", "triples-jiyeon"]
 
   - id: triples-assemble24-debut
     eventDate: "2024-05-08"
     category: comeback
     title: "ASSEMBLE24 Full 24-Member Comeback (Girls Never Die)"
-    summary: "First full OT24 studio album and breakout music show wins for 'Girls Never Die'."
+    summary: "First OT24 studio album and Divine01 launch; earns tripleS's first music show wins."
+    members: []
+
+  - id: triples-first-win
+    eventDate: "2024-05-14"
+    category: viral
+    title: "First Music Show Win (The Show — Girls Never Die)"
+    summary: "Breakout milestone win on SBS M The Show driving huge mainstream visibility and Objekt demand."
     members: []
 
   - id: triples-vv-debut
     eventDate: "2024-10-23"
     category: subunit
     title: "Visionary Vision Debut (Hit the Floor)"
-    summary: "12-member dance-focused DIMENSION releases Performante."
+    summary: "12-member dance-focused DIMENSION releases Performante; Ever01 season launches shortly after."
     members: ["triples-hyerin", "triples-yooyeon", "triples-nakyoung", "triples-yubin", "triples-kaede", "triples-kotone", "triples-yeonji", "triples-nien", "triples-sohyun", "triples-xinyu", "triples-lynn", "triples-jiyeon"]
+
+  - id: triples-hatchi-jp-debut
+    eventDate: "2024-11-20"
+    category: subunit
+    title: "tripleS ∞! (Hatchi) Japanese Debut (Untitled)"
+    summary: "8-member Japan DIMENSION debuts with 'Untitled', boosting Japanese fandom demand."
+    members: ["triples-jiwoo", "triples-chaeyeon", "triples-yooyeon", "triples-soomin", "triples-kotone", "triples-mayu", "triples-shion", "triples-chaewon"]
 
   - id: triples-cosmo-abstract-migration
     eventDate: "2025-04-18"
     category: gravity
     title: "COSMO Blockchain Migration (Polygon → Abstract)"
-    summary: "Modhaus migrates COSMO Objekts, COMO, and Gravity from Polygon to Abstract L2."
+    summary: "Modhaus migrates COSMO Objekts, COMO, and Gravity from Polygon to Abstract L2 (tokenId 9,419,276+)."
+    members: []
+
+  - id: triples-atom02-launch
+    eventDate: "2025-05-01"
+    category: gravity
+    title: "Atom02 Objekt Season Launch"
+    summary: "Sixth overall COSMO season launches on Abstract ahead of ASSEMBLE25."
     members: []
 
   - id: triples-assemble25-comeback
     eventDate: "2025-05-12"
     category: comeback
     title: "ASSEMBLE25 OT24 Comeback (Are You Alive)"
-    summary: "Second full 24-member studio comeback."
+    summary: "Second full 24-member studio album led by Gravity-selected title track 'Are You Alive'."
+    members: []
+
+  - id: triples-hatchi-ep
+    eventDate: "2025-10-01"
+    category: subunit
+    title: "tripleS ∞! (Hatchi) — SecretHimitsuBimil EP"
+    summary: "Japanese unit returns with expanded EP release."
+    members: ["triples-jiwoo", "triples-chaeyeon", "triples-yooyeon", "triples-soomin", "triples-kotone", "triples-mayu", "triples-shion", "triples-chaewon"]
+
+  - id: triples-binary02-launch
+    eventDate: "2025-11-14"
+    category: gravity
+    title: "Binary02 Objekt Season Launch"
+    summary: "COSMO transitions from Atom02 into Binary02 across digital and physical Objekt drops."
+    members: []
+
+  - id: triples-msnz-beyond-beauty
+    eventDate: "2025-11-24"
+    category: subunit
+    title: "tripleS msnz [Beyond Beauty] Release"
+    summary: "Fan-voted sub-unit project line releases Beyond Beauty alongside seasonal DCO drops."
     members: []

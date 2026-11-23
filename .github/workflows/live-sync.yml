@@ -1,0 +1,55 @@
+name: Heavy Live Sync & R2 Snapshot
+
+on:
+  # Optional high-throughput backup sync for major drop days (requires CLOUDFLARE_API_TOKEN secret)
+  schedule:
+    - cron: "15 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      abstract_blocks:
+        description: "Number of recent Abstract blocks to sync"
+        required: false
+        default: "25000"
+      concurrency:
+        description: "COSMO metadata concurrency"
+        required: false
+        default: "35"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: ${{ vars.ENABLE_GH_SYNC == 'true' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - name: Restore SQLite checkpoint from R2 (if present)
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          mkdir -p data/raw
+          npx --workspace=@objekt-stats/web wrangler r2 object get objekt-stats-snapshots/checkpoints/indexer.sqlite --file=../../data/raw/indexer.sqlite --remote
+
+      - name: Sync Abstract & aggregate stats
+        run: |
+          BLOCKS="${{ github.event.inputs.abstract_blocks || '25000' }}"
+          CONC="${{ github.event.inputs.concurrency || '35' }}"
+          npm run indexer -- sync-abstract --blocks "$BLOCKS" --limit 60000 --concurrency "$CONC"
+          npm run indexer -- aggregate
+
+      - name: Push aggregates to Cloudflare D1 & snapshot to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm run db:seed-sql
+          npx --workspace=@objekt-stats/web wrangler d1 execute objekt-stats-db --remote --file=../../packages/db/generated/seed-curation.sql --yes
+          npx --workspace=@objekt-stats/web wrangler d1 execute objekt-stats-db --remote --file=../../packages/db/generated/sync-onchain.sql --yes
+          npx --workspace=@objekt-stats/web wrangler r2 object put objekt-stats-snapshots/snapshots/latest-summary.json --file=../../packages/db/generated/snapshot-summary.json --remote
+          npx --workspace=@objekt-stats/web wrangler r2 object put objekt-stats-snapshots/checkpoints/indexer.sqlite --file=../../data/raw/indexer.sqlite --remote

@@ -1,0 +1,331 @@
+# Auto-discovered top sale rounds from on-chain data (curate titles/mechanics freely)
+artistId: artms
+rounds:
+  - slug: artms-atom02-fco-ed1-digital
+    title: Atom02 1st Edition FCO (101–108Z)
+    season: Atom02
+    objektClass: First
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 101Z
+        - 102Z
+        - 103Z
+        - 104Z
+        - 105Z
+        - 106Z
+        - 107Z
+        - 108Z
+  - slug: artms-atom02-fco-ed2-digital
+    title: Atom02 2nd Edition FCO (109–116Z)
+    season: Atom02
+    objektClass: First
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 109Z
+        - 110Z
+        - 111Z
+        - 112Z
+        - 113Z
+        - 114Z
+        - 115Z
+        - 116Z
+  - slug: artms-atom02-dco-371z
+    title: Atom02 DCO 371Z
+    season: Atom02
+    objektClass: Double
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-22
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 371Z
+  - slug: artms-atom02-welcome-100z
+    title: Atom02 Welcome Objekt (100Z)
+    season: Atom02
+    objektClass: Welcome
+    onOffline: online
+    saleMechanic: reward
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    unitPriceUsd: 0
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 100Z
+  - slug: artms-atom02-dco-337a
+    title: Atom02 DCO 337A
+    season: Atom02
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 337A
+  - slug: artms-atom02-dco-336a
+    title: Atom02 DCO 336A
+    season: Atom02
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 336A
+  - slug: artms-divine01-fco-ed1-digital
+    title: Divine01 1st Edition FCO (101–108Z)
+    season: Divine01
+    objektClass: First
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Divine01
+      collectionNos:
+        - 101Z
+        - 102Z
+        - 103Z
+        - 104Z
+        - 105Z
+        - 106Z
+        - 107Z
+        - 108Z
+  - slug: artms-divine01-fco-ed2-digital
+    title: Divine01 2nd Edition FCO (109–116Z)
+    season: Divine01
+    objektClass: First
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Divine01
+      collectionNos:
+        - 109Z
+        - 110Z
+        - 111Z
+        - 112Z
+        - 113Z
+        - 114Z
+        - 115Z
+        - 116Z
+  - slug: artms-atom02-dco-301a
+    title: Atom02 DCO 301A
+    season: Atom02
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 301A
+  - slug: artms-atom02-dco-335a
+    title: Atom02 DCO 335A
+    season: Atom02
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 335A
+  - slug: artms-atom02-dco-302a
+    title: Atom02 DCO 302A
+    season: Atom02
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 302A
+  - slug: artms-divine01-fco-ed3-digital
+    title: Divine01 3rd Edition FCO (117–120Z)
+    season: Divine01
+    objektClass: First
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Divine01
+      collectionNos:
+        - 117Z
+        - 118Z
+        - 119Z
+        - 120Z
+  - slug: artms-cream01-fco-ed2-digital
+    title: Cream01 2nd Edition FCO (109–116Z)
+    season: Cream01
+    objektClass: First
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Cream01
+      collectionNos:
+        - 109Z
+        - 110Z
+        - 111Z
+        - 112Z
+        - 113Z
+        - 114Z
+        - 115Z
+        - 116Z
+  - slug: artms-cream01-fco-ed1-digital
+    title: Cream01 1st Edition FCO (101–108Z)
+    season: Cream01
+    objektClass: First
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-21
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Cream01
+      collectionNos:
+        - 101Z
+        - 102Z
+        - 103Z
+        - 104Z
+        - 105Z
+        - 106Z
+        - 107Z
+        - 108Z
+  - slug: artms-atom02-dco-329a
+    title: Atom02 DCO 329A
+    season: Atom02
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 329A
+  - slug: artms-divine01-dco-336a
+    title: Divine01 DCO 336A
+    season: Divine01
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-21
+    endAt: 2026-11-23
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Divine01
+      collectionNos:
+        - 336A
+  - slug: artms-atom02-dco-328a
+    title: Atom02 DCO 328A
+    season: Atom02
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 328A
+  - slug: artms-atom02-dco-330a
+    title: Atom02 DCO 330A
+    season: Atom02
+    objektClass: Double
+    onOffline: offline
+    saleMechanic: physical_scan
+    startAt: 2026-11-20
+    endAt: 2026-11-22
+    includeInPopularity: false
+    collectionMatchers:
+      seasons:
+        - Atom02
+      collectionNos:
+        - 330A
+  - slug: artms-ever01-fco-ed1-digital
+    title: Ever01 1st Edition FCO (101–108Z)
+    season: Ever01
+    objektClass: First
+    onOffline: online
+    saleMechanic: member_select
+    startAt: 2026-11-20
+    endAt: 2026-11-23
+    unitPriceUsd: 3.29
+    includeInPopularity: true
+    collectionMatchers:
+      seasons:
+        - Ever01
+      collectionNos:
+        - 101Z
+        - 102Z
+        - 103Z
+        - 104Z
+        - 105Z
+        - 106Z
+        - 107Z
+        - 108Z

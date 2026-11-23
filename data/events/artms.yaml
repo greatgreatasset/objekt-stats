@@ -1,11 +1,32 @@
 artistId: artms
 events:
+  - id: artms-modhaus-signing
+    eventDate: "2023-03-17"
+    category: reveal
+    title: "HeeJin, Kim Lip, JinSoul & Choerry Sign with Modhaus"
+    summary: "Former LOONA members join Modhaus to launch the ARTMS project on COSMO."
+    members: ["artms-heejin", "artms-kimlip", "artms-jinsoul", "artms-choerry"]
+
+  - id: artms-haseul-joins
+    eventDate: "2023-06-21"
+    category: reveal
+    title: "HaSeul Joins Modhaus & ARTMS"
+    summary: "HaSeul joins ARTMS, completing the 5-member lineup."
+    members: ["artms-haseul"]
+
   - id: artms-oec-version-up
     eventDate: "2023-07-12"
     category: subunit
     title: "ODD EYE CIRCLE — Version Up (Air Force One)"
-    summary: "Kim Lip, JinSoul, and Choerry return under Modhaus with Version Up."
+    summary: "Kim Lip, JinSoul, and Choerry return under Modhaus with Version Up and Volume Up tour."
     members: ["artms-kimlip", "artms-jinsoul", "artms-choerry"]
+
+  - id: artms-haseul-plastic-candy
+    eventDate: "2023-10-26"
+    category: comeback
+    title: "HaSeul — Plastic Candy & Music Studio 81.8Hz"
+    summary: "HaSeul releases digital single 'Plastic Candy' alongside solo theater concerts."
+    members: ["artms-haseul"]
 
   - id: artms-heejin-k
     eventDate: "2023-10-31"
@@ -17,8 +38,31 @@ events:
   - id: artms-dall-debut
     eventDate: "2024-05-31"
     category: comeback
-    title: "ARTMS Debut Studio Album — DALL (Virtual Angel)"
-    summary: "Full 5-member ARTMS re-debut with 'Virtual Angel'."
+    title: "ARTMS Debut Studio Album — <DALL> (Virtual Angel)"
+    summary: "Full 5-member ARTMS debut album with acclaimed single 'Virtual Angel'."
+    members: []
+
+  - id: artms-moonshot-tour
+    eventDate: "2024-07-20"
+    endDate: "2024-11-17"
+    category: tour
+    title: "ARTMS World Tour — Moonshot"
+    summary: "First global tour across Seoul, Japan, North America, Latin America, Europe, and Australia."
+    members: []
+
+  - id: artms-lunar-theory-tour
+    eventDate: "2025-03-22"
+    endDate: "2025-05-14"
+    category: tour
+    title: "ARTMS 2025 World Tour — Lunar Theory"
+    summary: "Asia, North America, and Europe tour bridging classic LOONA solos/units with ARTMS releases."
+    members: []
+
+  - id: artms-burn-single
+    eventDate: "2025-04-04"
+    category: comeback
+    title: "Pre-Release Single — BURN"
+    summary: "Pre-release track bridging Lunar Theory into the Club Icarus era."
     members: []
 
   - id: artms-cosmo-abstract-migration
@@ -26,4 +70,19 @@ events:
     category: gravity
     title: "COSMO Blockchain Migration (Polygon → Abstract)"
     summary: "Modhaus migrates COSMO Objekts, COMO, and Gravity from Polygon to Abstract L2."
+    members: []
+
+  - id: artms-club-icarus
+    eventDate: "2025-06-13"
+    category: comeback
+    title: "ARTMS Mini Album — <Club Icarus> (Icarus)"
+    summary: "6-track summer comeback featuring title track 'Icarus', 'BURN', and 'Club for the Broken'."
+    members: []
+
+  - id: artms-grand-club-icarus-tour
+    eventDate: "2025-11-06"
+    endDate: "2026-03-28"
+    category: tour
+    title: "ARTMS World Tour — Grand Club Icarus"
+    summary: "Extended North America and international tour running from late 2025 through March 2026."
     members: []

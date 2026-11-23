@@ -22,6 +22,30 @@ function normalizeArtist(input?: string): ArtistSlug {
   return input === "artms" ? "artms" : "triples";
 }
 
+async function loadArtistEventsWithMembers(
+  db: ReturnType<typeof createDb>,
+  artistId: ArtistSlug,
+) {
+  const eventList = await db
+    .select()
+    .from(events)
+    .where(eq(events.artistId, artistId))
+    .orderBy(desc(events.eventDate));
+
+  const links = await db.select().from(eventMembers);
+  const byEvent = new Map<string, string[]>();
+  for (const l of links) {
+    const arr = byEvent.get(l.eventId) ?? [];
+    arr.push(l.memberId);
+    byEvent.set(l.eventId, arr);
+  }
+
+  return eventList.map((ev) => ({
+    ...ev,
+    memberIds: byEvent.get(ev.id) ?? [],
+  }));
+}
+
 export const getArtistOverview = createServerFn({ method: "GET" })
   .validator((artistId?: string) => normalizeArtist(artistId))
   .handler(async ({ data: artistId }) => {
@@ -38,13 +62,14 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .from(members)
       .where(eq(members.artistId, artistId))
       .orderBy(asc(members.memberOrder));
+    const memberById = new Map(memberList.map((m) => [m.id, m]));
 
     const roundList = await db
       .select()
       .from(saleRounds)
       .where(eq(saleRounds.artistId, artistId))
       .orderBy(desc(saleRounds.startAt), desc(saleRounds.totalMints))
-      .limit(50);
+      .limit(100);
 
     const roundTopSellers = new Map<
       string,
@@ -79,7 +104,6 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       }
     }
 
-    // Member aggregate mints across popularity rounds (or all rounds fallback)
     const memberTotalsRows = await db
       .select({
         memberId: saleRoundMemberStats.memberId,
@@ -115,19 +139,119 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       ]),
     );
 
-    const eventList = await db
-      .select()
-      .from(events)
-      .where(eq(events.artistId, artistId))
-      .orderBy(desc(events.eventDate));
+    const eventsWithMembers = await loadArtistEventsWithMembers(db, artistId);
+    const timelineEvents = eventsWithMembers.map((e) => ({
+      ...e,
+      members: e.memberIds,
+    }));
 
-    const eventMemberLinks = await db.select().from(eventMembers);
-    const membersByEvent = new Map<string, string[]>();
-    for (const link of eventMemberLinks) {
-      const arr = membersByEvent.get(link.eventId) ?? [];
-      arr.push(link.memberId);
-      membersByEvent.set(link.eventId, arr);
-    }
+    // Flagged statistical anomalies across popularity rounds
+    const anomalyRows = await db
+      .select({
+        roundSlug: saleRoundMemberStats.roundSlug,
+        roundTitle: saleRounds.title,
+        startAt: saleRounds.startAt,
+        memberId: saleRoundMemberStats.memberId,
+        rank: saleRoundMemberStats.rank,
+        rankDeltaPrev: saleRoundMemberStats.rankDeltaPrev,
+        relativeIndex: saleRoundMemberStats.relativeIndex,
+        mintCount: saleRoundMemberStats.mintCount,
+        anomalyDirection: saleRoundMemberStats.anomalyDirection,
+        anomalyReason: saleRoundMemberStats.anomalyReason,
+      })
+      .from(saleRoundMemberStats)
+      .innerJoin(
+        saleRounds,
+        eq(saleRounds.slug, saleRoundMemberStats.roundSlug),
+      )
+      .where(
+        sql`${saleRounds.artistId} = ${artistId} AND ${saleRoundMemberStats.isAnomaly} = 1`,
+      )
+      .orderBy(desc(saleRounds.startAt), desc(saleRoundMemberStats.mintCount))
+      .limit(8);
+
+    const anomalies = anomalyRows.map((a) => {
+      const m = memberById.get(a.memberId);
+      const correlated = correlateEventsForMemberRound(
+        a.startAt,
+        artistId,
+        a.memberId,
+        timelineEvents,
+        14,
+        7,
+      );
+      return {
+        ...a,
+        memberName: m?.name ?? a.memberId,
+        memberCode: m?.code ?? "",
+        hexColor: m?.hexColor ?? "#22AEFF",
+        nearestEvent: correlated[0]
+          ? {
+              id: correlated[0].event.id,
+              title: correlated[0].event.title,
+              eventDate: correlated[0].event.eventDate,
+              dayOffset: correlated[0].dayOffset,
+              scope: correlated[0].scope,
+            }
+          : null,
+      };
+    });
+
+    // Biggest rank movers in the most recent popularity round that has deltas
+    const recentMoversRows = await db
+      .select({
+        roundSlug: saleRoundMemberStats.roundSlug,
+        roundTitle: saleRounds.title,
+        startAt: saleRounds.startAt,
+        memberId: saleRoundMemberStats.memberId,
+        rank: saleRoundMemberStats.rank,
+        rankDeltaPrev: saleRoundMemberStats.rankDeltaPrev,
+        relativeIndex: saleRoundMemberStats.relativeIndex,
+        mintCount: saleRoundMemberStats.mintCount,
+      })
+      .from(saleRoundMemberStats)
+      .innerJoin(
+        saleRounds,
+        eq(saleRounds.slug, saleRoundMemberStats.roundSlug),
+      )
+      .where(
+        sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1 AND ${saleRoundMemberStats.rankDeltaPrev} IS NOT NULL AND ${saleRoundMemberStats.rankDeltaPrev} != 0`,
+      )
+      .orderBy(desc(saleRounds.startAt))
+      .limit(48);
+
+    const latestMoverRoundSlug = recentMoversRows[0]?.roundSlug ?? null;
+    const latestMoverRows = latestMoverRoundSlug
+      ? recentMoversRows.filter((r) => r.roundSlug === latestMoverRoundSlug)
+      : [];
+
+    const biggestRisers = [...latestMoverRows]
+      .filter((r) => (r.rankDeltaPrev ?? 0) > 0)
+      .sort((a, b) => (b.rankDeltaPrev ?? 0) - (a.rankDeltaPrev ?? 0))
+      .slice(0, 4)
+      .map((r) => {
+        const m = memberById.get(r.memberId);
+        return {
+          ...r,
+          memberName: m?.name ?? r.memberId,
+          memberCode: m?.code ?? "",
+          hexColor: m?.hexColor ?? "#22AEFF",
+        };
+      });
+
+    const biggestFallers = [...latestMoverRows]
+      .filter((r) => (r.rankDeltaPrev ?? 0) < 0)
+      .sort((a, b) => (a.rankDeltaPrev ?? 0) - (b.rankDeltaPrev ?? 0))
+      .slice(0, 4)
+      .map((r) => {
+        const m = memberById.get(r.memberId);
+        return {
+          ...r,
+          memberName: m?.name ?? r.memberId,
+          memberCode: m?.code ?? "",
+          hexColor: m?.hexColor ?? "#22AEFF",
+        };
+      });
 
     const syncRows = await db.select().from(syncState);
 
@@ -135,6 +259,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .select({
         roundCount: sql<number>`count(*)`,
         popularityRoundCount: sql<number>`sum(case when ${saleRounds.includeInPopularity} = 1 then 1 else 0 end)`,
+        estGrossUsd: sql<number>`coalesce(sum(case when ${saleRounds.unitPriceUsd} > 0 then ${saleRounds.totalMints} * ${saleRounds.unitPriceUsd} else 0 end), 0)`,
       })
       .from(saleRounds)
       .where(eq(saleRounds.artistId, artistId));
@@ -157,16 +282,21 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         ...r,
         topSeller: roundTopSellers.get(r.slug) ?? null,
       })),
-      events: eventList.map((ev) => ({
-        ...ev,
-        memberIds: membersByEvent.get(ev.id) ?? [],
-      })),
+      anomalies,
+      movers: {
+        roundSlug: latestMoverRoundSlug,
+        roundTitle: recentMoversRows[0]?.roundTitle ?? null,
+        risers: biggestRisers,
+        fallers: biggestFallers,
+      },
+      events: eventsWithMembers,
       syncState: syncRows,
       totals: {
         roundCount: Number(roundTotals?.roundCount ?? 0),
         popularityRoundCount: Number(roundTotals?.popularityRoundCount ?? 0),
         collectionCount: Number(collectionTotals?.collectionCount ?? 0),
         totalMints: Number(collectionTotals?.totalMints ?? 0),
+        estGrossUsd: Number(roundTotals?.estGrossUsd ?? 0),
       },
     };
   });
@@ -238,32 +368,19 @@ export const getRoundDetail = createServerFn({ method: "GET" })
       mintCount: Number(d.mintCount),
     }));
 
-    // Correlated events near this round
-    const artistEvents = await db
-      .select()
-      .from(events)
-      .where(eq(events.artistId, round.artistId));
-    const evLinks = await db.select().from(eventMembers);
-    const evMemberMap = new Map<string, string[]>();
-    for (const l of evLinks) {
-      const arr = evMemberMap.get(l.eventId) ?? [];
-      arr.push(l.memberId);
-      evMemberMap.set(l.eventId, arr);
-    }
-
+    const eventsWithMembers = await loadArtistEventsWithMembers(
+      db,
+      normalizeArtist(round.artistId),
+    );
     const correlated = correlateEventsForMemberRound(
       round.startAt,
       round.artistId,
       null,
-      artistEvents.map((e) => ({
-        ...e,
-        members: evMemberMap.get(e.id) ?? [],
-      })),
+      eventsWithMembers.map((e) => ({ ...e, members: e.memberIds })),
       14,
       7,
     );
 
-    // Pick one representative preview image per member
     const previewByMember = new Map<string, string>();
     for (const c of linkedCols) {
       if (c.memberId && c.frontImageUrl && !previewByMember.has(c.memberId)) {
@@ -354,6 +471,7 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
     }
 
     const roundOrderMap = new Map(popRounds.map((r, i) => [r.slug, i]));
+    const eventsWithMembers = await loadArtistEventsWithMembers(db, artistId);
 
     const matrix = memberList.map((m) => {
       const rows = (statsByMember.get(m.id) ?? []).sort(
@@ -363,11 +481,16 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
       );
       const latest = rows[rows.length - 1];
       const totalMints = rows.reduce((acc, r) => acc + r.mintCount, 0);
-      const avgRank =
+      const avgRankVal =
         rows.length > 0
+          ? rows.reduce((acc, r) => acc + r.rank, 0) / rows.length
+          : null;
+      const rankVolatility =
+        rows.length >= 2 && avgRankVal !== null
           ? Number(
-              (
-                rows.reduce((acc, r) => acc + r.rank, 0) / rows.length
+              Math.sqrt(
+                rows.reduce((acc, r) => acc + (r.rank - avgRankVal) ** 2, 0) /
+                  rows.length,
               ).toFixed(2),
             )
           : null;
@@ -388,10 +511,13 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
         totalMints,
         latestRank: latest?.rank ?? null,
         latestRankDelta: latest?.rankDeltaPrev ?? null,
-        rolling5Rank: latest?.rolling5Rank ?? avgRank,
-        avgRank,
+        rolling5Rank:
+          latest?.rolling5Rank ??
+          (avgRankVal !== null ? Number(avgRankVal.toFixed(2)) : null),
+        avgRank: avgRankVal !== null ? Number(avgRankVal.toFixed(2)) : null,
         avgRelativeIndex,
         bestRank,
+        rankVolatility,
         anomaliesCount: rows.filter((r) => r.isAnomaly).length,
         history: rows.map((r) => ({
           roundSlug: r.roundSlug,
@@ -399,6 +525,8 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
           relativeIndex: r.relativeIndex,
           mintCount: r.mintCount,
           sharePct: r.sharePct,
+          isAnomaly: r.isAnomaly,
+          anomalyDirection: r.anomalyDirection,
         })),
       };
     });
@@ -411,6 +539,13 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
         season: r.season,
         startAt: r.startAt,
         totalMints: r.totalMints,
+        participatingMembers: r.participatingMembers,
+      })),
+      events: eventsWithMembers.map((e) => ({
+        id: e.id,
+        eventDate: e.eventDate,
+        category: e.category,
+        title: e.title,
       })),
       members: matrix,
     };
@@ -459,6 +594,35 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       .where(eq(saleRoundMemberStats.memberId, memberId))
       .orderBy(desc(saleRounds.startAt));
 
+    // Class performance breakdown (First vs Double vs Premier vs Physical)
+    const classMap = new Map<
+      string,
+      { objektClass: string; rounds: number; totalMints: number; rankSum: number; relSum: number }
+    >();
+    for (const r of roundHistory) {
+      if (!r.includeInPopularity) continue;
+      const prev = classMap.get(r.objektClass) ?? {
+        objektClass: r.objektClass,
+        rounds: 0,
+        totalMints: 0,
+        rankSum: 0,
+        relSum: 0,
+      };
+      prev.rounds++;
+      prev.totalMints += r.mintCount;
+      prev.rankSum += r.rank;
+      prev.relSum += r.relativeIndex;
+      classMap.set(r.objektClass, prev);
+    }
+
+    const classBreakdown = Array.from(classMap.values()).map((c) => ({
+      objektClass: c.objektClass,
+      rounds: c.rounds,
+      totalMints: c.totalMints,
+      avgRank: Number((c.rankSum / c.rounds).toFixed(2)),
+      avgRelativeIndex: Number((c.relSum / c.rounds).toFixed(2)),
+    }));
+
     const memberCollections = await db
       .select()
       .from(collections)
@@ -466,24 +630,101 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       .orderBy(desc(collections.totalMints))
       .limit(24);
 
-    const artistEvents = await db
-      .select()
-      .from(events)
-      .where(eq(events.artistId, member.artistId))
-      .orderBy(desc(events.eventDate));
+    const artistEvents = await loadArtistEventsWithMembers(
+      db,
+      normalizeArtist(member.artistId),
+    );
+    const relatedEvents = artistEvents.filter((e) =>
+      e.memberIds.includes(memberId),
+    );
 
-    const evLinks = await db
-      .select()
-      .from(eventMembers)
-      .where(eq(eventMembers.memberId, memberId));
-    const directEventIds = new Set(evLinks.map((l) => l.eventId));
+    const timelineForCorrelation = artistEvents.map((e) => ({
+      ...e,
+      members: e.memberIds,
+    }));
 
-    const relatedEvents = artistEvents.filter((e) => directEventIds.has(e.id));
+    const anomalies = roundHistory
+      .filter((r) => r.isAnomaly)
+      .map((r) => {
+        const matched = correlateEventsForMemberRound(
+          r.startAt,
+          member.artistId,
+          memberId,
+          timelineForCorrelation,
+          14,
+          7,
+        );
+        return {
+          ...r,
+          nearestEvent: matched[0]
+            ? {
+                title: matched[0].event.title,
+                eventDate: matched[0].event.eventDate,
+                dayOffset: matched[0].dayOffset,
+              }
+            : null,
+        };
+      });
 
     return {
       member,
       roundHistory,
+      classBreakdown,
+      anomalies,
       collections: memberCollections,
       events: relatedEvents,
+    };
+  });
+
+export const getEventsWithImpact = createServerFn({ method: "GET" })
+  .validator((artistId?: string) => normalizeArtist(artistId))
+  .handler(async ({ data: artistId }) => {
+    const db = createDb(env.DB);
+    const [artist] = await db
+      .select()
+      .from(artists)
+      .where(eq(artists.id, artistId))
+      .limit(1);
+
+    const memberList = await db
+      .select()
+      .from(members)
+      .where(eq(members.artistId, artistId))
+      .orderBy(asc(members.memberOrder));
+
+    const eventList = await loadArtistEventsWithMembers(db, artistId);
+    const allRounds = await db
+      .select({
+        slug: saleRounds.slug,
+        title: saleRounds.title,
+        season: saleRounds.season,
+        startAt: saleRounds.startAt,
+        totalMints: saleRounds.totalMints,
+        includeInPopularity: saleRounds.includeInPopularity,
+      })
+      .from(saleRounds)
+      .where(eq(saleRounds.artistId, artistId))
+      .orderBy(desc(saleRounds.startAt));
+
+    const MS_PER_DAY = 86_400_000;
+    const eventsWithRounds = eventList.map((ev) => {
+      const evMs = Date.parse(ev.eventDate + "T00:00:00Z");
+      const nearbyRounds = allRounds
+        .filter((r) => {
+          const rMs = Date.parse(r.startAt.slice(0, 10) + "T00:00:00Z");
+          const diffDays = (rMs - evMs) / MS_PER_DAY;
+          return diffDays >= -10 && diffDays <= 18;
+        })
+        .slice(0, 4);
+      return {
+        ...ev,
+        nearbyRounds,
+      };
+    });
+
+    return {
+      artist: artist ?? null,
+      members: memberList,
+      events: eventsWithRounds,
     };
   });

@@ -7,6 +7,7 @@ import {
   createDb,
   events,
   members,
+  processedLiveMints,
   saleRounds,
   syncState,
 } from "@objekt-stats/db";
@@ -31,6 +32,9 @@ export const Route = createFileRoute("/api/health")({
         const [collectionRow] = await db
           .select({ count: sql<number>`count(*)` })
           .from(collections);
+        const [liveDedupeRow] = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(processedLiveMints);
         const chains = await db.select().from(syncState);
 
         return Response.json({
@@ -38,6 +42,11 @@ export const Route = createFileRoute("/api/health")({
           service: "objekt-stats",
           domain: "objektstats.com",
           timestamp: new Date().toISOString(),
+          liveSync: {
+            cronSchedule: "*/5 * * * *",
+            maxTokensPerTick: Number(env.SYNC_MAX_TOKENS || "35"),
+            liveMintsDedupeTracked: Number(liveDedupeRow?.count ?? 0),
+          },
           counts: {
             artists: Number(artistRow?.count ?? 0),
             members: Number(memberRow?.count ?? 0),

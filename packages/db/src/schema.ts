@@ -213,6 +213,15 @@ export const syncState = sqliteTable("sync_state", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const processedLiveMints = sqliteTable(
+  "processed_live_mints",
+  {
+    tokenId: integer("token_id").primaryKey(),
+    syncedAt: text("synced_at").notNull(),
+  },
+  (t) => [index("idx_processed_live_mints_synced").on(t.syncedAt)],
+);
+
 export type ArtistRow = typeof artists.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;

@@ -21,17 +21,15 @@ function sqlBool(val: boolean): string {
   return val ? "1" : "0";
 }
 
-function normalizeMemberLookupKey(name: string): string {
+export function normalizeMemberLookupKey(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 /**
- * Maps a collection number into an auto-grouped round key.
- * - First Class (1xx): Edition buckets (101-108 = Ed1, 109-116 = Ed2, 117-120 = Ed3)
- * - Double / Premier / Motion (3xx, 4xx, 5xx): Exact collectionNo (e.g. 301Z)
- * - Special (2xx) / Welcome (100Z): Grouped by class + collectionNo (excluded from popularity)
+ * Shared deterministic auto-grouping rule used by both the local indexer aggregator
+ * and the Cloudflare Worker edge live-sync engine.
  */
-function inferAutoRoundGroup(
+export function inferAutoRoundGroup(
   artistId: string,
   season: string,
   objektClass: string,
@@ -56,6 +54,16 @@ function inferAutoRoundGroup(
       saleMechanic: "reward",
       includeInPopularity: false,
       unitPriceUsd: 0,
+    };
+  }
+
+  if (objektClass === "Zero") {
+    return {
+      slug: `${artistId}-${seasonLower}-zero-${collectionNo.toLowerCase()}`,
+      title: `${season} Zero Class (${collectionNo})`,
+      saleMechanic: "reward",
+      includeInPopularity: false,
+      unitPriceUsd: null,
     };
   }
 
@@ -111,6 +119,26 @@ function inferAutoRoundGroup(
     };
   }
 
+  if (objektClass === "Motion" || (num >= 500 && num < 600)) {
+    return {
+      slug: `${artistId}-${seasonLower}-mco-${collectionNo.toLowerCase()}`,
+      title: `${season} MCO ${collectionNo}`,
+      saleMechanic: onOffline === "offline" ? "physical_scan" : "member_select",
+      includeInPopularity: onOffline === "online",
+      unitPriceUsd: onOffline === "online" ? 3.29 : null,
+    };
+  }
+
+  if (objektClass === "Unit" || num >= 600) {
+    return {
+      slug: `${artistId}-${seasonLower}-unit-${collectionNo.toLowerCase()}`,
+      title: `${season} Unit Objekt ${collectionNo}`,
+      saleMechanic: onOffline === "offline" ? "physical_scan" : "unit_select",
+      includeInPopularity: false,
+      unitPriceUsd: onOffline === "online" ? 3.29 : null,
+    };
+  }
+
   return {
     slug: `${artistId}-${seasonLower}-${objektClass.toLowerCase()}-${collectionNo.toLowerCase()}`,
     title: `${season} ${objektClass} ${collectionNo}`,
@@ -126,6 +154,7 @@ export interface AggregateOutputSummary {
   roundsCount: number;
   roundMemberStatRows: number;
   outFile: string;
+  snapshotFile: string;
 }
 
 export function aggregateAndEmitSql(
@@ -133,17 +162,20 @@ export function aggregateAndEmitSql(
   options: {
     dataRoot?: string;
     outFile?: string;
+    snapshotFile?: string;
   } = {},
 ): AggregateOutputSummary {
   const dataRoot = options.dataRoot ?? resolve(process.cwd(), "data");
   const outFile =
     options.outFile ??
     resolve(process.cwd(), "packages/db/generated/sync-onchain.sql");
+  const snapshotFile =
+    options.snapshotFile ??
+    resolve(process.cwd(), "packages/db/generated/snapshot-summary.json");
 
   const curation = loadCurationData(dataRoot);
   const trackedArtists = new Set(curation.artists.map((a) => a.id));
 
-  // Build lookup: artistId + normalizedName -> memberId
   const memberLookup = new Map<string, string>();
   const artistMemberTotals = new Map<string, number>();
   for (const artist of curation.artists) {
@@ -155,7 +187,21 @@ export function aggregateAndEmitSql(
     }
   }
 
-  // 1. Aggregate per-collection totals from SQLite
+  // O(N) spin lookup map by collection slug
+  const spinCountsBySlug = new Map<string, number>();
+  const spinRows = store.db
+    .prepare(
+      `SELECT tm.slug AS slug, COUNT(DISTINCT rs.token_id) AS spun_count
+       FROM raw_spins rs
+       JOIN token_metadata tm ON tm.token_id = rs.token_id
+       GROUP BY tm.slug`,
+    )
+    .all() as Array<{ slug: string; spun_count: number }>;
+  for (const r of spinRows) {
+    spinCountsBySlug.set(r.slug, r.spun_count);
+  }
+
+  // 1. Aggregate per-collection totals from SQLite (O(N))
   const collectionRows = store.db
     .prepare(
       `SELECT
@@ -172,10 +218,7 @@ export function aggregateAndEmitSql(
         COUNT(*) AS total_mints,
         COUNT(DISTINCT rm.minter) AS unique_minters,
         MIN(rm.minted_at) AS first_mint_at,
-        MAX(rm.minted_at) AS last_mint_at,
-        (SELECT COUNT(*) FROM raw_spins rs WHERE rs.token_id IN (
-          SELECT t2.token_id FROM token_metadata t2 WHERE t2.slug = tm.slug
-        )) AS spun_count
+        MAX(rm.minted_at) AS last_mint_at
       FROM token_metadata tm
       JOIN raw_mints rm ON rm.token_id = tm.token_id
       GROUP BY tm.slug`,
@@ -195,12 +238,14 @@ export function aggregateAndEmitSql(
     unique_minters: number;
     first_mint_at: string;
     last_mint_at: string;
-    spun_count: number;
   }>;
 
-  const filteredCollections = collectionRows.filter((c) =>
-    trackedArtists.has(c.artist_id as "triples" | "artms"),
-  );
+  const filteredCollections = collectionRows
+    .filter((c) => trackedArtists.has(c.artist_id as "triples" | "artms"))
+    .map((c) => ({
+      ...c,
+      spun_count: spinCountsBySlug.get(c.slug) ?? 0,
+    }));
 
   // 2. Daily mints per collection
   const dailyRows = store.db
@@ -251,7 +296,6 @@ export function aggregateAndEmitSql(
       null;
     if (!memberId) continue;
 
-    // Check curated round matchers first
     const curatedRounds = curation.roundsByArtist[col.artist_id] ?? [];
     const matchedCurated = curatedRounds.find(
       (r) =>
@@ -317,12 +361,10 @@ export function aggregateAndEmitSql(
     if (col.last_mint_at > acc.endAt) acc.endAt = col.last_mint_at;
   }
 
-  // Keep rounds with >= 2 participating members so single-member test mints don't pollute rankings
   const validRounds = Array.from(rounds.values()).filter(
     (r) => r.memberMints.size >= 2,
   );
 
-  // Detect unit_select automatically when an auto-detected online round has a strict subset of members
   for (const r of validRounds) {
     const fullCount = artistMemberTotals.get(r.artistId) ?? 24;
     if (
@@ -330,12 +372,10 @@ export function aggregateAndEmitSql(
       r.saleMechanic === "member_select" &&
       r.memberMints.size < fullCount &&
       r.memberMints.size >= 2 &&
-      fullCount >= 5
+      fullCount >= 5 &&
+      r.memberMints.size <= Math.floor(fullCount * 0.6)
     ) {
-      // Only reclassify as unit_select if <= 60% of roster participated; partial recent window might just have missed quiet members
-      if (r.memberMints.size <= Math.floor(fullCount * 0.6)) {
-        r.saleMechanic = "unit_select";
-      }
+      r.saleMechanic = "unit_select";
     }
   }
 
@@ -368,16 +408,12 @@ export function aggregateAndEmitSql(
   const now = new Date().toISOString();
   const lines: string[] = [
     `-- Auto-generated on-chain aggregates (${now})`,
-    "-- Apply locally: npx --workspace=@objekt-stats/web wrangler d1 execute objekt-stats-db --local --file=../../packages/db/generated/sync-onchain.sql",
-    "-- Apply remote:  npx --workspace=@objekt-stats/web wrangler d1 execute objekt-stats-db --remote --file=../../packages/db/generated/sync-onchain.sql --yes",
+    "",
+    "DELETE FROM sale_round_member_stats;",
+    "DELETE FROM sale_round_collections;",
+    "DELETE FROM sale_rounds;",
     "",
   ];
-
-  // Clear derived round tables before re-inserting fresh recomputed metrics
-  lines.push("DELETE FROM sale_round_member_stats;");
-  lines.push("DELETE FROM sale_round_collections;");
-  lines.push("DELETE FROM sale_rounds;");
-  lines.push("");
 
   for (const col of filteredCollections) {
     const memberId =
@@ -427,16 +463,25 @@ export function aggregateAndEmitSql(
 
   // Update sync_state cursors
   lines.push("");
+  const chainSummaries: Record<string, unknown> = {};
   for (const chain of ["polygon", "abstract"] as const) {
     const chainStats = store.db
       .prepare(
-        `SELECT MAX(block_number) AS last_block, MAX(minted_at) AS last_ts, COUNT(*) AS cnt
+        `SELECT MIN(block_number) AS first_block, MAX(block_number) AS last_block,
+                MIN(minted_at) AS first_ts, MAX(minted_at) AS last_ts, COUNT(*) AS cnt
          FROM raw_mints WHERE chain = ?`,
       )
       .get(chain) as
-      | { last_block: number | null; last_ts: string | null; cnt: number }
+      | {
+          first_block: number | null;
+          last_block: number | null;
+          first_ts: string | null;
+          last_ts: string | null;
+          cnt: number;
+        }
       | undefined;
     if (chainStats && chainStats.cnt > 0) {
+      chainSummaries[chain] = chainStats;
       lines.push(
         `INSERT OR REPLACE INTO sync_state (chain, last_indexed_block, last_indexed_timestamp, total_tokens_indexed, updated_at) VALUES (${sqlStr(chain)}, ${chainStats.last_block ?? 0}, ${sqlStr(chainStats.last_ts)}, ${chainStats.cnt}, ${sqlStr(now)});`,
       );
@@ -446,11 +491,41 @@ export function aggregateAndEmitSql(
   mkdirSync(resolve(outFile, ".."), { recursive: true });
   writeFileSync(outFile, lines.join("\n") + "\n", "utf8");
 
+  // Also write compact JSON snapshot for Cloudflare R2 archival
+  const snapshot = {
+    generatedAt: now,
+    chains: chainSummaries,
+    counts: {
+      collections: filteredCollections.length,
+      dailyRows: filteredDaily.length,
+      rounds: validRounds.length,
+      roundMemberStatRows,
+    },
+    rounds: validRounds
+      .sort((a, b) => b.startAt.localeCompare(a.startAt))
+      .map((r) => ({
+        slug: r.slug,
+        artistId: r.artistId,
+        title: r.title,
+        season: r.season,
+        objektClass: r.objektClass,
+        saleMechanic: r.saleMechanic,
+        startAt: r.startAt,
+        endAt: r.endAt,
+        totalMints: Array.from(r.memberMints.values()).reduce((a, b) => a + b, 0),
+        participatingMembers: r.memberMints.size,
+        includeInPopularity: r.includeInPopularity,
+        stats: statsByRoundSlug.get(r.slug) ?? [],
+      })),
+  };
+  writeFileSync(snapshotFile, JSON.stringify(snapshot, null, 2), "utf8");
+
   return {
     collectionsCount: filteredCollections.length,
     dailyRowsCount: filteredDaily.length,
     roundsCount: validRounds.length,
     roundMemberStatRows,
     outFile,
+    snapshotFile,
   };
 }

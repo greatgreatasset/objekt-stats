@@ -1,5 +1,7 @@
+import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { aggregateAndEmitSql } from "./aggregate.js";
+import { stringify as stringifyYaml } from "yaml";
+import { aggregateAndEmitSql, inferAutoRoundGroup } from "./aggregate.js";
 import { getAbstractHeadBlock, syncAbstractLogs } from "./chains/abstract.js";
 import { syncPolygonArchive } from "./chains/polygon.js";
 import { ABSTRACT_START_BLOCK, POLYGON_START_BLOCK } from "./constants.js";
@@ -39,7 +41,7 @@ async function resolveMetadataBatch(
   const pending = store.getUnresolvedTokenIds(limit, order);
   if (pending.length === 0) {
     console.log("✓ No unresolved tokens remaining.");
-    return;
+    return { okCount: 0, missingCount: 0, errCount: 0 };
   }
 
   console.log(
@@ -51,6 +53,7 @@ async function resolveMetadataBatch(
   let okCount = 0;
   let missingCount = 0;
   let errCount = 0;
+  let consecutiveErrs = 0;
   let bufferOk: NormalizedTokenMetadata[] = [];
   let bufferMissing: number[] = [];
 
@@ -72,6 +75,7 @@ async function resolveMetadataBatch(
         const tokenId = pending[myIndex]!;
         try {
           const meta = await fetchCosmoTokenMetadata(tokenId);
+          consecutiveErrs = 0;
           if (meta) {
             bufferOk.push(meta);
             okCount++;
@@ -81,18 +85,24 @@ async function resolveMetadataBatch(
           }
         } catch (err) {
           errCount++;
-          if (errCount <= 5) {
+          consecutiveErrs++;
+          if (errCount <= 10) {
             console.warn(`! token ${tokenId} failed:`, (err as Error).message);
+          }
+          if (consecutiveErrs >= 15) {
+            await new Promise((r) => setTimeout(r, 2000));
+            consecutiveErrs = 0;
           }
         }
 
-        if (bufferOk.length + bufferMissing.length >= 200) {
+        if (bufferOk.length + bufferMissing.length >= 500) {
           flush();
           const done = okCount + missingCount + errCount;
           const elapsedSec = Math.max(1, (Date.now() - startedAt) / 1000);
           const rps = Math.round(done / elapsedSec);
+          const etaSec = rps > 0 ? Math.round((pending.length - done) / rps) : 0;
           console.log(
-            `  progress: ${done.toLocaleString()}/${pending.length.toLocaleString()} (${rps} req/s, ok=${okCount}, 404=${missingCount}, err=${errCount})`,
+            `  progress: ${done.toLocaleString()}/${pending.length.toLocaleString()} (${rps} req/s, ETA ${etaSec}s, ok=${okCount}, 404=${missingCount}, err=${errCount})`,
           );
         }
       }
@@ -104,6 +114,127 @@ async function resolveMetadataBatch(
   console.log(
     `✓ Resolved ${okCount.toLocaleString()} tokens (+${missingCount} 404, ${errCount} errors) in ${totalSec}s`,
   );
+  return { okCount, missingCount, errCount };
+}
+
+function exportRoundsDraftYaml(store: IndexerStore, rootDir: string) {
+  const rows = store.db
+    .prepare(
+      `SELECT
+        tm.artist_id,
+        tm.season,
+        tm.objekt_class,
+        tm.collection_no,
+        tm.on_offline,
+        COUNT(*) AS mints,
+        COUNT(DISTINCT tm.raw_member) AS member_count,
+        MIN(rm.minted_at) AS first_mint_at,
+        MAX(rm.minted_at) AS last_mint_at
+      FROM token_metadata tm
+      JOIN raw_mints rm ON rm.token_id = tm.token_id
+      WHERE tm.artist_id IN ('triples', 'artms')
+      GROUP BY tm.artist_id, tm.season, tm.objekt_class, tm.collection_no, tm.on_offline`,
+    )
+    .all() as Array<{
+    artist_id: "triples" | "artms";
+    season: string;
+    objekt_class: string;
+    collection_no: string;
+    on_offline: "online" | "offline";
+    mints: number;
+    member_count: number;
+    first_mint_at: string;
+    last_mint_at: string;
+  }>;
+
+  const grouped = new Map<
+    string,
+    {
+      artistId: "triples" | "artms";
+      slug: string;
+      title: string;
+      season: string;
+      objektClass: string;
+      onOffline: "online" | "offline";
+      saleMechanic: string;
+      includeInPopularity: boolean;
+      unitPriceUsd: number | null;
+      startAt: string;
+      endAt: string;
+      collectionNos: Set<string>;
+      totalMints: number;
+      maxMembers: number;
+    }
+  >();
+
+  for (const row of rows) {
+    const auto = inferAutoRoundGroup(
+      row.artist_id,
+      row.season,
+      row.objekt_class,
+      row.collection_no,
+      row.on_offline,
+    );
+    let acc = grouped.get(auto.slug);
+    if (!acc) {
+      acc = {
+        artistId: row.artist_id,
+        slug: auto.slug,
+        title: auto.title,
+        season: row.season,
+        objektClass: row.objekt_class,
+        onOffline: row.on_offline,
+        saleMechanic: auto.saleMechanic,
+        includeInPopularity: auto.includeInPopularity,
+        unitPriceUsd: auto.unitPriceUsd,
+        startAt: row.first_mint_at,
+        endAt: row.last_mint_at,
+        collectionNos: new Set(),
+        totalMints: 0,
+        maxMembers: 0,
+      };
+      grouped.set(auto.slug, acc);
+    }
+    acc.collectionNos.add(row.collection_no);
+    acc.totalMints += row.mints;
+    acc.maxMembers = Math.max(acc.maxMembers, row.member_count);
+    if (row.first_mint_at < acc.startAt) acc.startAt = row.first_mint_at;
+    if (row.last_mint_at > acc.endAt) acc.endAt = row.last_mint_at;
+  }
+
+  for (const artistId of ["triples", "artms"] as const) {
+    const artistRounds = Array.from(grouped.values())
+      .filter((r) => r.artistId === artistId && r.maxMembers >= 2 && r.totalMints >= 20)
+      .sort((a, b) => b.totalMints - a.totalMints)
+      .slice(0, 40)
+      .map((r) => ({
+        slug: r.slug,
+        title: r.title,
+        season: r.season,
+        objektClass: r.objektClass,
+        onOffline: r.onOffline,
+        saleMechanic: r.saleMechanic,
+        startAt: r.startAt.slice(0, 10),
+        endAt: r.endAt.slice(0, 10),
+        ...(r.unitPriceUsd !== null ? { unitPriceUsd: r.unitPriceUsd } : {}),
+        includeInPopularity: r.includeInPopularity,
+        collectionMatchers: {
+          seasons: [r.season],
+          collectionNos: Array.from(r.collectionNos).sort(),
+        },
+      }));
+
+    const outDir = resolve(rootDir, `data/rounds/${artistId}`);
+    mkdirSync(outDir, { recursive: true });
+    const outPath = resolve(outDir, "auto-discovered.yaml");
+    writeFileSync(
+      outPath,
+      `# Auto-discovered top sale rounds from on-chain data (curate titles/mechanics freely)\n` +
+        stringifyYaml({ artistId, rounds: artistRounds }),
+      "utf8",
+    );
+    console.log(`✓ Exported ${artistRounds.length} rounds to ${outPath}`);
+  }
 }
 
 async function main() {
@@ -115,10 +246,19 @@ async function main() {
   try {
     if (command === "status") {
       const counts = store.getSummaryCounts();
+      const ranges = store.db
+        .prepare(
+          `SELECT chain, COUNT(*) AS cnt, MIN(block_number) AS min_b, MAX(block_number) AS max_b,
+                  MIN(minted_at) AS min_t, MAX(minted_at) AS max_t
+           FROM raw_mints GROUP BY chain`,
+        )
+        .all();
       console.log("Indexer SQLite:", store.dbPath);
       console.log("Counts:", counts);
+      console.log("Chain ranges:", ranges);
       console.log("Cursors:", {
         abstract: store.getCursor("abstract:last_block"),
+        abstractBackfillMin: store.getCursor("abstract:backfill_min_block"),
         polygon: store.getCursor("polygon:last_block"),
       });
       return;
@@ -160,10 +300,74 @@ async function main() {
         await resolveMetadataBatch(
           store,
           Number(args.get("limit") ?? "20000"),
-          Number(args.get("concurrency") ?? "25"),
+          Number(args.get("concurrency") ?? "35"),
           "newest",
         );
       }
+      return;
+    }
+
+    if (command === "backfill-abstract") {
+      // Walks backwards from the oldest synced Abstract block in clean resumable windows
+      const head = await getAbstractHeadBlock();
+      const totalBlocks = Number(args.get("blocks") ?? "200000");
+      const windowSize = Number(args.get("window") ?? "25000");
+      const concurrency = Number(args.get("concurrency") ?? "40");
+      const resolvePerWindow = args.get("resolve") !== "false";
+
+      const existingMinRow = store.db
+        .prepare("SELECT MIN(block_number) AS min_b FROM raw_mints WHERE chain = 'abstract'")
+        .get() as { min_b: number | null };
+
+      let upperBlock = args.get("to")
+        ? Number(args.get("to"))
+        : existingMinRow.min_b
+          ? existingMinRow.min_b - 1
+          : head;
+
+      const targetLowerBlock = Math.max(
+        ABSTRACT_START_BLOCK,
+        args.get("from") ? Number(args.get("from")) : upperBlock - totalBlocks,
+      );
+
+      console.log(
+        `Deep Abstract backwards backfill: ${upperBlock.toLocaleString()} → ${targetLowerBlock.toLocaleString()} (${(upperBlock - targetLowerBlock).toLocaleString()} blocks, window=${windowSize.toLocaleString()}, conc=${concurrency})`,
+      );
+
+      while (upperBlock > targetLowerBlock) {
+        const lowerBlock = Math.max(targetLowerBlock, upperBlock - windowSize + 1);
+        console.log(
+          `\n--- Window ${lowerBlock.toLocaleString()} → ${upperBlock.toLocaleString()} ---`,
+        );
+        const logRes = await syncAbstractLogs(store, {
+          fromBlock: lowerBlock,
+          toBlock: upperBlock,
+          chunkSize: 5_000,
+          onProgress: ({ block, mintsAdded, spinsAdded }) => {
+            console.log(
+              `  block ${block.toLocaleString()} | +${mintsAdded} mints, +${spinsAdded} spins`,
+            );
+          },
+        });
+        store.setCursor("abstract:backfill_min_block", String(lowerBlock));
+        console.log(
+          `✓ Window logs done: +${logRes.totalMints.toLocaleString()} mints, +${logRes.totalSpins.toLocaleString()} spins`,
+        );
+
+        if (resolvePerWindow) {
+          await resolveMetadataBatch(store, 100_000, concurrency, "newest");
+        }
+        upperBlock = lowerBlock - 1;
+      }
+
+      // Catch up forward head too so cursor stays fresh
+      const latestRow = store.db
+        .prepare("SELECT MAX(block_number) AS max_b FROM raw_mints WHERE chain = 'abstract'")
+        .get() as { max_b: number | null };
+      if (latestRow.max_b) {
+        store.setCursor("abstract:last_block", String(latestRow.max_b));
+      }
+      console.log("✓ Deep Abstract backfill target complete.");
       return;
     }
 
@@ -176,6 +380,7 @@ async function main() {
       const res = await syncPolygonArchive(store, {
         fromBlock,
         toBlock,
+        chunkSize: Number(args.get("chunk") ?? "100000"),
         onProgress: ({ block, mintsAdded, spinsAdded }) => {
           console.log(
             `  polygon block ${block.toLocaleString()} | +${mintsAdded} mints, +${spinsAdded} spins`,
@@ -183,16 +388,29 @@ async function main() {
         },
       });
       console.log("✓ Polygon archive sync complete:", res);
+      if (args.get("resolve") === "true") {
+        await resolveMetadataBatch(
+          store,
+          Number(args.get("limit") ?? "20000"),
+          Number(args.get("concurrency") ?? "35"),
+          "oldest",
+        );
+      }
       return;
     }
 
     if (command === "resolve") {
       await resolveMetadataBatch(
         store,
-        Number(args.get("limit") ?? "10000"),
-        Number(args.get("concurrency") ?? "25"),
+        Number(args.get("limit") ?? "50000"),
+        Number(args.get("concurrency") ?? "40"),
         args.get("order") === "oldest" ? "oldest" : "newest",
       );
+      return;
+    }
+
+    if (command === "export-rounds-draft") {
+      exportRoundsDraftYaml(store, rootDir);
       return;
     }
 
@@ -200,6 +418,7 @@ async function main() {
       const summary = aggregateAndEmitSql(store, {
         dataRoot: resolve(rootDir, "data"),
         outFile: resolve(rootDir, "packages/db/generated/sync-onchain.sql"),
+        snapshotFile: resolve(rootDir, "packages/db/generated/snapshot-summary.json"),
       });
       console.log("✓ Aggregation complete:", summary);
       return;

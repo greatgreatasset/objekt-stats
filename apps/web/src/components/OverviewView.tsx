@@ -1,11 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import {
   Activity,
+  AlertTriangle,
   ArrowUpRight,
   Calendar,
   Database,
   Layers,
   Sparkles,
+  TrendingDown,
+  TrendingUp,
   Trophy,
   Users,
 } from "lucide-react";
@@ -49,6 +52,52 @@ export interface OverviewData {
       sharePct: number;
     } | null;
   }>;
+  anomalies: Array<{
+    roundSlug: string;
+    roundTitle: string;
+    startAt: string;
+    memberId: string;
+    memberName: string;
+    memberCode: string;
+    hexColor: string;
+    rank: number;
+    rankDeltaPrev: number | null;
+    relativeIndex: number;
+    mintCount: number;
+    anomalyDirection: string | null;
+    anomalyReason: string | null;
+    nearestEvent: {
+      id: string;
+      title: string;
+      eventDate: string;
+      dayOffset: number;
+      scope: "member" | "group";
+    } | null;
+  }>;
+  movers: {
+    roundSlug: string | null;
+    roundTitle: string | null;
+    risers: Array<{
+      roundSlug: string;
+      memberId: string;
+      memberName: string;
+      memberCode: string;
+      hexColor: string;
+      rank: number;
+      rankDeltaPrev: number | null;
+      relativeIndex: number;
+    }>;
+    fallers: Array<{
+      roundSlug: string;
+      memberId: string;
+      memberName: string;
+      memberCode: string;
+      hexColor: string;
+      rank: number;
+      rankDeltaPrev: number | null;
+      relativeIndex: number;
+    }>;
+  };
   events: Array<{
     id: string;
     eventDate: string;
@@ -69,6 +118,7 @@ export interface OverviewData {
     popularityRoundCount: number;
     collectionCount: number;
     totalMints: number;
+    estGrossUsd: number;
   };
 }
 
@@ -129,16 +179,20 @@ export function OverviewView({
                 {isArtms ? "ARTMS Secondary Tracker" : "tripleS Primary Tracker"}
               </span>
               <span className="text-zinc-600">•</span>
-              <span className="text-zinc-400">
-                {data.syncState.length > 0
-                  ? data.syncState
+              <span className="text-emerald-400">Live Cron Sync Active</span>
+              {data.syncState.length > 0 && (
+                <>
+                  <span className="text-zinc-600">•</span>
+                  <span className="text-zinc-400">
+                    {data.syncState
                       .map(
                         (s) =>
                           `${s.chain} #${s.lastIndexedBlock.toLocaleString()}`,
                       )
-                      .join(" + ")
-                  : "Polygon + Abstract On-Chain"}
-              </span>
+                      .join(" + ")}
+                  </span>
+                </>
+              )}
             </div>
 
             <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
@@ -168,7 +222,7 @@ export function OverviewView({
               search={searchParam}
               className="inline-flex items-center gap-2 rounded-xl border border-zinc-700/80 bg-zinc-900/70 px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:text-white"
             >
-              Popularity Matrix
+              Rank Bump Chart
               <ArrowUpRight className="h-4 w-4" />
             </Link>
           </div>
@@ -197,9 +251,13 @@ export function OverviewView({
         />
         <KpiCard
           icon={<Calendar className="h-4 w-4 text-zinc-400" />}
-          label="Timeline Events"
-          value={String(data.events.length)}
-          subtext="Comebacks, Gravities & reveals"
+          label="Est. Digital Volume"
+          value={
+            data.totals.estGrossUsd > 0
+              ? `$${Math.round(data.totals.estGrossUsd).toLocaleString()}`
+              : `${data.events.length} events`
+          }
+          subtext={`${data.events.length} curated timeline events`}
         />
       </section>
 
@@ -211,7 +269,7 @@ export function OverviewView({
               <div>
                 <h2 className="text-base font-semibold text-white flex items-center gap-2">
                   <Trophy className="h-4 w-4 text-amber-400" />
-                  Demand Index Leaderboard (Indexed Popularity Rounds)
+                  Demand Index Leaderboard (Popularity Rounds)
                 </h2>
                 <p className="text-xs text-zinc-400">
                   Average Relative Share Index (1.00× = exact round average).
@@ -222,7 +280,7 @@ export function OverviewView({
                 search={searchParam}
                 className="text-xs font-medium text-zinc-400 hover:text-white"
               >
-                Compare all →
+                Bump Chart →
               </Link>
             </div>
 
@@ -355,12 +413,169 @@ export function OverviewView({
                 Waiting for On-Chain Backfill Data
               </h2>
               <p className="text-xs leading-relaxed text-zinc-400">
-                No indexed sale rounds found for this artist yet. Run the
-                indexer sync to populate on-chain Polygon + Abstract mints into
-                Cloudflare D1.
+                No indexed sale rounds found for this artist yet. Live sync
+                updates automatically every 5 minutes.
               </p>
             </div>
           </div>
+        </section>
+      )}
+
+      {/* Biggest Movers & Detected Anomalies */}
+      {(data.anomalies.length > 0 ||
+        data.movers.risers.length > 0 ||
+        data.movers.fallers.length > 0) && (
+        <section className="grid gap-6 lg:grid-cols-2">
+          {/* Biggest Movers */}
+          {(data.movers.risers.length > 0 || data.movers.fallers.length > 0) && (
+            <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
+              <div className="flex items-end justify-between gap-2">
+                <div>
+                  <h2 className="text-base font-semibold text-white">
+                    Biggest Rank Movers
+                  </h2>
+                  <p className="text-xs text-zinc-400">
+                    Rank jumps &amp; drops in{" "}
+                    {data.movers.roundSlug ? (
+                      <Link
+                        to="/rounds/$slug"
+                        params={{ slug: data.movers.roundSlug }}
+                        className="text-zinc-200 underline decoration-zinc-600 hover:text-white"
+                      >
+                        {data.movers.roundTitle}
+                      </Link>
+                    ) : (
+                      "latest round"
+                    )}
+                    .
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <p className="text-[11px] font-mono uppercase text-emerald-400 flex items-center gap-1">
+                    <TrendingUp className="h-3.5 w-3.5" /> Risers
+                  </p>
+                  {data.movers.risers.map((r) => (
+                    <Link
+                      key={r.memberId}
+                      to="/members/$memberId"
+                      params={{ memberId: r.memberId }}
+                      className="flex items-center justify-between rounded-lg border border-zinc-800/80 bg-zinc-950/60 px-3 py-2 text-xs hover:border-zinc-700"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="h-2 w-2 rounded-full"
+                          style={{ backgroundColor: r.hexColor }}
+                        />
+                        <span className="font-medium text-zinc-100">
+                          {r.memberName}
+                        </span>
+                      </span>
+                      <span className="font-mono text-emerald-300">
+                        #{r.rank} (+{r.rankDeltaPrev})
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-mono uppercase text-rose-400 flex items-center gap-1">
+                    <TrendingDown className="h-3.5 w-3.5" /> Fallers
+                  </p>
+                  {data.movers.fallers.map((r) => (
+                    <Link
+                      key={r.memberId}
+                      to="/members/$memberId"
+                      params={{ memberId: r.memberId }}
+                      className="flex items-center justify-between rounded-lg border border-zinc-800/80 bg-zinc-950/60 px-3 py-2 text-xs hover:border-zinc-700"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span
+                          className="h-2 w-2 rounded-full"
+                          style={{ backgroundColor: r.hexColor }}
+                        />
+                        <span className="font-medium text-zinc-100">
+                          {r.memberName}
+                        </span>
+                      </span>
+                      <span className="font-mono text-rose-300">
+                        #{r.rank} ({r.rankDeltaPrev})
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Flagged Anomalies */}
+          {data.anomalies.length > 0 && (
+            <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
+              <div>
+                <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-400" />
+                  Statistical Surges &amp; Drops
+                </h2>
+                <p className="text-xs text-zinc-400">
+                  Auto-flagged shifts vs. trailing 5-round baseline with nearby
+                  event context.
+                </p>
+              </div>
+              <div className="space-y-2.5">
+                {data.anomalies.slice(0, 4).map((a) => (
+                  <div
+                    key={`${a.roundSlug}-${a.memberId}`}
+                    className="rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3 space-y-1.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <Link
+                        to="/members/$memberId"
+                        params={{ memberId: a.memberId }}
+                        className="inline-flex items-center gap-2 font-semibold text-white hover:text-sky-300"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: a.hexColor }}
+                        />
+                        {a.memberName}
+                        <span className="font-mono text-zinc-500">
+                          #{a.rank} ({a.relativeIndex.toFixed(2)}×)
+                        </span>
+                      </Link>
+                      <span
+                        className={`rounded px-1.5 py-0.5 font-mono text-[10px] uppercase font-semibold ${
+                          a.anomalyDirection === "surge"
+                            ? "bg-amber-500/15 text-amber-300"
+                            : "bg-rose-500/15 text-rose-300"
+                        }`}
+                      >
+                        {a.anomalyDirection}
+                      </span>
+                    </div>
+                    <p className="text-zinc-400">
+                      In{" "}
+                      <Link
+                        to="/rounds/$slug"
+                        params={{ slug: a.roundSlug }}
+                        className="text-zinc-200 hover:underline"
+                      >
+                        {a.roundTitle}
+                      </Link>{" "}
+                      — {a.anomalyReason}
+                    </p>
+                    {a.nearestEvent && (
+                      <p className="font-mono text-[11px] text-amber-300/90">
+                        Nearby event ({a.nearestEvent.eventDate}):{" "}
+                        {a.nearestEvent.title}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -372,8 +587,8 @@ export function OverviewView({
               {isArtms ? "ARTMS Members" : "tripleS S1–S24 Roster"}
             </h2>
             <p className="text-xs text-zinc-400">
-              Click any member to inspect their round history and indexed
-              Objekts.
+              Click any member to inspect their round history, FCO vs. DCO
+              split, and indexed Objekts.
             </p>
           </div>
           <Link
@@ -444,7 +659,7 @@ export function OverviewView({
             search={searchParam}
             className="text-xs font-medium text-zinc-400 hover:text-white transition-colors"
           >
-            View all events →
+            View all {data.events.length} events →
           </Link>
         </div>
 

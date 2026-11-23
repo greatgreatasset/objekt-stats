@@ -1,14 +1,46 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { AlertTriangle, ArrowLeft, Calendar, TrendingDown, TrendingUp } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Calendar,
+  Check,
+  Copy,
+  TrendingDown,
+  TrendingUp,
+} from "lucide-react";
+import { useState } from "react";
 import { getRoundDetail } from "../../lib/server/queries";
 
 export const Route = createFileRoute("/rounds/$slug")({
   loader: ({ params }) => getRoundDetail({ data: params.slug }),
+  head: ({ loaderData }) => {
+    if (!loaderData) {
+      return { meta: [{ title: "Sale Round Not Found — Objekt Stats" }] };
+    }
+    const { round, leaderboard } = loaderData;
+    const top1 = leaderboard[0];
+    const artistLabel = round.artistId === "artms" ? "ARTMS" : "tripleS";
+    const title = `${artistLabel} ${round.title} — Objekt Stats`;
+    const desc = top1
+      ? `${round.totalMints.toLocaleString()} total Objekts minted across ${round.participatingMembers} members. #1 ${top1.memberName} (${top1.mintCount.toLocaleString()}, ${top1.sharePct.toFixed(1)}%).`
+      : `${round.totalMints.toLocaleString()} total Objekts minted in ${round.title}.`;
+    return {
+      meta: [
+        { title },
+        { name: "description", content: desc },
+        { property: "og:title", content: title },
+        { property: "og:description", content: desc },
+        { property: "og:type", content: "website" },
+        { name: "twitter:card", content: "summary_large_image" },
+      ],
+    };
+  },
   component: RoundDetailPage,
 });
 
 function RoundDetailPage() {
   const data = Route.useLoaderData();
+  const [copied, setCopied] = useState(false);
 
   if (!data) {
     return (
@@ -32,17 +64,62 @@ function RoundDetailPage() {
       ? round.totalMints * round.unitPriceUsd
       : null;
 
+  const copyRecap = async () => {
+    const artistLabel = round.artistId === "artms" ? "ARTMS" : "tripleS";
+    const topLines = leaderboard
+      .slice(0, 10)
+      .map(
+        (r) =>
+          `#${r.rank} ${r.memberName} — ${r.mintCount.toLocaleString()} (${r.sharePct.toFixed(1)}% | ${r.relativeIndex.toFixed(2)}×)`,
+      );
+    const text = [
+      `${artistLabel} — ${round.title} (${round.startAt.slice(0, 10)})`,
+      `Total Mints: ${round.totalMints.toLocaleString()} across ${round.participatingMembers} members`,
+      "",
+      ...topLines,
+      "",
+      `Full stats: https://objektstats.com/rounds/${round.slug}`,
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable in insecure context
+    }
+  };
+
   return (
     <div className="space-y-8">
       <div className="space-y-4">
-        <Link
-          to="/rounds"
-          search={round.artistId === "artms" ? { artist: "artms" } : {}}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-400 hover:text-white"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          All {round.artistId === "artms" ? "ARTMS" : "tripleS"} Sale Rounds
-        </Link>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Link
+            to="/rounds"
+            search={round.artistId === "artms" ? { artist: "artms" } : {}}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-400 hover:text-white"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            All {round.artistId === "artms" ? "ARTMS" : "tripleS"} Sale Rounds
+          </Link>
+
+          <button
+            type="button"
+            onClick={copyRecap}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:text-white"
+          >
+            {copied ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                Copied Recap
+              </>
+            ) : (
+              <>
+                <Copy className="h-3.5 w-3.5" />
+                Copy X/Twitter Recap
+              </>
+            )}
+          </button>
+        </div>
 
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
@@ -68,7 +145,9 @@ function RoundDetailPage() {
             </h1>
             <p className="font-mono text-xs text-zinc-400">
               Window: {round.startAt.slice(0, 16).replace("T", " ")} UTC
-              {round.endAt ? ` → ${round.endAt.slice(0, 16).replace("T", " ")} UTC` : ""}
+              {round.endAt
+                ? ` → ${round.endAt.slice(0, 16).replace("T", " ")} UTC`
+                : ""}
             </p>
           </div>
 
@@ -77,7 +156,9 @@ function RoundDetailPage() {
             <StatPill label="Members" value={String(round.participatingMembers)} />
             <StatPill
               label="Est. Gross"
-              value={estGrossUsd ? `$${Math.round(estGrossUsd).toLocaleString()}` : "N/A"}
+              value={
+                estGrossUsd ? `$${Math.round(estGrossUsd).toLocaleString()}` : "N/A"
+              }
             />
           </div>
         </div>
@@ -143,7 +224,9 @@ function RoundDetailPage() {
                         ) : (
                           <TrendingDown className="h-3 w-3" />
                         )}
-                        {row.rankDeltaPrev > 0 ? `+${row.rankDeltaPrev}` : row.rankDeltaPrev}
+                        {row.rankDeltaPrev > 0
+                          ? `+${row.rankDeltaPrev}`
+                          : row.rankDeltaPrev}
                       </span>
                     )}
 
