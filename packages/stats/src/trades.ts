@@ -337,6 +337,80 @@ export function detectTradesFromTransfers(
   };
 }
 
+export interface TradeSymmetryInfo {
+  isAsymmetric: boolean;
+  /** Which side gave FEWER Objekts (i.e. commanded a multi-card premium), or null if equal. */
+  premiumSide: "A" | "B" | null;
+  /** Counterparty Objekts received per 1 Side-A Objekt (`sideBCount / sideACount`). */
+  sideAExchangeRate: number;
+  /** Counterparty Objekts received per 1 Side-B Objekt (`sideACount / sideBCount`). */
+  sideBExchangeRate: number;
+  /** Ratio >= 1.0 of the larger side to the smaller side (e.g. 2.0 for 2:1, 1.5 for 3:2). */
+  ratioMultiple: number;
+  is2to1Plus: boolean;
+  is3to1Plus: boolean;
+  /** Human-readable higher-first ratio label (e.g. "1:1", "2:1", "3:1", "3:2"). */
+  ratioLabel: string;
+}
+
+/**
+ * Classifies whether a confirmed reciprocal swap is equal (`1:1`, `N:N`) or asymmetric
+ * (`2:1`, `3:1`, `3:2`, etc.) and computes exact per-leg exchange rates.
+ *
+ * Mathematical property: across any swap of `a` vs `b` Objekts,
+ * `a * (b/a) + b * (a/b) = a + b`, so the market-wide leg-weighted mean exchange rate
+ * is always exactly `1.00`. Values > 1.00 indicate a net secondary market premium.
+ */
+export function classifyTradeSymmetry(
+  sideACount: number,
+  sideBCount: number,
+): TradeSymmetryInfo {
+  const a = Math.max(1, sideACount);
+  const b = Math.max(1, sideBCount);
+  const isAsymmetric = a !== b;
+  const hi = Math.max(a, b);
+  const lo = Math.min(a, b);
+  const ratioMultiple = Math.round((hi / lo) * 10000) / 10000;
+  const sideAExchangeRate = Math.round((b / a) * 10000) / 10000;
+  const sideBExchangeRate = Math.round((a / b) * 10000) / 10000;
+  const premiumSide: "A" | "B" | null = a < b ? "A" : b < a ? "B" : null;
+  const ratioLabel = isAsymmetric ? `${hi}:${lo}` : `${a}:${b}`;
+
+  return {
+    isAsymmetric,
+    premiumSide,
+    sideAExchangeRate,
+    sideBExchangeRate,
+    ratioMultiple,
+    is2to1Plus: ratioMultiple >= 2,
+    is3to1Plus: ratioMultiple >= 3,
+    ratioLabel,
+  };
+}
+
+/**
+ * Returns true when both sides of a swap consist exclusively of the same Objekt class
+ * (e.g. First <-> First, Double <-> Double), isolating member/edition demand premiums
+ * from cross-class rarity upgrades (such as 4 First -> 1 Special).
+ */
+export function isSameClassSwap(
+  sideAClasses: Iterable<string | null | undefined>,
+  sideBClasses: Iterable<string | null | undefined>,
+): boolean {
+  const setA = new Set<string>();
+  for (const c of sideAClasses) {
+    if (c) setA.add(c);
+  }
+  const setB = new Set<string>();
+  for (const c of sideBClasses) {
+    if (c) setB.add(c);
+  }
+  if (setA.size !== 1 || setB.size !== 1) return false;
+  const [classA] = setA;
+  const [classB] = setB;
+  return classA === classB;
+}
+
 export interface MemberTradeMetricInput {
   memberId: string;
   tradedCount: number;

@@ -29,6 +29,20 @@
       "when": 1795436475586,
       "tag": "0003_fair_chimera",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1795437681572,
+      "tag": "0004_clumsy_manta",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795442036967,
+      "tag": "0005_dazzling_blob",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ import {
   Calendar,
   Compass,
   Layers,
+  Receipt,
   Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -98,6 +99,12 @@ export function Layout({ children }: { children: ReactNode }) {
               active={location.pathname === "/trades"}
               icon={<ArrowLeftRight className="h-3.5 w-3.5" />}
               label="Most Traded"
+            />
+            <NavLink
+              to="/wallet"
+              active={location.pathname === "/wallet"}
+              icon={<Receipt className="h-3.5 w-3.5" />}
+              label="User Cost"
             />
             <NavLink
               to="/members"

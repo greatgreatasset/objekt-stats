@@ -116,6 +116,18 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
         tradeSessions: collectionTradeStats.tradeSessions,
         directTransferCount: collectionTradeStats.directTransferCount,
         uniqueTraders: collectionTradeStats.uniqueTraders,
+        premiumCount: collectionTradeStats.premiumCount,
+        bulkCount: collectionTradeStats.bulkCount,
+        premium2xCount: collectionTradeStats.premium2xCount,
+        premium3xCount: collectionTradeStats.premium3xCount,
+        avgExchangeRate: collectionTradeStats.avgExchangeRate,
+        maxExchangeRate: collectionTradeStats.maxExchangeRate,
+        sameClassLegs: collectionTradeStats.sameClassLegs,
+        sameClassPremiumCount: collectionTradeStats.sameClassPremiumCount,
+        sameClassBulkCount: collectionTradeStats.sameClassBulkCount,
+        sameClass2xCount: collectionTradeStats.sameClass2xCount,
+        sameClass3xCount: collectionTradeStats.sameClass3xCount,
+        sameClassAvgRate: collectionTradeStats.sameClassAvgRate,
         firstTradeAt: collectionTradeStats.firstTradeAt,
         lastTradeAt: collectionTradeStats.lastTradeAt,
         primaryMints: collections.totalMints,
@@ -128,9 +140,10 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
       .where(eq(collectionTradeStats.artistId, artistId))
       .orderBy(
         desc(collectionTradeStats.tradedCount),
+        desc(collectionTradeStats.premium2xCount),
         desc(collectionTradeStats.directTransferCount),
       )
-      .limit(250)
+      .limit(400)
       .catch(() => []);
 
     const dailyRows = await db
@@ -145,7 +158,7 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
       .from(recentTrades)
       .where(eq(recentTrades.artistId, artistId))
       .orderBy(desc(recentTrades.tradedAt))
-      .limit(36)
+      .limit(120)
       .catch(() => []);
 
     const [totalsRow] = await db
@@ -170,6 +183,22 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
 
     const confirmedTradeSessions = dailyRows.reduce(
       (sum, d) => sum + d.tradeSessions,
+      0,
+    );
+    const asymmetricSessions = dailyRows.reduce(
+      (sum, d) => sum + (d.asymmetricSessions ?? 0),
+      0,
+    );
+    const ratio2xSessions = dailyRows.reduce(
+      (sum, d) => sum + (d.ratio2xSessions ?? 0),
+      0,
+    );
+    const ratio3xSessions = dailyRows.reduce(
+      (sum, d) => sum + (d.ratio3xSessions ?? 0),
+      0,
+    );
+    const sameClassAsymmetricSessions = dailyRows.reduce(
+      (sum, d) => sum + (d.sameClassAsymmetricSessions ?? 0),
       0,
     );
     const tradedObjekts = Number(totalsRow?.tradedObjekts ?? 0);
@@ -226,6 +255,9 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
         durationSeconds: rt.durationSeconds,
         sideACount: rt.sideACount,
         sideBCount: rt.sideBCount,
+        isAsymmetric: Boolean(rt.isAsymmetric),
+        isSameClass: Boolean(rt.isSameClass),
+        ratioMultiple: Number(rt.ratioMultiple ?? 1),
         walletAShort: rt.walletAShort,
         walletBShort: rt.walletBShort,
         sideASummary: safeParseLegSummary(rt.sideASummary),
@@ -233,6 +265,14 @@ export const getTradesDashboard = createServerFn({ method: "GET" })
       })),
       totals: {
         confirmedTradeSessions,
+        asymmetricSessions,
+        asymmetricSharePct:
+          confirmedTradeSessions > 0
+            ? Number(((asymmetricSessions / confirmedTradeSessions) * 100).toFixed(1))
+            : 0,
+        ratio2xSessions,
+        ratio3xSessions,
+        sameClassAsymmetricSessions,
         tradedObjekts,
         directTransfers,
         trackedCollections: Number(totalsRow?.trackedCollections ?? 0),

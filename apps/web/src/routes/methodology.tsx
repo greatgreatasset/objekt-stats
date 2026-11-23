@@ -158,10 +158,90 @@ function MethodologyPage() {
             bounce-backs).
           </li>
           <li>
+            <strong>Asymmetric Swaps &amp; Exchange Rate Premiums:</strong>{" "}
+            When one side sends more Objekts than the other (such as{" "}
+            <code className="text-zinc-200">2:1</code> or{" "}
+            <code className="text-zinc-200">3:1</code> swaps), each Objekt on
+            the scarcer side logs an exchange rate of{" "}
+            <code className="text-zinc-200">counterparty_count / side_count</code>{" "}
+            (e.g. <span className="font-mono text-amber-300">3.00×</span>) while
+            each card on the bulk offering side logs its reciprocal (
+            <span className="font-mono text-zinc-200">0.33×</span>). Because the
+            leg-weighted market mean is always exactly{" "}
+            <span className="font-mono text-zinc-200">1.00×</span>, averages
+            above 1.00× reveal real secondary-market demand premiums. A{" "}
+            <em>Same-Class Filter</em> isolates member-vs-member swaps within
+            the same Objekt Class (e.g. First ↔ First) from cross-class rarity
+            upgrades (e.g. First → Special).
+          </li>
+          <li>
             <strong>Direct Transfers Tracked Separately:</strong> One-way P2P
             transfers (gifts, alt-wallet consolidation, or off-chain cash sales)
             are excluded from Confirmed Trades and tracked separately under the{" "}
             <em>All Direct Transfers</em> view.
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-6">
+        <h2 className="text-lg font-semibold text-white">
+          6. User Cost Estimation &amp; Dual-Chain Wallet Linking
+        </h2>
+        <p className="text-sm leading-relaxed text-zinc-300">
+          Because COSMO does not store fiat purchase prices on-chain, the{" "}
+          <strong>User Cost Estimator</strong> reconstructs a collector&apos;s
+          complete Polygon + Abstract history and applies date-aware,
+          class-aware, and pack-size-aware historical pricing:
+        </p>
+        <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-400">
+          <li>
+            <strong>Automatic Polygon ↔ Abstract Wallet Linking:</strong> When
+            Modhaus migrated from Polygon (Ramper) to Abstract Global Wallets in
+            April 2025, existing users received new Abstract addresses and their
+            pre-migration Objekts (<code className="text-zinc-200">tokenId &lt; 9,419,276</code>)
+            were re-minted on Abstract. We call{" "}
+            <code className="text-zinc-200">ownerOf()</code> on the frozen
+            Polygon Objekt contracts (both tripleS and ARTMS) for migrated
+            tokens to automatically discover the user&apos;s legacy Polygon
+            wallet and prevent double-counting migrated cards.
+          </li>
+          <li>
+            <strong>COSMO Spin &amp; Free Reward Exclusion:</strong> Every
+            outgoing transfer to the COSMO Spin address is paired with the
+            subsequent single-token replacement mint (within 3 minutes) and
+            priced at <span className="font-mono text-zinc-200">$0.00</span>{" "}
+            new cash. Welcome (<code className="text-zinc-200">100Z</code>),
+            online Grid Special Class (<code className="text-zinc-200">2xxZ</code>),
+            Zero, Premier rewards, and reciprocal P2P trade swaps are also
+            counted at <span className="font-mono text-zinc-200">$0.00</span>{" "}
+            additional primary spend.
+          </li>
+          <li>
+            <strong>COSMO Talk / Pass+ Subscription Deduction:</strong> Paid
+            monthly <code className="text-zinc-200">Pass+</code> subscriptions
+            distribute exclusive member-specific Double Class Objekts on the
+            15th of the following month (such as{" "}
+            <code className="text-zinc-200">Cream02 358Z</code>,{" "}
+            <code className="text-zinc-200">362Z</code>, and{" "}
+            <code className="text-zinc-200">376Z</code>). When minted directly (
+            <code className="text-zinc-200">from = 0x0</code>), we deduplicate
+            them from regular shop mints, deduce the active tier from the number
+            of distinct members minted (1, 2, 4, 8, or All-Member 24), and apply
+            the monthly subscription fee (editable, defaulting to $96/mo for
+            All-Member Pass+). Note that chat-only standard Pass tiers without
+            Objekts leave no on-chain footprint.
+          </li>
+          <li>
+            <strong>Historical Store &amp; Bundle Pricing:</strong> Digital
+            mints before{" "}
+            <span className="font-mono text-zinc-200">September 2024</span>{" "}
+            predate <code className="text-zinc-200">shop.cosmo.fans</code> and
+            use mobile App Store tiers ($2.99–$3.29/FCO). From September 2024
+            onward, multi-card mints in the same transaction hash infer bulk
+            pack sizes (4-pack, 8-pack, 12-pack, 24-pack down to $1.88/ea) and
+            display both a Web Shop floor and App Store retail ceiling. Physical
+            QR scans (<code className="text-zinc-200">A</code>-suffix) and
+            one-way P2P transfers can be toggled and customized freely.
           </li>
         </ul>
       </section>

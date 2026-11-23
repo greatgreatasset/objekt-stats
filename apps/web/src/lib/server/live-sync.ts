@@ -14,10 +14,12 @@ import {
   type AppDatabase,
 } from "@objekt-stats/db";
 import {
+  classifyTradeSymmetry,
   computeArtistSeriesStats,
   computeMemberTradeRankings,
   detectTradesFromTransfers,
   isEligibleP2PTransfer,
+  isSameClassSwap,
   makeWalletPairKey,
   shortenAddress,
   type P2PTransferEvent,
@@ -551,6 +553,18 @@ async function settlePendingTradesInD1(
       tradeSessions: number;
       directTransfers: number;
       traders: Set<string>;
+      premiumCount: number;
+      bulkCount: number;
+      premium2xCount: number;
+      premium3xCount: number;
+      rateSum: number;
+      maxExchangeRate: number;
+      sameClassLegs: number;
+      sameClassPremiumCount: number;
+      sameClassBulkCount: number;
+      sameClass2xCount: number;
+      sameClass3xCount: number;
+      sameClassRateSum: number;
       firstAt: string;
       lastAt: string;
     }
@@ -563,6 +577,18 @@ async function settlePendingTradesInD1(
       tradedCount: number;
       tradeSessions: number;
       directTransfers: number;
+      premiumCount: number;
+      bulkCount: number;
+      premium2xCount: number;
+      premium3xCount: number;
+      rateSum: number;
+      maxExchangeRate: number;
+      sameClassLegs: number;
+      sameClassPremiumCount: number;
+      sameClassBulkCount: number;
+      sameClass2xCount: number;
+      sameClass3xCount: number;
+      sameClassRateSum: number;
       lastAt: string;
     }
   >();
@@ -572,6 +598,10 @@ async function settlePendingTradesInD1(
       artistId: string;
       date: string;
       sessions: number;
+      asymmetricSessions: number;
+      ratio2xSessions: number;
+      ratio3xSessions: number;
+      sameClassAsymmetricSessions: number;
       tradedObjekts: number;
       directTransfers: number;
     }
@@ -584,6 +614,9 @@ async function settlePendingTradesInD1(
     durationSeconds: number;
     sideACount: number;
     sideBCount: number;
+    isAsymmetric: boolean;
+    isSameClass: boolean;
+    ratioMultiple: number;
     walletAShort: string;
     walletBShort: string;
     sideASummary: string;
@@ -657,78 +690,154 @@ async function settlePendingTradesInD1(
       const touchedMembers = new Set<string>();
       const tradeDate = trade.completedAt.slice(0, 10);
 
-      for (const leg of trade.allLegs) {
-        const meta = metaCache.get(leg.tokenId) ?? null;
-        if (!meta || (meta.artistId !== "triples" && meta.artistId !== "artms")) {
-          continue;
-        }
-        touchedArtists.add(meta.artistId);
-        const memberId =
-          memberLookup.get(
-            `${meta.artistId}:${normalizeMemberKey(meta.rawMember)}`,
-          ) ?? null;
+      const sym = classifyTradeSymmetry(trade.sideALegs.length, trade.sideBLegs.length);
+      const sameClass = isSameClassSwap(
+        trade.sideALegs.map((l) => metaCache.get(l.tokenId)?.objektClass),
+        trade.sideBLegs.map((l) => metaCache.get(l.tokenId)?.objektClass),
+      );
 
-        let col = colTradeDeltas.get(meta.slug);
-        if (!col) {
-          col = {
-            meta,
-            memberId,
-            tradedCount: 0,
-            tradeSessions: 0,
-            directTransfers: 0,
-            traders: new Set(),
-            firstAt: leg.transferredAt,
-            lastAt: leg.transferredAt,
-          };
-          colTradeDeltas.set(meta.slug, col);
+      const applyDeltaAsym = (
+        t: {
+          premiumCount: number;
+          bulkCount: number;
+          premium2xCount: number;
+          premium3xCount: number;
+          rateSum: number;
+          maxExchangeRate: number;
+          sameClassLegs: number;
+          sameClassPremiumCount: number;
+          sameClassBulkCount: number;
+          sameClass2xCount: number;
+          sameClass3xCount: number;
+          sameClassRateSum: number;
+        },
+        rate: number,
+      ) => {
+        t.rateSum += rate;
+        if (rate > t.maxExchangeRate) t.maxExchangeRate = rate;
+        if (rate > 1) t.premiumCount++;
+        else if (rate < 1) t.bulkCount++;
+        if (rate >= 2) t.premium2xCount++;
+        if (rate >= 3) t.premium3xCount++;
+        if (sameClass) {
+          t.sameClassLegs++;
+          t.sameClassRateSum += rate;
+          if (rate > 1) t.sameClassPremiumCount++;
+          else if (rate < 1) t.sameClassBulkCount++;
+          if (rate >= 2) t.sameClass2xCount++;
+          if (rate >= 3) t.sameClass3xCount++;
         }
-        col.tradedCount++;
-        col.directTransfers++;
-        col.traders.add(leg.from);
-        col.traders.add(leg.to);
-        if (leg.transferredAt < col.firstAt) col.firstAt = leg.transferredAt;
-        if (leg.transferredAt > col.lastAt) col.lastAt = leg.transferredAt;
-        if (!touchedCols.has(meta.slug)) {
-          col.tradeSessions++;
-          touchedCols.add(meta.slug);
-        }
+      };
 
-        if (memberId) {
-          let mAcc = memberTradeDeltas.get(memberId);
-          if (!mAcc) {
-            mAcc = {
+      const sidePairs: Array<readonly [readonly P2PTransferEvent[], number]> = [
+        [trade.sideALegs, sym.sideAExchangeRate],
+        [trade.sideBLegs, sym.sideBExchangeRate],
+      ];
+
+      for (const [sideLegs, legRate] of sidePairs) {
+        for (const leg of sideLegs) {
+          const meta = metaCache.get(leg.tokenId) ?? null;
+          if (!meta || (meta.artistId !== "triples" && meta.artistId !== "artms")) {
+            continue;
+          }
+          touchedArtists.add(meta.artistId);
+          const memberId =
+            memberLookup.get(
+              `${meta.artistId}:${normalizeMemberKey(meta.rawMember)}`,
+            ) ?? null;
+
+          let col = colTradeDeltas.get(meta.slug);
+          if (!col) {
+            col = {
+              meta,
               memberId,
-              artistId: meta.artistId,
               tradedCount: 0,
               tradeSessions: 0,
               directTransfers: 0,
+              traders: new Set(),
+              premiumCount: 0,
+              bulkCount: 0,
+              premium2xCount: 0,
+              premium3xCount: 0,
+              rateSum: 0,
+              maxExchangeRate: 1,
+              sameClassLegs: 0,
+              sameClassPremiumCount: 0,
+              sameClassBulkCount: 0,
+              sameClass2xCount: 0,
+              sameClass3xCount: 0,
+              sameClassRateSum: 0,
+              firstAt: leg.transferredAt,
               lastAt: leg.transferredAt,
             };
-            memberTradeDeltas.set(memberId, mAcc);
+            colTradeDeltas.set(meta.slug, col);
           }
-          mAcc.tradedCount++;
-          mAcc.directTransfers++;
-          if (leg.transferredAt > mAcc.lastAt) mAcc.lastAt = leg.transferredAt;
-          if (!touchedMembers.has(memberId)) {
-            mAcc.tradeSessions++;
-            touchedMembers.add(memberId);
+          col.tradedCount++;
+          col.directTransfers++;
+          col.traders.add(leg.from);
+          col.traders.add(leg.to);
+          applyDeltaAsym(col, legRate);
+          if (leg.transferredAt < col.firstAt) col.firstAt = leg.transferredAt;
+          if (leg.transferredAt > col.lastAt) col.lastAt = leg.transferredAt;
+          if (!touchedCols.has(meta.slug)) {
+            col.tradeSessions++;
+            touchedCols.add(meta.slug);
           }
-        }
 
-        const dKey = `${meta.artistId}|${tradeDate}`;
-        let dAcc = dailyDeltas.get(dKey);
-        if (!dAcc) {
-          dAcc = {
-            artistId: meta.artistId,
-            date: tradeDate,
-            sessions: 0,
-            tradedObjekts: 0,
-            directTransfers: 0,
-          };
-          dailyDeltas.set(dKey, dAcc);
+          if (memberId) {
+            let mAcc = memberTradeDeltas.get(memberId);
+            if (!mAcc) {
+              mAcc = {
+                memberId,
+                artistId: meta.artistId,
+                tradedCount: 0,
+                tradeSessions: 0,
+                directTransfers: 0,
+                premiumCount: 0,
+                bulkCount: 0,
+                premium2xCount: 0,
+                premium3xCount: 0,
+                rateSum: 0,
+                maxExchangeRate: 1,
+                sameClassLegs: 0,
+                sameClassPremiumCount: 0,
+                sameClassBulkCount: 0,
+                sameClass2xCount: 0,
+                sameClass3xCount: 0,
+                sameClassRateSum: 0,
+                lastAt: leg.transferredAt,
+              };
+              memberTradeDeltas.set(memberId, mAcc);
+            }
+            mAcc.tradedCount++;
+            mAcc.directTransfers++;
+            applyDeltaAsym(mAcc, legRate);
+            if (leg.transferredAt > mAcc.lastAt) mAcc.lastAt = leg.transferredAt;
+            if (!touchedMembers.has(memberId)) {
+              mAcc.tradeSessions++;
+              touchedMembers.add(memberId);
+            }
+          }
+
+          const dKey = `${meta.artistId}|${tradeDate}`;
+          let dAcc = dailyDeltas.get(dKey);
+          if (!dAcc) {
+            dAcc = {
+              artistId: meta.artistId,
+              date: tradeDate,
+              sessions: 0,
+              asymmetricSessions: 0,
+              ratio2xSessions: 0,
+              ratio3xSessions: 0,
+              sameClassAsymmetricSessions: 0,
+              tradedObjekts: 0,
+              directTransfers: 0,
+            };
+            dailyDeltas.set(dKey, dAcc);
+          }
+          dAcc.tradedObjekts++;
+          dAcc.directTransfers++;
         }
-        dAcc.tradedObjekts++;
-        dAcc.directTransfers++;
       }
 
       const summarize = (legs: P2PTransferEvent[]) => {
@@ -779,7 +888,15 @@ async function settlePendingTradesInD1(
       for (const artistId of touchedArtists) {
         const dKey = `${artistId}|${tradeDate}`;
         const dAcc = dailyDeltas.get(dKey);
-        if (dAcc) dAcc.sessions++;
+        if (dAcc) {
+          dAcc.sessions++;
+          if (sym.isAsymmetric) {
+            dAcc.asymmetricSessions++;
+            if (sym.is2to1Plus) dAcc.ratio2xSessions++;
+            if (sym.is3to1Plus) dAcc.ratio3xSessions++;
+            if (sameClass) dAcc.sameClassAsymmetricSessions++;
+          }
+        }
 
         recentInserts.push({
           tradeId: trade.tradeId,
@@ -789,6 +906,9 @@ async function settlePendingTradesInD1(
           durationSeconds: trade.durationSeconds,
           sideACount: trade.sideALegs.length,
           sideBCount: trade.sideBLegs.length,
+          isAsymmetric: sym.isAsymmetric,
+          isSameClass: sameClass,
+          ratioMultiple: sym.ratioMultiple,
           walletAShort: shortenAddress(trade.walletA),
           walletBShort: shortenAddress(trade.walletB),
           sideASummary,
@@ -810,15 +930,29 @@ async function settlePendingTradesInD1(
 
   const stmts: D1PreparedStatement[] = [...markStatusStmts];
 
+  const round4 = (v: number) => Math.round(v * 10000) / 10000;
+
   const upsertColTrade = rawD1.prepare(
     `INSERT INTO collection_trade_stats
-      (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, first_trade_at, last_trade_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, first_trade_at, last_trade_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(collection_slug) DO UPDATE SET
+       avg_exchange_rate = ROUND((collection_trade_stats.avg_exchange_rate * collection_trade_stats.traded_count + excluded.avg_exchange_rate * excluded.traded_count) / MAX(1, collection_trade_stats.traded_count + excluded.traded_count), 4),
+       same_class_avg_rate = CASE WHEN collection_trade_stats.same_class_legs + excluded.same_class_legs > 0 THEN ROUND((collection_trade_stats.same_class_avg_rate * collection_trade_stats.same_class_legs + excluded.same_class_avg_rate * excluded.same_class_legs) / (collection_trade_stats.same_class_legs + excluded.same_class_legs), 4) ELSE 1 END,
        traded_count = collection_trade_stats.traded_count + excluded.traded_count,
        trade_sessions = collection_trade_stats.trade_sessions + excluded.trade_sessions,
        direct_transfer_count = collection_trade_stats.direct_transfer_count + excluded.direct_transfer_count,
        unique_traders = collection_trade_stats.unique_traders + excluded.unique_traders,
+       premium_count = collection_trade_stats.premium_count + excluded.premium_count,
+       bulk_count = collection_trade_stats.bulk_count + excluded.bulk_count,
+       premium_2x_count = collection_trade_stats.premium_2x_count + excluded.premium_2x_count,
+       premium_3x_count = collection_trade_stats.premium_3x_count + excluded.premium_3x_count,
+       max_exchange_rate = MAX(collection_trade_stats.max_exchange_rate, excluded.max_exchange_rate),
+       same_class_legs = collection_trade_stats.same_class_legs + excluded.same_class_legs,
+       same_class_premium_count = collection_trade_stats.same_class_premium_count + excluded.same_class_premium_count,
+       same_class_bulk_count = collection_trade_stats.same_class_bulk_count + excluded.same_class_bulk_count,
+       same_class_2x_count = collection_trade_stats.same_class_2x_count + excluded.same_class_2x_count,
+       same_class_3x_count = collection_trade_stats.same_class_3x_count + excluded.same_class_3x_count,
        first_trade_at = CASE WHEN collection_trade_stats.first_trade_at IS NULL OR excluded.first_trade_at < collection_trade_stats.first_trade_at THEN excluded.first_trade_at ELSE collection_trade_stats.first_trade_at END,
        last_trade_at = CASE WHEN collection_trade_stats.last_trade_at IS NULL OR excluded.last_trade_at > collection_trade_stats.last_trade_at THEN excluded.last_trade_at ELSE collection_trade_stats.last_trade_at END,
        front_image_url = COALESCE(NULLIF(collection_trade_stats.front_image_url, ''), excluded.front_image_url),
@@ -826,6 +960,9 @@ async function settlePendingTradesInD1(
   );
 
   for (const d of colTradeDeltas.values()) {
+    const avgRate = d.tradedCount > 0 ? round4(d.rateSum / d.tradedCount) : 1;
+    const scAvgRate =
+      d.sameClassLegs > 0 ? round4(d.sameClassRateSum / d.sameClassLegs) : 1;
     stmts.push(
       upsertColTrade.bind(
         d.meta.slug,
@@ -843,6 +980,18 @@ async function settlePendingTradesInD1(
         d.tradeSessions,
         d.directTransfers,
         d.traders.size,
+        d.premiumCount,
+        d.bulkCount,
+        d.premium2xCount,
+        d.premium3xCount,
+        avgRate,
+        round4(d.maxExchangeRate),
+        d.sameClassLegs,
+        d.sameClassPremiumCount,
+        d.sameClassBulkCount,
+        d.sameClass2xCount,
+        d.sameClass3xCount,
+        scAvgRate,
         d.firstAt,
         d.lastAt,
         now,
@@ -852,17 +1001,32 @@ async function settlePendingTradesInD1(
 
   const upsertMemberTrade = rawD1.prepare(
     `INSERT INTO member_trade_stats
-      (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, last_trade_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 0, 1, 999, 0, 1, ?, ?)
+      (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, last_trade_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, 1, 999, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(member_id) DO UPDATE SET
+       avg_exchange_rate = ROUND((member_trade_stats.avg_exchange_rate * member_trade_stats.traded_count + excluded.avg_exchange_rate * excluded.traded_count) / MAX(1, member_trade_stats.traded_count + excluded.traded_count), 4),
+       same_class_avg_rate = CASE WHEN member_trade_stats.same_class_legs + excluded.same_class_legs > 0 THEN ROUND((member_trade_stats.same_class_avg_rate * member_trade_stats.same_class_legs + excluded.same_class_avg_rate * excluded.same_class_legs) / (member_trade_stats.same_class_legs + excluded.same_class_legs), 4) ELSE 1 END,
        traded_count = member_trade_stats.traded_count + excluded.traded_count,
        trade_sessions = member_trade_stats.trade_sessions + excluded.trade_sessions,
        direct_transfer_count = member_trade_stats.direct_transfer_count + excluded.direct_transfer_count,
+       premium_count = member_trade_stats.premium_count + excluded.premium_count,
+       bulk_count = member_trade_stats.bulk_count + excluded.bulk_count,
+       premium_2x_count = member_trade_stats.premium_2x_count + excluded.premium_2x_count,
+       premium_3x_count = member_trade_stats.premium_3x_count + excluded.premium_3x_count,
+       max_exchange_rate = MAX(member_trade_stats.max_exchange_rate, excluded.max_exchange_rate),
+       same_class_legs = member_trade_stats.same_class_legs + excluded.same_class_legs,
+       same_class_premium_count = member_trade_stats.same_class_premium_count + excluded.same_class_premium_count,
+       same_class_bulk_count = member_trade_stats.same_class_bulk_count + excluded.same_class_bulk_count,
+       same_class_2x_count = member_trade_stats.same_class_2x_count + excluded.same_class_2x_count,
+       same_class_3x_count = member_trade_stats.same_class_3x_count + excluded.same_class_3x_count,
        last_trade_at = CASE WHEN member_trade_stats.last_trade_at IS NULL OR excluded.last_trade_at > member_trade_stats.last_trade_at THEN excluded.last_trade_at ELSE member_trade_stats.last_trade_at END,
        updated_at = excluded.updated_at`,
   );
 
   for (const m of memberTradeDeltas.values()) {
+    const avgRate = m.tradedCount > 0 ? round4(m.rateSum / m.tradedCount) : 1;
+    const scAvgRate =
+      m.sameClassLegs > 0 ? round4(m.sameClassRateSum / m.sameClassLegs) : 1;
     stmts.push(
       upsertMemberTrade.bind(
         m.memberId,
@@ -870,6 +1034,18 @@ async function settlePendingTradesInD1(
         m.tradedCount,
         m.tradeSessions,
         m.directTransfers,
+        m.premiumCount,
+        m.bulkCount,
+        m.premium2xCount,
+        m.premium3xCount,
+        avgRate,
+        round4(m.maxExchangeRate),
+        m.sameClassLegs,
+        m.sameClassPremiumCount,
+        m.sameClassBulkCount,
+        m.sameClass2xCount,
+        m.sameClass3xCount,
+        scAvgRate,
         m.lastAt,
         now,
       ),
@@ -878,10 +1054,14 @@ async function settlePendingTradesInD1(
 
   const upsertDailyTrade = rawD1.prepare(
     `INSERT INTO daily_trade_stats
-      (artist_id, trade_date, trade_sessions, traded_objekts, direct_transfers, unique_traders)
-     VALUES (?, ?, ?, ?, ?, 0)
+      (artist_id, trade_date, trade_sessions, asymmetric_sessions, ratio_2x_sessions, ratio_3x_sessions, same_class_asymmetric_sessions, traded_objekts, direct_transfers, unique_traders)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
      ON CONFLICT(artist_id, trade_date) DO UPDATE SET
        trade_sessions = daily_trade_stats.trade_sessions + excluded.trade_sessions,
+       asymmetric_sessions = daily_trade_stats.asymmetric_sessions + excluded.asymmetric_sessions,
+       ratio_2x_sessions = daily_trade_stats.ratio_2x_sessions + excluded.ratio_2x_sessions,
+       ratio_3x_sessions = daily_trade_stats.ratio_3x_sessions + excluded.ratio_3x_sessions,
+       same_class_asymmetric_sessions = daily_trade_stats.same_class_asymmetric_sessions + excluded.same_class_asymmetric_sessions,
        traded_objekts = daily_trade_stats.traded_objekts + excluded.traded_objekts,
        direct_transfers = daily_trade_stats.direct_transfers + excluded.direct_transfers`,
   );
@@ -892,6 +1072,10 @@ async function settlePendingTradesInD1(
         d.artistId,
         d.date,
         d.sessions,
+        d.asymmetricSessions,
+        d.ratio2xSessions,
+        d.ratio3xSessions,
+        d.sameClassAsymmetricSessions,
         d.tradedObjekts,
         d.directTransfers,
       ),
@@ -900,8 +1084,8 @@ async function settlePendingTradesInD1(
 
   const insertRecent = rawD1.prepare(
     `INSERT OR REPLACE INTO recent_trades
-      (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, is_asymmetric, is_same_class, ratio_multiple, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const rt of recentInserts) {
     stmts.push(
@@ -913,6 +1097,9 @@ async function settlePendingTradesInD1(
         rt.durationSeconds,
         rt.sideACount,
         rt.sideBCount,
+        rt.isAsymmetric ? 1 : 0,
+        rt.isSameClass ? 1 : 0,
+        rt.ratioMultiple,
         rt.walletAShort,
         rt.walletBShort,
         rt.sideASummary,

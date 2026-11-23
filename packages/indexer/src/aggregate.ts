@@ -2,9 +2,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadCurationData } from "@objekt-stats/db/curation-loader";
 import {
+  classifyTradeSymmetry,
   computeArtistSeriesStats,
   computeMemberTradeRankings,
   detectTradesFromTransfers,
+  isSameClassSwap,
   makeTransferKey,
   shortenAddress,
   type P2PTransferEvent,
@@ -611,6 +613,18 @@ export function aggregateAndEmitSql(
     tradeSessions: number;
     directTransferCount: number;
     traders: Set<string>;
+    premiumCount: number;
+    bulkCount: number;
+    premium2xCount: number;
+    premium3xCount: number;
+    rateSum: number;
+    maxExchangeRate: number;
+    sameClassLegs: number;
+    sameClassPremiumCount: number;
+    sameClassBulkCount: number;
+    sameClass2xCount: number;
+    sameClass3xCount: number;
+    sameClassRateSum: number;
     firstTradeAt: string | null;
     lastTradeAt: string | null;
   }
@@ -623,6 +637,18 @@ export function aggregateAndEmitSql(
     directTransferCount: number;
     traders: Set<string>;
     collections: Set<string>;
+    premiumCount: number;
+    bulkCount: number;
+    premium2xCount: number;
+    premium3xCount: number;
+    rateSum: number;
+    maxExchangeRate: number;
+    sameClassLegs: number;
+    sameClassPremiumCount: number;
+    sameClassBulkCount: number;
+    sameClass2xCount: number;
+    sameClass3xCount: number;
+    sameClassRateSum: number;
     lastTradeAt: string | null;
   }
 
@@ -630,6 +656,10 @@ export function aggregateAndEmitSql(
     artistId: string;
     tradeDate: string;
     tradeSessions: number;
+    asymmetricSessions: number;
+    ratio2xSessions: number;
+    ratio3xSessions: number;
+    sameClassAsymmetricSessions: number;
     tradedObjekts: number;
     directTransfers: number;
     traders: Set<string>;
@@ -653,6 +683,18 @@ export function aggregateAndEmitSql(
         tradeSessions: 0,
         directTransferCount: 0,
         traders: new Set(),
+        premiumCount: 0,
+        bulkCount: 0,
+        premium2xCount: 0,
+        premium3xCount: 0,
+        rateSum: 0,
+        maxExchangeRate: 1,
+        sameClassLegs: 0,
+        sameClassPremiumCount: 0,
+        sameClassBulkCount: 0,
+        sameClass2xCount: 0,
+        sameClass3xCount: 0,
+        sameClassRateSum: 0,
         firstTradeAt: null,
         lastTradeAt: null,
       };
@@ -672,6 +714,18 @@ export function aggregateAndEmitSql(
         directTransferCount: 0,
         traders: new Set(),
         collections: new Set(),
+        premiumCount: 0,
+        bulkCount: 0,
+        premium2xCount: 0,
+        premium3xCount: 0,
+        rateSum: 0,
+        maxExchangeRate: 1,
+        sameClassLegs: 0,
+        sameClassPremiumCount: 0,
+        sameClassBulkCount: 0,
+        sameClass2xCount: 0,
+        sameClass3xCount: 0,
+        sameClassRateSum: 0,
         lastTradeAt: null,
       };
       memberTradeMap.set(memberId, acc);
@@ -687,6 +741,10 @@ export function aggregateAndEmitSql(
         artistId,
         tradeDate,
         tradeSessions: 0,
+        asymmetricSessions: 0,
+        ratio2xSessions: 0,
+        ratio3xSessions: 0,
+        sameClassAsymmetricSessions: 0,
         tradedObjekts: 0,
         directTransfers: 0,
         traders: new Set(),
@@ -723,6 +781,7 @@ export function aggregateAndEmitSql(
 
   // Count confirmed reciprocal trades and build recent trade feed
   let confirmedTradedObjekts = 0;
+  let asymmetricTradesCount = 0;
   const recentTradeRows: Array<{
     tradeId: string;
     artistId: string;
@@ -731,6 +790,9 @@ export function aggregateAndEmitSql(
     durationSeconds: number;
     sideACount: number;
     sideBCount: number;
+    isAsymmetric: boolean;
+    isSameClass: boolean;
+    ratioMultiple: number;
     walletAShort: string;
     walletBShort: string;
     sideASummary: string;
@@ -779,54 +841,106 @@ export function aggregateAndEmitSql(
     return JSON.stringify(Array.from(grouped.values()));
   };
 
+  const applyAsymMetrics = (
+    target: {
+      premiumCount: number;
+      bulkCount: number;
+      premium2xCount: number;
+      premium3xCount: number;
+      rateSum: number;
+      maxExchangeRate: number;
+      sameClassLegs: number;
+      sameClassPremiumCount: number;
+      sameClassBulkCount: number;
+      sameClass2xCount: number;
+      sameClass3xCount: number;
+      sameClassRateSum: number;
+    },
+    rate: number,
+    sameClass: boolean,
+  ) => {
+    target.rateSum += rate;
+    if (rate > target.maxExchangeRate) target.maxExchangeRate = rate;
+    if (rate > 1) target.premiumCount++;
+    else if (rate < 1) target.bulkCount++;
+    if (rate >= 2) target.premium2xCount++;
+    if (rate >= 3) target.premium3xCount++;
+
+    if (sameClass) {
+      target.sameClassLegs++;
+      target.sameClassRateSum += rate;
+      if (rate > 1) target.sameClassPremiumCount++;
+      else if (rate < 1) target.sameClassBulkCount++;
+      if (rate >= 2) target.sameClass2xCount++;
+      if (rate >= 3) target.sameClass3xCount++;
+    }
+  };
+
   for (const trade of detectedTrades.trades) {
     const touchedArtists = new Set<string>();
     const touchedCols = new Set<string>();
     const touchedMembers = new Set<string>();
     const tradeDate = trade.completedAt.slice(0, 10);
 
-    for (const leg of trade.allLegs) {
-      const meta = metaByToken.get(leg.tokenId);
-      if (!meta || !trackedArtists.has(meta.artist_id as "triples" | "artms")) {
-        continue;
-      }
-      confirmedTradedObjekts++;
-      touchedArtists.add(meta.artist_id);
+    const sym = classifyTradeSymmetry(trade.sideALegs.length, trade.sideBLegs.length);
+    if (sym.isAsymmetric) asymmetricTradesCount++;
 
-      const colAcc = ensureColAcc(meta);
-      colAcc.tradedCount++;
-      colAcc.traders.add(leg.from);
-      colAcc.traders.add(leg.to);
-      if (!colAcc.firstTradeAt || leg.transferredAt < colAcc.firstTradeAt) {
-        colAcc.firstTradeAt = leg.transferredAt;
-      }
-      if (!colAcc.lastTradeAt || leg.transferredAt > colAcc.lastTradeAt) {
-        colAcc.lastTradeAt = leg.transferredAt;
-      }
-      if (!touchedCols.has(meta.slug)) {
-        colAcc.tradeSessions++;
-        touchedCols.add(meta.slug);
-      }
+    const sameClass = isSameClassSwap(
+      trade.sideALegs.map((l) => metaByToken.get(l.tokenId)?.objekt_class),
+      trade.sideBLegs.map((l) => metaByToken.get(l.tokenId)?.objekt_class),
+    );
 
-      if (colAcc.memberId) {
-        const mAcc = ensureMemberAcc(colAcc.memberId, meta.artist_id);
-        mAcc.tradedCount++;
-        mAcc.traders.add(leg.from);
-        mAcc.traders.add(leg.to);
-        mAcc.collections.add(meta.slug);
-        if (!mAcc.lastTradeAt || leg.transferredAt > mAcc.lastTradeAt) {
-          mAcc.lastTradeAt = leg.transferredAt;
+    const sidePairs: Array<readonly [readonly P2PTransferEvent[], number]> = [
+      [trade.sideALegs, sym.sideAExchangeRate],
+      [trade.sideBLegs, sym.sideBExchangeRate],
+    ];
+
+    for (const [sideLegs, legRate] of sidePairs) {
+      for (const leg of sideLegs) {
+        const meta = metaByToken.get(leg.tokenId);
+        if (!meta || !trackedArtists.has(meta.artist_id as "triples" | "artms")) {
+          continue;
         }
-        if (!touchedMembers.has(colAcc.memberId)) {
-          mAcc.tradeSessions++;
-          touchedMembers.add(colAcc.memberId);
-        }
-      }
+        confirmedTradedObjekts++;
+        touchedArtists.add(meta.artist_id);
 
-      const dayAcc = ensureDailyAcc(meta.artist_id, tradeDate);
-      dayAcc.tradedObjekts++;
-      dayAcc.traders.add(leg.from);
-      dayAcc.traders.add(leg.to);
+        const colAcc = ensureColAcc(meta);
+        colAcc.tradedCount++;
+        colAcc.traders.add(leg.from);
+        colAcc.traders.add(leg.to);
+        applyAsymMetrics(colAcc, legRate, sameClass);
+        if (!colAcc.firstTradeAt || leg.transferredAt < colAcc.firstTradeAt) {
+          colAcc.firstTradeAt = leg.transferredAt;
+        }
+        if (!colAcc.lastTradeAt || leg.transferredAt > colAcc.lastTradeAt) {
+          colAcc.lastTradeAt = leg.transferredAt;
+        }
+        if (!touchedCols.has(meta.slug)) {
+          colAcc.tradeSessions++;
+          touchedCols.add(meta.slug);
+        }
+
+        if (colAcc.memberId) {
+          const mAcc = ensureMemberAcc(colAcc.memberId, meta.artist_id);
+          mAcc.tradedCount++;
+          mAcc.traders.add(leg.from);
+          mAcc.traders.add(leg.to);
+          mAcc.collections.add(meta.slug);
+          applyAsymMetrics(mAcc, legRate, sameClass);
+          if (!mAcc.lastTradeAt || leg.transferredAt > mAcc.lastTradeAt) {
+            mAcc.lastTradeAt = leg.transferredAt;
+          }
+          if (!touchedMembers.has(colAcc.memberId)) {
+            mAcc.tradeSessions++;
+            touchedMembers.add(colAcc.memberId);
+          }
+        }
+
+        const dayAcc = ensureDailyAcc(meta.artist_id, tradeDate);
+        dayAcc.tradedObjekts++;
+        dayAcc.traders.add(leg.from);
+        dayAcc.traders.add(leg.to);
+      }
     }
 
     if (touchedArtists.size > 0) {
@@ -835,6 +949,12 @@ export function aggregateAndEmitSql(
       for (const artistId of touchedArtists) {
         const dayAcc = ensureDailyAcc(artistId, tradeDate);
         dayAcc.tradeSessions++;
+        if (sym.isAsymmetric) {
+          dayAcc.asymmetricSessions++;
+          if (sym.is2to1Plus) dayAcc.ratio2xSessions++;
+          if (sym.is3to1Plus) dayAcc.ratio3xSessions++;
+          if (sameClass) dayAcc.sameClassAsymmetricSessions++;
+        }
         recentTradeRows.push({
           tradeId: trade.tradeId,
           artistId,
@@ -843,6 +963,9 @@ export function aggregateAndEmitSql(
           durationSeconds: trade.durationSeconds,
           sideACount: trade.sideALegs.length,
           sideBCount: trade.sideBLegs.length,
+          isAsymmetric: sym.isAsymmetric,
+          isSameClass: sameClass,
+          ratioMultiple: sym.ratioMultiple,
           walletAShort: shortenAddress(trade.walletA),
           walletBShort: shortenAddress(trade.walletB),
           sideASummary,
@@ -851,6 +974,8 @@ export function aggregateAndEmitSql(
       }
     }
   }
+
+  const round4 = (v: number) => Math.round(v * 10000) / 10000;
 
   // Emit deterministic sync-trades.sql
   const tradeLines: string[] = [
@@ -864,8 +989,11 @@ export function aggregateAndEmitSql(
   ];
 
   for (const col of colTradeMap.values()) {
+    const avgRate = col.tradedCount > 0 ? round4(col.rateSum / col.tradedCount) : 1;
+    const scAvgRate =
+      col.sameClassLegs > 0 ? round4(col.sameClassRateSum / col.sameClassLegs) : 1;
     tradeLines.push(
-      `INSERT OR REPLACE INTO collection_trade_stats (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, first_trade_at, last_trade_at, updated_at) VALUES (${sqlStr(col.meta.slug)}, ${sqlStr(col.meta.collection_id)}, ${sqlStr(col.meta.artist_id)}, ${sqlStr(col.memberId)}, ${sqlStr(col.meta.raw_member)}, ${sqlStr(col.meta.season)}, ${sqlStr(col.meta.objekt_class)}, ${sqlStr(col.meta.collection_no)}, ${sqlStr(col.meta.on_offline)}, ${sqlStr(col.meta.image_url)}, ${sqlStr(col.meta.background_color)}, ${col.tradedCount}, ${col.tradeSessions}, ${col.directTransferCount}, ${col.traders.size}, ${sqlStr(col.firstTradeAt)}, ${sqlStr(col.lastTradeAt)}, ${sqlStr(now)});`,
+      `INSERT OR REPLACE INTO collection_trade_stats (collection_slug, collection_id, artist_id, member_id, raw_member_name, season, objekt_class, collection_no, on_offline, front_image_url, background_color, traded_count, trade_sessions, direct_transfer_count, unique_traders, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, first_trade_at, last_trade_at, updated_at) VALUES (${sqlStr(col.meta.slug)}, ${sqlStr(col.meta.collection_id)}, ${sqlStr(col.meta.artist_id)}, ${sqlStr(col.memberId)}, ${sqlStr(col.meta.raw_member)}, ${sqlStr(col.meta.season)}, ${sqlStr(col.meta.objekt_class)}, ${sqlStr(col.meta.collection_no)}, ${sqlStr(col.meta.on_offline)}, ${sqlStr(col.meta.image_url)}, ${sqlStr(col.meta.background_color)}, ${col.tradedCount}, ${col.tradeSessions}, ${col.directTransferCount}, ${col.traders.size}, ${col.premiumCount}, ${col.bulkCount}, ${col.premium2xCount}, ${col.premium3xCount}, ${avgRate}, ${round4(col.maxExchangeRate)}, ${col.sameClassLegs}, ${col.sameClassPremiumCount}, ${col.sameClassBulkCount}, ${col.sameClass2xCount}, ${col.sameClass3xCount}, ${scAvgRate}, ${sqlStr(col.firstTradeAt)}, ${sqlStr(col.lastTradeAt)}, ${sqlStr(now)});`,
     );
   }
 
@@ -882,6 +1010,18 @@ export function aggregateAndEmitSql(
           directTransferCount: 0,
           traders: new Set<string>(),
           collections: new Set<string>(),
+          premiumCount: 0,
+          bulkCount: 0,
+          premium2xCount: 0,
+          premium3xCount: 0,
+          rateSum: 0,
+          maxExchangeRate: 1,
+          sameClassLegs: 0,
+          sameClassPremiumCount: 0,
+          sameClassBulkCount: 0,
+          sameClass2xCount: 0,
+          sameClass3xCount: 0,
+          sameClassRateSum: 0,
           lastTradeAt: null,
         }
       );
@@ -902,8 +1042,11 @@ export function aggregateAndEmitSql(
     for (const a of artistMemberAccs) {
       const r = rankByMember.get(a.memberId);
       if (!r) continue;
+      const avgRate = a.tradedCount > 0 ? round4(a.rateSum / a.tradedCount) : 1;
+      const scAvgRate =
+        a.sameClassLegs > 0 ? round4(a.sameClassRateSum / a.sameClassLegs) : 1;
       tradeLines.push(
-        `INSERT OR REPLACE INTO member_trade_stats (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, last_trade_at, updated_at) VALUES (${sqlStr(a.memberId)}, ${sqlStr(a.artistId)}, ${a.tradedCount}, ${a.tradeSessions}, ${a.directTransferCount}, ${a.traders.size}, ${a.collections.size}, ${r.tradeRank}, ${r.tradeSharePct}, ${r.tradeRelativeIndex}, ${sqlStr(a.lastTradeAt)}, ${sqlStr(now)});`,
+        `INSERT OR REPLACE INTO member_trade_stats (member_id, artist_id, traded_count, trade_sessions, direct_transfer_count, unique_traders, collections_traded, trade_rank, trade_share_pct, trade_relative_index, premium_count, bulk_count, premium_2x_count, premium_3x_count, avg_exchange_rate, max_exchange_rate, same_class_legs, same_class_premium_count, same_class_bulk_count, same_class_2x_count, same_class_3x_count, same_class_avg_rate, last_trade_at, updated_at) VALUES (${sqlStr(a.memberId)}, ${sqlStr(a.artistId)}, ${a.tradedCount}, ${a.tradeSessions}, ${a.directTransferCount}, ${a.traders.size}, ${a.collections.size}, ${r.tradeRank}, ${r.tradeSharePct}, ${r.tradeRelativeIndex}, ${a.premiumCount}, ${a.bulkCount}, ${a.premium2xCount}, ${a.premium3xCount}, ${avgRate}, ${round4(a.maxExchangeRate)}, ${a.sameClassLegs}, ${a.sameClassPremiumCount}, ${a.sameClassBulkCount}, ${a.sameClass2xCount}, ${a.sameClass3xCount}, ${scAvgRate}, ${sqlStr(a.lastTradeAt)}, ${sqlStr(now)});`,
       );
     }
   }
@@ -911,19 +1054,36 @@ export function aggregateAndEmitSql(
   tradeLines.push("");
   for (const d of dailyTradeMap.values()) {
     tradeLines.push(
-      `INSERT OR REPLACE INTO daily_trade_stats (artist_id, trade_date, trade_sessions, traded_objekts, direct_transfers, unique_traders) VALUES (${sqlStr(d.artistId)}, ${sqlStr(d.tradeDate)}, ${d.tradeSessions}, ${d.tradedObjekts}, ${d.directTransfers}, ${d.traders.size});`,
+      `INSERT OR REPLACE INTO daily_trade_stats (artist_id, trade_date, trade_sessions, asymmetric_sessions, ratio_2x_sessions, ratio_3x_sessions, same_class_asymmetric_sessions, traded_objekts, direct_transfers, unique_traders) VALUES (${sqlStr(d.artistId)}, ${sqlStr(d.tradeDate)}, ${d.tradeSessions}, ${d.asymmetricSessions}, ${d.ratio2xSessions}, ${d.ratio3xSessions}, ${d.sameClassAsymmetricSessions}, ${d.tradedObjekts}, ${d.directTransfers}, ${d.traders.size});`,
     );
   }
 
+  // Keep up to 80 newest general swaps + up to 60 newest >=2:1 asymmetric swaps per artist
   tradeLines.push("");
-  const perArtistRecentCount = new Map<string, number>();
+  const perArtistGeneralCount = new Map<string, number>();
+  const perArtistAsymCount = new Map<string, number>();
+  const emittedRecentKeys = new Set<string>();
   recentTradeRows.sort((a, b) => b.tradedAt.localeCompare(a.tradedAt));
+
   for (const rt of recentTradeRows) {
-    const count = perArtistRecentCount.get(rt.artistId) ?? 0;
-    if (count >= 100) continue;
-    perArtistRecentCount.set(rt.artistId, count + 1);
+    const key = `${rt.tradeId}|${rt.artistId}`;
+    if (emittedRecentKeys.has(key)) continue;
+
+    const genCount = perArtistGeneralCount.get(rt.artistId) ?? 0;
+    const asymCount = perArtistAsymCount.get(rt.artistId) ?? 0;
+
+    const takeGeneral = genCount < 80;
+    const takeAsym = !takeGeneral && rt.isAsymmetric && rt.ratioMultiple >= 2 && asymCount < 60;
+    if (!takeGeneral && !takeAsym) continue;
+
+    emittedRecentKeys.add(key);
+    if (takeGeneral) perArtistGeneralCount.set(rt.artistId, genCount + 1);
+    if (rt.isAsymmetric && rt.ratioMultiple >= 2) {
+      perArtistAsymCount.set(rt.artistId, asymCount + 1);
+    }
+
     tradeLines.push(
-      `INSERT OR REPLACE INTO recent_trades (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary) VALUES (${sqlStr(rt.tradeId)}, ${sqlStr(rt.artistId)}, ${sqlStr(rt.chain)}, ${sqlStr(rt.tradedAt)}, ${rt.durationSeconds}, ${rt.sideACount}, ${rt.sideBCount}, ${sqlStr(rt.walletAShort)}, ${sqlStr(rt.walletBShort)}, ${sqlStr(rt.sideASummary)}, ${sqlStr(rt.sideBSummary)});`,
+      `INSERT OR REPLACE INTO recent_trades (trade_id, artist_id, chain, traded_at, duration_seconds, side_a_count, side_b_count, is_asymmetric, is_same_class, ratio_multiple, wallet_a_short, wallet_b_short, side_a_summary, side_b_summary) VALUES (${sqlStr(rt.tradeId)}, ${sqlStr(rt.artistId)}, ${sqlStr(rt.chain)}, ${sqlStr(rt.tradedAt)}, ${rt.durationSeconds}, ${rt.sideACount}, ${rt.sideBCount}, ${sqlBool(rt.isAsymmetric)}, ${sqlBool(rt.isSameClass)}, ${rt.ratioMultiple}, ${sqlStr(rt.walletAShort)}, ${sqlStr(rt.walletBShort)}, ${sqlStr(rt.sideASummary)}, ${sqlStr(rt.sideBSummary)});`,
     );
   }
 
@@ -939,6 +1099,7 @@ export function aggregateAndEmitSql(
       rounds: validRounds.length,
       roundMemberStatRows,
       confirmedTradesCount: detectedTrades.trades.length,
+      asymmetricTradesCount,
       confirmedTradedObjekts,
       directP2PTransfersCount,
       tradeCollectionsCount: colTradeMap.size,

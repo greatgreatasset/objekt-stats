@@ -3,9 +3,11 @@ import {
   COSMO_SPIN_ADDRESS,
   DEAD_ADDRESS,
   ZERO_ADDRESS,
+  classifyTradeSymmetry,
   computeMemberTradeRankings,
   detectTradesFromTransfers,
   isEligibleP2PTransfer,
+  isSameClassSwap,
   type P2PTransferEvent,
 } from "./trades.js";
 
@@ -177,5 +179,42 @@ describe("computeMemberTradeRankings", () => {
       tradeRank: 3,
       tradeRelativeIndex: 0.5,
     });
+  });
+});
+
+describe("classifyTradeSymmetry & isSameClassSwap", () => {
+  it("identifies equal vs 2:1 / 3:1 / 3:2 asymmetric swaps and preserves 1.00 market parity", () => {
+    const eq = classifyTradeSymmetry(1, 1);
+    expect(eq.isAsymmetric).toBe(false);
+    expect(eq.premiumSide).toBeNull();
+    expect(eq.ratioMultiple).toBe(1);
+    expect(eq.ratioLabel).toBe("1:1");
+
+    const swap3to1 = classifyTradeSymmetry(1, 3);
+    expect(swap3to1.isAsymmetric).toBe(true);
+    expect(swap3to1.premiumSide).toBe("A");
+    expect(swap3to1.sideAExchangeRate).toBe(3);
+    expect(swap3to1.sideBExchangeRate).toBeCloseTo(0.3333, 3);
+    expect(swap3to1.is2to1Plus).toBe(true);
+    expect(swap3to1.is3to1Plus).toBe(true);
+    expect(swap3to1.ratioLabel).toBe("3:1");
+
+    // Market-wide leg-weighted mean exchange rate equals 1.00
+    const legSum = 1 * swap3to1.sideAExchangeRate + 3 * swap3to1.sideBExchangeRate;
+    expect(legSum / 4).toBeCloseTo(1.0, 3);
+
+    const swap3to2 = classifyTradeSymmetry(3, 2);
+    expect(swap3to2.isAsymmetric).toBe(true);
+    expect(swap3to2.premiumSide).toBe("B");
+    expect(swap3to2.ratioMultiple).toBe(1.5);
+    expect(swap3to2.is2to1Plus).toBe(false);
+    expect(swap3to2.ratioLabel).toBe("3:2");
+  });
+
+  it("distinguishes same-class swaps from cross-class rarity upgrades", () => {
+    expect(isSameClassSwap(["First"], ["First", "First", "First"])).toBe(true);
+    expect(isSameClassSwap(["Special"], ["First", "First", "First"])).toBe(false);
+    expect(isSameClassSwap(["First", "Double"], ["First"])).toBe(false);
+    expect(isSameClassSwap([], ["First"])).toBe(false);
   });
 });

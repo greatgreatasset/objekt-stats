@@ -257,6 +257,18 @@ export const collectionTradeStats = sqliteTable(
     tradeSessions: integer("trade_sessions").notNull().default(0),
     directTransferCount: integer("direct_transfer_count").notNull().default(0),
     uniqueTraders: integer("unique_traders").notNull().default(0),
+    premiumCount: integer("premium_count").notNull().default(0),
+    bulkCount: integer("bulk_count").notNull().default(0),
+    premium2xCount: integer("premium_2x_count").notNull().default(0),
+    premium3xCount: integer("premium_3x_count").notNull().default(0),
+    avgExchangeRate: real("avg_exchange_rate").notNull().default(1),
+    maxExchangeRate: real("max_exchange_rate").notNull().default(1),
+    sameClassLegs: integer("same_class_legs").notNull().default(0),
+    sameClassPremiumCount: integer("same_class_premium_count").notNull().default(0),
+    sameClassBulkCount: integer("same_class_bulk_count").notNull().default(0),
+    sameClass2xCount: integer("same_class_2x_count").notNull().default(0),
+    sameClass3xCount: integer("same_class_3x_count").notNull().default(0),
+    sameClassAvgRate: real("same_class_avg_rate").notNull().default(1),
     firstTradeAt: text("first_trade_at"),
     lastTradeAt: text("last_trade_at"),
     updatedAt: text("updated_at").notNull(),
@@ -285,6 +297,18 @@ export const memberTradeStats = sqliteTable(
     tradeRank: integer("trade_rank").notNull(),
     tradeSharePct: real("trade_share_pct").notNull(),
     tradeRelativeIndex: real("trade_relative_index").notNull(),
+    premiumCount: integer("premium_count").notNull().default(0),
+    bulkCount: integer("bulk_count").notNull().default(0),
+    premium2xCount: integer("premium_2x_count").notNull().default(0),
+    premium3xCount: integer("premium_3x_count").notNull().default(0),
+    avgExchangeRate: real("avg_exchange_rate").notNull().default(1),
+    maxExchangeRate: real("max_exchange_rate").notNull().default(1),
+    sameClassLegs: integer("same_class_legs").notNull().default(0),
+    sameClassPremiumCount: integer("same_class_premium_count").notNull().default(0),
+    sameClassBulkCount: integer("same_class_bulk_count").notNull().default(0),
+    sameClass2xCount: integer("same_class_2x_count").notNull().default(0),
+    sameClass3xCount: integer("same_class_3x_count").notNull().default(0),
+    sameClassAvgRate: real("same_class_avg_rate").notNull().default(1),
     lastTradeAt: text("last_trade_at"),
     updatedAt: text("updated_at").notNull(),
   },
@@ -299,6 +323,12 @@ export const dailyTradeStats = sqliteTable(
       .references(() => artists.id, { onDelete: "cascade" }),
     tradeDate: text("trade_date").notNull(), // YYYY-MM-DD (UTC)
     tradeSessions: integer("trade_sessions").notNull().default(0),
+    asymmetricSessions: integer("asymmetric_sessions").notNull().default(0),
+    ratio2xSessions: integer("ratio_2x_sessions").notNull().default(0),
+    ratio3xSessions: integer("ratio_3x_sessions").notNull().default(0),
+    sameClassAsymmetricSessions: integer("same_class_asymmetric_sessions")
+      .notNull()
+      .default(0),
     tradedObjekts: integer("traded_objekts").notNull().default(0),
     directTransfers: integer("direct_transfers").notNull().default(0),
     uniqueTraders: integer("unique_traders").notNull().default(0),
@@ -321,6 +351,13 @@ export const recentTrades = sqliteTable(
     durationSeconds: integer("duration_seconds").notNull(),
     sideACount: integer("side_a_count").notNull(),
     sideBCount: integer("side_b_count").notNull(),
+    isAsymmetric: integer("is_asymmetric", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    isSameClass: integer("is_same_class", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    ratioMultiple: real("ratio_multiple").notNull().default(1),
     walletAShort: text("wallet_a_short").notNull(),
     walletBShort: text("wallet_b_short").notNull(),
     sideASummary: text("side_a_summary").notNull(), // JSON array of traded legs
@@ -353,6 +390,39 @@ export const pendingP2pTransfers = sqliteTable(
   ],
 );
 
+/**
+ * Immutable per-token COSMO v3 metadata cache & frozen pre-migration Polygon wallet
+ * history cache used by the User Cost Estimator (`/wallet`).
+ * Strictly read/write cache tables — never alters primary sales or round rankings.
+ */
+export const tokenMetadataCache = sqliteTable(
+  "token_metadata_cache",
+  {
+    tokenId: integer("token_id").primaryKey(),
+    slug: text("slug").notNull(),
+    collectionId: text("collection_id").notNull(),
+    artistId: text("artist_id").notNull(),
+    rawArtist: text("raw_artist").notNull(),
+    memberName: text("member_name").notNull(),
+    season: text("season").notNull(),
+    objektClass: text("objekt_class").notNull(),
+    collectionNo: text("collection_no").notNull(),
+    onOffline: text("on_offline").notNull(),
+    imageUrl: text("image_url"),
+    backgroundColor: text("background_color"),
+    isMissing: integer("is_missing", { mode: "boolean" }).notNull().default(false),
+    cachedAt: text("cached_at").notNull(),
+  },
+  (t) => [index("idx_tmc_slug").on(t.slug)],
+);
+
+export const walletPolygonCache = sqliteTable("wallet_polygon_cache", {
+  polygonAddress: text("polygon_address").primaryKey(),
+  logsJson: text("logs_json").notNull(),
+  txCount: integer("tx_count").notNull().default(0),
+  cachedAt: text("cached_at").notNull(),
+});
+
 export type ArtistRow = typeof artists.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
@@ -363,3 +433,5 @@ export type CollectionTradeStatRow = typeof collectionTradeStats.$inferSelect;
 export type MemberTradeStatRow = typeof memberTradeStats.$inferSelect;
 export type DailyTradeStatRow = typeof dailyTradeStats.$inferSelect;
 export type RecentTradeRow = typeof recentTrades.$inferSelect;
+export type TokenMetadataCacheRow = typeof tokenMetadataCache.$inferSelect;
+export type WalletPolygonCacheRow = typeof walletPolygonCache.$inferSelect;
