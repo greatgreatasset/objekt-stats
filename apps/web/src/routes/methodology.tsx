@@ -371,6 +371,57 @@ function MethodologyPage() {
           </li>
         </ul>
       </section>
+
+      <section className="space-y-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-6">
+        <h2 className="text-lg font-semibold text-white">
+          9. Seasonal COSMO Leaderboard Cutoffs (Objekts &amp; Grids)
+        </h2>
+        <p className="text-sm leading-relaxed text-zinc-300">
+          The <code className="text-zinc-200">/leaderboards</code> tracker
+          reconstructs COSMO&apos;s per-season member leaderboards directly from
+          full-history Polygon + Abstract on-chain mints and cross-validates
+          against live COSMO Top-10 cutoffs:
+        </p>
+        <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-400">
+          <li>
+            <strong>Grids Leaderboard (Exact):</strong> Counts every seasonal
+            online <code className="text-zinc-200">Special</code> Class (
+            <code className="text-zinc-200">*Z</code>) grid-reward Objekt minted
+            directly to each wallet during that season. Even if a collector later
+            trades or spins the reward SCO, COSMO retains the completed grid
+            credit for the original minter.
+          </li>
+          <li>
+            <strong>Objekts Leaderboard (Primary Season Acquisitions):</strong>{" "}
+            Counts primary purchased and physical-QR-scanned seasonal mints per
+            wallet &mdash; including paired{" "}
+            <code className="text-zinc-200">Si &times; Sj</code> Unit cards
+            attributed to both members &mdash; while excluding{" "}
+            <code className="text-zinc-200">Special</code> grid rewards,{" "}
+            <code className="text-zinc-200">Welcome</code> (
+            <code className="text-zinc-200">100Z</code>),{" "}
+            <code className="text-zinc-200">Zero</code>, leaderboard/Spin reward
+            Premiers (<code className="text-zinc-200">402Z</code>) and Units (
+            <code className="text-zinc-200">602Z</code>), Apollo-verified free
+            event &amp; <code className="text-zinc-200">Pass+</code> drops, and
+            exact wallet-paired COSMO Spin replacement mints (1-card{" "}
+            <code className="text-zinc-200">First</code> mints delivered to a
+            wallet within 90 seconds of that wallet sending an Objekt to the
+            Spin address).
+          </li>
+          <li>
+            <strong>Whale Competition vs. Broad Popularity:</strong>{" "}
+            Comparing a member&apos;s Top-10 cutoff rank against their total
+            unique seasonal collectors rank separates intense top-end whale
+            battles (high cutoff rank, high Top-10 supply concentration) from
+            broad fanbase demand (high unique buyers, more accessible Top-10
+            cutoff). Estimated minimum spend uses the standard{" "}
+            <span className="font-mono text-zinc-200">$3.29</span> single-Objekt
+            reference price; bulk Web Shop packs or physical album QR scans can
+            lower real-world cost per card.
+          </li>
+        </ul>
+      </section>
     </div>
   );
 }

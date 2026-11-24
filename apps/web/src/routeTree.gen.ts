@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ArtmsRouteImport } from './routes/artms'
 import { Route as EarningsRouteImport } from './routes/earnings'
 import { Route as EventsRouteImport } from './routes/events'
+import { Route as LeaderboardsRouteImport } from './routes/leaderboards'
 import { Route as MethodologyRouteImport } from './routes/methodology'
 import { Route as SpinsRouteImport } from './routes/spins'
 import { Route as TradesRouteImport } from './routes/trades'
@@ -45,6 +46,11 @@ const EarningsRoute = EarningsRouteImport.update({
 const EventsRoute = EventsRouteImport.update({
   id: '/events',
   path: '/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LeaderboardsRoute = LeaderboardsRouteImport.update({
+  id: '/leaderboards',
+  path: '/leaderboards',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MethodologyRoute = MethodologyRouteImport.update({
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/artms': typeof ArtmsRoute
   '/earnings': typeof EarningsRoute
   '/events': typeof EventsRoute
+  '/leaderboards': typeof LeaderboardsRoute
   '/methodology': typeof MethodologyRoute
   '/spins': typeof SpinsRoute
   '/trades': typeof TradesRoute
@@ -137,6 +144,7 @@ export interface FileRoutesByTo {
   '/artms': typeof ArtmsRoute
   '/earnings': typeof EarningsRoute
   '/events': typeof EventsRoute
+  '/leaderboards': typeof LeaderboardsRoute
   '/methodology': typeof MethodologyRoute
   '/spins': typeof SpinsRoute
   '/trades': typeof TradesRoute
@@ -157,6 +165,7 @@ export interface FileRoutesById {
   '/artms': typeof ArtmsRoute
   '/earnings': typeof EarningsRoute
   '/events': typeof EventsRoute
+  '/leaderboards': typeof LeaderboardsRoute
   '/methodology': typeof MethodologyRoute
   '/spins': typeof SpinsRoute
   '/trades': typeof TradesRoute
@@ -178,6 +187,7 @@ export interface FileRouteTypes {
     | '/artms'
     | '/earnings'
     | '/events'
+    | '/leaderboards'
     | '/methodology'
     | '/spins'
     | '/trades'
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
     | '/artms'
     | '/earnings'
     | '/events'
+    | '/leaderboards'
     | '/methodology'
     | '/spins'
     | '/trades'
@@ -216,6 +227,7 @@ export interface FileRouteTypes {
     | '/artms'
     | '/earnings'
     | '/events'
+    | '/leaderboards'
     | '/methodology'
     | '/spins'
     | '/trades'
@@ -236,6 +248,7 @@ export interface RootRouteChildren {
   ArtmsRoute: typeof ArtmsRoute
   EarningsRoute: typeof EarningsRoute
   EventsRoute: typeof EventsRoute
+  LeaderboardsRoute: typeof LeaderboardsRoute
   MethodologyRoute: typeof MethodologyRoute
   SpinsRoute: typeof SpinsRoute
   TradesRoute: typeof TradesRoute
@@ -279,6 +292,13 @@ declare module '@tanstack/react-router' {
       path: '/events'
       fullPath: '/events'
       preLoaderRoute: typeof EventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/leaderboards': {
+      id: '/leaderboards'
+      path: '/leaderboards'
+      fullPath: '/leaderboards'
+      preLoaderRoute: typeof LeaderboardsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/methodology': {
@@ -380,6 +400,7 @@ const rootRouteChildren: RootRouteChildren = {
   ArtmsRoute: ArtmsRoute,
   EarningsRoute: EarningsRoute,
   EventsRoute: EventsRoute,
+  LeaderboardsRoute: LeaderboardsRoute,
   MethodologyRoute: MethodologyRoute,
   SpinsRoute: SpinsRoute,
   TradesRoute: TradesRoute,

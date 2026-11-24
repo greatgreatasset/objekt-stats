@@ -14,6 +14,7 @@ import {
   saleRoundCollections,
   saleRoundMemberStats,
   saleRounds,
+  seasonalLeaderboardCutoffs,
   spinMemberOutcomeStats,
   spinOutcomeStats,
   syncState,
@@ -1696,5 +1697,114 @@ export const getSpinAnalytics = createServerFn({ method: "GET" })
       availableSeasons,
       analytics,
       notableSpins,
+    };
+  });
+
+export const getSeasonalLeaderboardCutoffs = createServerFn({ method: "GET" })
+  .validator((artistId?: string) => normalizeArtist(artistId))
+  .handler(async ({ data: artistId }) => {
+    const db = createDb(env.DB);
+
+    const [artist] = await db
+      .select()
+      .from(artists)
+      .where(eq(artists.id, artistId))
+      .limit(1);
+
+    const memberList = await db
+      .select()
+      .from(members)
+      .where(eq(members.artistId, artistId))
+      .orderBy(asc(members.memberOrder));
+
+    const cutoffRows = await db
+      .select()
+      .from(seasonalLeaderboardCutoffs)
+      .where(eq(seasonalLeaderboardCutoffs.artistId, artistId))
+      .orderBy(
+        asc(seasonalLeaderboardCutoffs.seasonOrder),
+        asc(seasonalLeaderboardCutoffs.memberId),
+      )
+      .catch(() => []);
+
+    const syncRows = await db.select().from(syncState).catch(() => []);
+
+    const seasonAcc = new Map<
+      string,
+      {
+        season: string;
+        seasonOrder: number;
+        seasonStartAt: string;
+        seasonEndAt: string;
+        memberCount: number;
+        objTop10Sum: number;
+        gridTop10Sum: number;
+        maxObjektTop10: number;
+        maxGridTop10: number;
+        totalEligibleObjekts: number;
+        totalGridsCompleted: number;
+      }
+    >();
+
+    for (const r of cutoffRows) {
+      let s = seasonAcc.get(r.season);
+      if (!s) {
+        s = {
+          season: r.season,
+          seasonOrder: r.seasonOrder,
+          seasonStartAt: r.seasonStartAt,
+          seasonEndAt: r.seasonEndAt,
+          memberCount: 0,
+          objTop10Sum: 0,
+          gridTop10Sum: 0,
+          maxObjektTop10: 0,
+          maxGridTop10: 0,
+          totalEligibleObjekts: 0,
+          totalGridsCompleted: 0,
+        };
+        seasonAcc.set(r.season, s);
+      }
+      s.memberCount += 1;
+      s.objTop10Sum += r.objektTop10;
+      s.gridTop10Sum += r.gridTop10;
+      if (r.objektTop10 > s.maxObjektTop10) s.maxObjektTop10 = r.objektTop10;
+      if (r.gridTop10 > s.maxGridTop10) s.maxGridTop10 = r.gridTop10;
+      s.totalEligibleObjekts += r.objektTotalEligible;
+      s.totalGridsCompleted += r.gridTotalCompleted;
+      if (r.seasonStartAt < s.seasonStartAt) s.seasonStartAt = r.seasonStartAt;
+      if (r.seasonEndAt > s.seasonEndAt) s.seasonEndAt = r.seasonEndAt;
+    }
+
+    const seasons = Array.from(seasonAcc.values())
+      .sort((a, b) => a.seasonOrder - b.seasonOrder)
+      .map((s) => ({
+        season: s.season,
+        seasonOrder: s.seasonOrder,
+        seasonStartAt: s.seasonStartAt,
+        seasonEndAt: s.seasonEndAt,
+        memberCount: s.memberCount,
+        avgObjektTop10:
+          s.memberCount > 0 ? Math.round(s.objTop10Sum / s.memberCount) : 0,
+        avgGridTop10:
+          s.memberCount > 0 ? Math.round(s.gridTop10Sum / s.memberCount) : 0,
+        maxObjektTop10: s.maxObjektTop10,
+        maxGridTop10: s.maxGridTop10,
+        totalEligibleObjekts: s.totalEligibleObjekts,
+        totalGridsCompleted: s.totalGridsCompleted,
+      }));
+
+    return {
+      artist: artist ?? null,
+      members: memberList.map((m) => ({
+        id: m.id,
+        code: m.code,
+        memberOrder: m.memberOrder,
+        name: m.name,
+        fullName: m.fullName,
+        hexColor: m.hexColor,
+      })),
+      seasons,
+      rows: cutoffRows,
+      syncState: syncRows,
     };
   });

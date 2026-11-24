@@ -1,0 +1,36 @@
+CREATE TABLE `seasonal_leaderboard_cutoffs` (
+	`artist_id` text NOT NULL,
+	`season` text NOT NULL,
+	`season_order` integer NOT NULL,
+	`member_id` text NOT NULL,
+	`season_start_at` text NOT NULL,
+	`season_end_at` text NOT NULL,
+	`objekt_top1` integer DEFAULT 0 NOT NULL,
+	`objekt_top3` integer DEFAULT 0 NOT NULL,
+	`objekt_top10` integer DEFAULT 0 NOT NULL,
+	`objekt_top25` integer DEFAULT 0 NOT NULL,
+	`objekt_top50` integer DEFAULT 0 NOT NULL,
+	`objekt_top10_sum` integer DEFAULT 0 NOT NULL,
+	`objekt_total_eligible` integer DEFAULT 0 NOT NULL,
+	`objekt_unique_collectors` integer DEFAULT 0 NOT NULL,
+	`objekt_top10_share_pct` real DEFAULT 0 NOT NULL,
+	`objekt_top10_est_usd` real DEFAULT 0 NOT NULL,
+	`objekt_cutoff_rank` integer DEFAULT 1 NOT NULL,
+	`objekt_buyers_rank` integer DEFAULT 1 NOT NULL,
+	`grid_top1` integer DEFAULT 0 NOT NULL,
+	`grid_top3` integer DEFAULT 0 NOT NULL,
+	`grid_top10` integer DEFAULT 0 NOT NULL,
+	`grid_top25` integer DEFAULT 0 NOT NULL,
+	`grid_top50` integer DEFAULT 0 NOT NULL,
+	`grid_total_completed` integer DEFAULT 0 NOT NULL,
+	`grid_unique_gridders` integer DEFAULT 0 NOT NULL,
+	`grid_top10_share_pct` real DEFAULT 0 NOT NULL,
+	`grid_cutoff_rank` integer DEFAULT 1 NOT NULL,
+	`updated_at` text NOT NULL,
+	PRIMARY KEY(`artist_id`, `season`, `member_id`),
+	FOREIGN KEY (`artist_id`) REFERENCES `artists`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`member_id`) REFERENCES `members`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_slc_artist_season` ON `seasonal_leaderboard_cutoffs` (`artist_id`,`season_order`);--> statement-breakpoint
+CREATE INDEX `idx_slc_member` ON `seasonal_leaderboard_cutoffs` (`member_id`,`season_order`);

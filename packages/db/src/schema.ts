@@ -636,6 +636,60 @@ export const dropSchedule = sqliteTable(
   ],
 );
 
+/**
+ * Verified per-season COSMO Leaderboard Cutoffs (Objekts & Grids) for every member.
+ *
+ * Cross-verified against live COSMO Cream02 Top-10 leaderboards:
+ * - Grids: exact count of seasonal online Special Class (`*Z`) grid-reward mints per minter wallet.
+ * - Objekts: primary purchased/scanned seasonal mints (including paired `Si X Sj` Unit cards),
+ *   excluding Special/Welcome/Zero/reward Premiers (`402Z`), reward Units (`602Z`), Apollo-verified
+ *   free/Pass+ distributions, and exact wallet-paired COSMO Spin reward mints.
+ */
+export const seasonalLeaderboardCutoffs = sqliteTable(
+  "seasonal_leaderboard_cutoffs",
+  {
+    artistId: text("artist_id")
+      .notNull()
+      .references(() => artists.id, { onDelete: "cascade" }),
+    season: text("season").notNull(), // e.g. "Cream02", "Binary02"
+    seasonOrder: integer("season_order").notNull(), // chronological 1..N per artist
+    memberId: text("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+    seasonStartAt: text("season_start_at").notNull(),
+    seasonEndAt: text("season_end_at").notNull(),
+    // Seasonal Objekts Leaderboard Cutoffs
+    objektTop1: integer("objekt_top1").notNull().default(0),
+    objektTop3: integer("objekt_top3").notNull().default(0),
+    objektTop10: integer("objekt_top10").notNull().default(0),
+    objektTop25: integer("objekt_top25").notNull().default(0),
+    objektTop50: integer("objekt_top50").notNull().default(0),
+    objektTop10Sum: integer("objekt_top10_sum").notNull().default(0),
+    objektTotalEligible: integer("objekt_total_eligible").notNull().default(0),
+    objektUniqueCollectors: integer("objekt_unique_collectors").notNull().default(0),
+    objektTop10SharePct: real("objekt_top10_share_pct").notNull().default(0),
+    objektTop10EstUsd: real("objekt_top10_est_usd").notNull().default(0),
+    objektCutoffRank: integer("objekt_cutoff_rank").notNull().default(1),
+    objektBuyersRank: integer("objekt_buyers_rank").notNull().default(1),
+    // Seasonal Grids Leaderboard Cutoffs
+    gridTop1: integer("grid_top1").notNull().default(0),
+    gridTop3: integer("grid_top3").notNull().default(0),
+    gridTop10: integer("grid_top10").notNull().default(0),
+    gridTop25: integer("grid_top25").notNull().default(0),
+    gridTop50: integer("grid_top50").notNull().default(0),
+    gridTotalCompleted: integer("grid_total_completed").notNull().default(0),
+    gridUniqueGridders: integer("grid_unique_gridders").notNull().default(0),
+    gridTop10SharePct: real("grid_top10_share_pct").notNull().default(0),
+    gridCutoffRank: integer("grid_cutoff_rank").notNull().default(1),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.artistId, t.season, t.memberId] }),
+    index("idx_slc_artist_season").on(t.artistId, t.seasonOrder),
+    index("idx_slc_member").on(t.memberId, t.seasonOrder),
+  ],
+);
+
 export type ArtistRow = typeof artists.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
@@ -654,3 +708,4 @@ export type SpinOutcomeStatRow = typeof spinOutcomeStats.$inferSelect;
 export type SpinMemberOutcomeStatRow = typeof spinMemberOutcomeStats.$inferSelect;
 export type RecentNotableSpinRow = typeof recentNotableSpins.$inferSelect;
 export type DropScheduleRow = typeof dropSchedule.$inferSelect;
+export type SeasonalLeaderboardCutoffRow = typeof seasonalLeaderboardCutoffs.$inferSelect;

@@ -14,6 +14,7 @@ import {
 } from "./chains/polygon.js";
 import { ERC721_TRANSFER_TOPIC, ZERO_TOPIC } from "./constants.js";
 import { normalizeMetadataV3 } from "./cosmo-metadata.js";
+import { aggregateLeaderboardCutoffsAndEmitSql } from "./leaderboard-cutoffs.js";
 import { IndexerStore } from "./store.js";
 import { aggregateTradesStreaming } from "./trades-backfill.js";
 
@@ -595,6 +596,84 @@ describe("aggregateAndEmitSql trade isolation", () => {
     } finally {
       metaStore.close();
       tradesStore.close();
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("computes seasonal Objekt & Grid cutoffs including paired Units and excluding SCO/free/Spin rewards while preserving real single-card shop purchases", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "objekt-stats-lb-"));
+    const store = new IndexerStore(join(workDir, "lb.sqlite"));
+    const dataRoot = resolve(import.meta.dirname, "../../../data");
+    try {
+      const w1 = "0x1111111111111111111111111111111111111111"; // Whale buying 10 FCO + 2 Unit (S13 X S22) + 1 real 1-card FCO + 1 Spin-reward FCO + 3 SCO grids
+      const w2 = "0x2222222222222222222222222222222222222222"; // Buyer of 5 FCO + 1 SCO grid
+
+      const mints = [];
+      const metas = [];
+      let nextId = 10_000;
+
+      // w1: 10 FCO in one batch tx for Sullin (Cream02)
+      for (let i = 0; i < 10; i++) {
+        const id = nextId++;
+        mints.push({ tokenId: id, chain: "abstract" as const, blockNumber: 1000, mintedAt: "2026-06-01T10:00:00.000Z", minter: w1, txHash: "0x" + "a".repeat(64) });
+        metas.push({ tokenId: id, slug: "triples-cream02-sullin-101z", collectionId: "Cream02 Sullin 101Z", artistId: "triples", rawArtist: "tripleS", rawMember: "Sullin", season: "Cream02", objektClass: "First", collectionNo: "101Z", onOffline: "online" as const, imageUrl: "", backgroundColor: "#000" });
+      }
+      // w1: 2 paired Unit 601A ("S13 X S22") -> must credit BOTH Nien (S13) and Sullin (S22)!
+      for (let i = 0; i < 2; i++) {
+        const id = nextId++;
+        mints.push({ tokenId: id, chain: "abstract" as const, blockNumber: 1001, mintedAt: "2026-06-02T10:00:00.000Z", minter: w1, txHash: "0x" + "b".repeat(64) });
+        metas.push({ tokenId: id, slug: "triples-cream02-s13-x-s22-601a", collectionId: "Cream02 S13 X S22 601A", artistId: "triples", rawArtist: "tripleS", rawMember: "S13 X S22", season: "Cream02", objektClass: "Unit", collectionNo: "601A", onOffline: "offline" as const, imageUrl: "", backgroundColor: "#000" });
+      }
+      // w1: 1 legitimate single-card shop FCO (NO spin beforehand -> MUST BE KEPT!)
+      {
+        const id = nextId++;
+        mints.push({ tokenId: id, chain: "abstract" as const, blockNumber: 1050, mintedAt: "2026-06-05T10:00:00.000Z", minter: w1, txHash: "0x" + "c".repeat(64) });
+        metas.push({ tokenId: id, slug: "triples-cream02-sullin-101z", collectionId: "Cream02 Sullin 101Z", artistId: "triples", rawArtist: "tripleS", rawMember: "Sullin", season: "Cream02", objektClass: "First", collectionNo: "101Z", onOffline: "online" as const, imageUrl: "", backgroundColor: "#000" });
+      }
+      // w1 spins token 10_000 at 2026-06-10T10:00:00Z, then gets 1 Spin-reward FCO 15s later -> MUST BE EXCLUDED!
+      store.insertSpins([{ txHash: "0x" + "d".repeat(64), logIndex: 0, tokenId: 10_000, chain: "abstract", blockNumber: 1100, spunAt: "2026-06-10T10:00:00.000Z" }]);
+      {
+        const id = nextId++;
+        mints.push({ tokenId: id, chain: "abstract" as const, blockNumber: 1105, mintedAt: "2026-06-10T10:00:15.000Z", minter: w1, txHash: "0x" + "e".repeat(64) });
+        metas.push({ tokenId: id, slug: "triples-cream02-sullin-101z", collectionId: "Cream02 Sullin 101Z", artistId: "triples", rawArtist: "tripleS", rawMember: "Sullin", season: "Cream02", objektClass: "First", collectionNo: "101Z", onOffline: "online" as const, imageUrl: "", backgroundColor: "#000" });
+      }
+      // w1: 3 Special 201Z grid rewards (counted in GRIDS, excluded from OBJEKTS)
+      for (let i = 0; i < 3; i++) {
+        const id = nextId++;
+        mints.push({ tokenId: id, chain: "abstract" as const, blockNumber: 1200 + i, mintedAt: "2026-06-12T10:00:00.000Z", minter: w1, txHash: "0x" + String(i + 1).padStart(64, "f") });
+        metas.push({ tokenId: id, slug: "triples-cream02-sullin-201z", collectionId: "Cream02 Sullin 201Z", artistId: "triples", rawArtist: "tripleS", rawMember: "Sullin", season: "Cream02", objektClass: "Special", collectionNo: "201Z", onOffline: "online" as const, imageUrl: "", backgroundColor: "#000" });
+      }
+      // w2: 5 FCO + 1 SCO
+      for (let i = 0; i < 5; i++) {
+        const id = nextId++;
+        mints.push({ tokenId: id, chain: "abstract" as const, blockNumber: 1300, mintedAt: "2026-06-15T10:00:00.000Z", minter: w2, txHash: "0x" + "9".repeat(64) });
+        metas.push({ tokenId: id, slug: "triples-cream02-sullin-101z", collectionId: "Cream02 Sullin 101Z", artistId: "triples", rawArtist: "tripleS", rawMember: "Sullin", season: "Cream02", objektClass: "First", collectionNo: "101Z", onOffline: "online" as const, imageUrl: "", backgroundColor: "#000" });
+      }
+      {
+        const id = nextId++;
+        mints.push({ tokenId: id, chain: "abstract" as const, blockNumber: 1301, mintedAt: "2026-06-15T10:05:00.000Z", minter: w2, txHash: "0x" + "8".repeat(64) });
+        metas.push({ tokenId: id, slug: "triples-cream02-sullin-201z", collectionId: "Cream02 Sullin 201Z", artistId: "triples", rawArtist: "tripleS", rawMember: "Sullin", season: "Cream02", objektClass: "Special", collectionNo: "201Z", onOffline: "online" as const, imageUrl: "", backgroundColor: "#000" });
+      }
+
+      store.insertMints(mints);
+      store.upsertMetadataBatch(metas);
+
+      const outFile = join(workDir, "sync-leaderboards.sql");
+      const res = aggregateLeaderboardCutoffsAndEmitSql(store.db, { dataRoot, outFile });
+
+      const sullin = res.rows.find((r) => r.memberId === "triples-sullin" && r.season === "Cream02")!;
+      const nien = res.rows.find((r) => r.memberId === "triples-nien" && r.season === "Cream02")!;
+      // w1 Sullin = 10 batch + 2 paired Unit + 1 legit single - 1 spin reward (excluded) = 13!
+      expect(sullin.objektTop1).toBe(13);
+      expect(sullin.objektTotalEligible).toBe(18); // 13 + 5
+      expect(sullin.objektUniqueCollectors).toBe(2);
+      expect(sullin.gridTop1).toBe(3);
+      expect(sullin.gridTotalCompleted).toBe(4); // 3 + 1
+      // Nien receives credit for the 2 paired "S13 X S22" Unit cards!
+      expect(nien.objektTop1).toBe(2);
+      expect(readFileSync(outFile, "utf8")).toContain("INSERT OR REPLACE INTO seasonal_leaderboard_cutoffs");
+    } finally {
+      store.close();
       rmSync(workDir, { recursive: true, force: true });
     }
   });

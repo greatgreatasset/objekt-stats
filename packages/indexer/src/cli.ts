@@ -28,6 +28,7 @@ import {
   fetchCosmoTokenMetadataFast,
   type NormalizedTokenMetadata,
 } from "./cosmo-metadata.js";
+import { aggregateLeaderboardCutoffsAndEmitSql } from "./leaderboard-cutoffs.js";
 import { IndexerStore } from "./store.js";
 import {
   aggregateTradesStreaming,
@@ -491,6 +492,30 @@ async function main() {
         },
       });
       console.log("✓ Streaming full-history trade aggregation complete:", summary);
+    } finally {
+      roDb.close();
+    }
+    return;
+  }
+
+  if (command === "aggregate-leaderboards") {
+    const roDb = new DatabaseSync(dbPath, { readOnly: true });
+    const tradesDbArg = args.get("trades-db") ?? "data/raw/trades-abstract.sqlite";
+    const apolloArg = args.get("apollo") ?? "data/raw/apollo-drop-metadata.json";
+    const outArg = args.get("out") ?? "packages/db/generated/sync-leaderboards.sql";
+    try {
+      const summary = aggregateLeaderboardCutoffsAndEmitSql(roDb, {
+        dataRoot: resolve(rootDir, "data"),
+        apolloMetadataPath: resolve(rootDir, apolloArg),
+        tradesDbPath: resolve(rootDir, tradesDbArg),
+        outFile: resolve(rootDir, outArg),
+        onProgress: (msg) => console.log(msg),
+      });
+      console.log("✓ Seasonal leaderboard cutoffs aggregation complete:", {
+        seasonsCount: summary.seasonsCount,
+        rowsCount: summary.rowsCount,
+        outFile: summary.outFile,
+      });
     } finally {
       roDb.close();
     }

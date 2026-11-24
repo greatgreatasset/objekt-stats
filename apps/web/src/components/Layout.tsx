@@ -78,6 +78,13 @@ export function Layout({ children }: { children: ReactNode }) {
               label="Rounds"
             />
             <NavLink
+              to="/leaderboards"
+              search={artistQuery}
+              active={location.pathname === "/leaderboards"}
+              accent={artistAccent}
+              label="Cutoffs"
+            />
+            <NavLink
               to="/trades"
               search={artistQuery}
               active={location.pathname === "/trades"}
