@@ -1,15 +1,4 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import {
-  ArrowLeftRight,
-  BarChart3,
-  Calendar,
-  CircleDollarSign,
-  Compass,
-  Layers,
-  Receipt,
-  RefreshCw,
-  Users,
-} from "lucide-react";
 import type { ReactNode } from "react";
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -24,136 +13,129 @@ export function Layout({ children }: { children: ReactNode }) {
   const artistQuery: Record<string, string> | undefined = isArtms
     ? { artist: "artms" }
     : undefined;
+  const artistAccent = isArtms ? "#ED0090" : "#22AEFF";
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col">
-      <header className="sticky top-0 z-40 border-b border-zinc-800/80 bg-[#09090b]/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-3.5 sm:px-6">
-          <div className="flex items-center gap-5">
+    <div className="min-h-screen bg-[#0c0c0e] text-zinc-200 flex flex-col">
+      <header className="sticky top-0 z-40 border-b border-zinc-800/90 bg-[#0c0c0e]/95 backdrop-blur-sm">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 sm:px-6">
+          <div className="flex items-center gap-4 py-3">
             <Link
               to={isArtms ? "/artms" : "/"}
               className="flex items-center gap-2.5 group"
             >
               <span
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700/80 bg-zinc-900 font-mono text-xs font-bold tracking-tight transition-colors"
-                style={{
-                  color: isArtms ? "#ED0090" : "#22AEFF",
-                  boxShadow: isArtms
-                    ? "0 0 18px rgba(237, 0, 144, 0.25)"
-                    : "0 0 18px rgba(34, 174, 255, 0.25)",
-                }}
-              >
-                OS
+                className="h-4 w-1 rounded-[1px] shrink-0"
+                style={{ backgroundColor: artistAccent }}
+              />
+              <span className="text-sm font-semibold tracking-tight text-white">
+                objektstats
               </span>
-              <div className="flex flex-col leading-none">
-                <span className="text-sm font-semibold tracking-tight text-white">
-                  Objekt Stats
-                </span>
-                <span className="text-[11px] font-mono text-zinc-500">
-                  objektstats.com
-                </span>
-              </div>
             </Link>
 
-            <div className="inline-flex items-center rounded-full border border-zinc-800 bg-zinc-900/90 p-0.5 text-xs">
+            <span className="h-3.5 w-px bg-zinc-800" aria-hidden="true" />
+
+            <div className="inline-flex items-center rounded-md border border-zinc-800 bg-[#131316] p-0.5 text-xs">
               <Link
                 to="/"
-                className={`rounded-full px-3 py-1 font-medium transition-colors ${
+                className={`inline-flex items-center gap-1.5 rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
                   !isArtms
-                    ? "bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40"
+                    ? "bg-zinc-800 text-white"
                     : "text-zinc-400 hover:text-zinc-200"
                 }`}
               >
+                <span className="h-1.5 w-1.5 rounded-full bg-[#22AEFF]" />
                 tripleS
               </Link>
               <Link
                 to="/artms"
-                className={`rounded-full px-3 py-1 font-medium transition-colors ${
+                className={`inline-flex items-center gap-1.5 rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
                   isArtms
-                    ? "bg-pink-500/20 text-pink-300 ring-1 ring-pink-500/40"
+                    ? "bg-zinc-800 text-white"
                     : "text-zinc-400 hover:text-zinc-200"
                 }`}
               >
+                <span className="h-1.5 w-1.5 rounded-full bg-[#ED0090]" />
                 ARTMS
               </Link>
             </div>
           </div>
 
-          <nav className="flex items-center gap-1 text-sm">
+          <nav className="flex items-center gap-0.5 overflow-x-auto text-xs sm:text-[13px]">
             <NavLink
               to={isArtms ? "/artms" : "/"}
               active={
                 location.pathname === "/" || location.pathname === "/artms"
               }
-              icon={<BarChart3 className="h-3.5 w-3.5" />}
+              accent={artistAccent}
               label="Overview"
             />
             <NavLink
               to="/rounds"
               search={artistQuery}
               active={location.pathname === "/rounds"}
-              icon={<Layers className="h-3.5 w-3.5" />}
-              label="Sale Rounds"
+              accent={artistAccent}
+              label="Rounds"
             />
             <NavLink
               to="/trades"
               search={artistQuery}
               active={location.pathname === "/trades"}
-              icon={<ArrowLeftRight className="h-3.5 w-3.5" />}
-              label="Most Traded"
+              accent={artistAccent}
+              label="Trades"
             />
             <NavLink
               to="/spins"
               search={artistQuery}
               active={location.pathname === "/spins"}
-              icon={<RefreshCw className="h-3.5 w-3.5" />}
+              accent={artistAccent}
               label="Spins"
             />
             <NavLink
               to="/wallet"
               active={location.pathname === "/wallet"}
-              icon={<Receipt className="h-3.5 w-3.5" />}
+              accent={artistAccent}
               label="User Cost"
             />
             <NavLink
               to="/earnings"
               search={artistQuery}
               active={location.pathname === "/earnings"}
-              icon={<CircleDollarSign className="h-3.5 w-3.5" />}
+              accent={artistAccent}
               label="Earnings"
             />
             <NavLink
               to="/members"
               search={artistQuery}
               active={location.pathname === "/members"}
-              icon={<Users className="h-3.5 w-3.5" />}
+              accent={artistAccent}
               label="Members"
             />
             <NavLink
               to="/events"
               search={artistQuery}
               active={location.pathname === "/events"}
-              icon={<Calendar className="h-3.5 w-3.5" />}
+              accent={artistAccent}
               label="Events"
             />
             <NavLink
               to="/methodology"
               active={location.pathname === "/methodology"}
-              icon={<Compass className="h-3.5 w-3.5" />}
+              accent={artistAccent}
               label="Methodology"
             />
           </nav>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-7 sm:px-6">
         {children}
       </main>
 
-      <footer className="border-t border-zinc-900 bg-zinc-950/60">
-        <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-3 px-4 py-6 text-xs text-zinc-500 sm:flex-row sm:items-center sm:px-6">
+      <footer className="border-t border-zinc-800/80 bg-[#0a0a0c]">
+        <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-2 px-4 py-5 text-xs text-zinc-500 sm:flex-row sm:items-center sm:px-6">
           <p>
-            Independent COSMO Objekt analytics for tripleS &amp; ARTMS. Not
+            Independent COSMO Objekt data for tripleS &amp; ARTMS. Not
             affiliated with MODHAUS.
           </p>
           <div className="flex items-center gap-4 font-mono">
@@ -177,27 +159,30 @@ function NavLink({
   to,
   search,
   active,
-  icon,
+  accent,
   label,
 }: {
   to: string;
   search?: Record<string, string>;
   active: boolean;
-  icon: ReactNode;
+  accent: string;
   label: string;
 }) {
   return (
     <Link
       to={to}
       search={search}
-      className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors sm:px-3 sm:text-sm ${
-        active
-          ? "bg-zinc-800/90 text-white"
-          : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+      className={`relative whitespace-nowrap px-2.5 py-3.5 font-medium transition-colors sm:px-3 ${
+        active ? "text-white" : "text-zinc-400 hover:text-zinc-100"
       }`}
     >
-      {icon}
-      <span>{label}</span>
+      {label}
+      {active && (
+        <span
+          className="absolute inset-x-2.5 bottom-0 h-[2px]"
+          style={{ backgroundColor: accent }}
+        />
+      )}
     </Link>
   );
 }

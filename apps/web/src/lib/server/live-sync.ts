@@ -1,4 +1,5 @@
 import { eq, inArray, sql } from "drizzle-orm";
+import { refreshDropScheduleIfStale } from "./drop-schedule-service";
 import {
   apolloDropMetadata,
   collectionDailyMints,
@@ -1993,6 +1994,9 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     }).catch(() => ({ tradesDetected: 0 }));
     tradesDetected = settled.tradesDetected;
   }
+
+  // Keep cached COSMO drop schedule warm in D1 (refreshes at most once every 30 min)
+  await refreshDropScheduleIfStale(db, env.DB).catch(() => 0);
 
   void sql;
 

@@ -42,6 +42,7 @@ import {
   readCachedApolloCollections,
   type RoundApolloSupplySummary,
 } from "./apollo-service";
+import { getArtistDropSchedule } from "./drop-schedule-service";
 
 export type ArtistSlug = "triples" | "artms";
 
@@ -347,9 +348,17 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .select({
         collectionCount: sql<number>`count(*)`,
         totalMints: sql<number>`coalesce(sum(${collections.totalMints}), 0)`,
+        totalSpins: sql<number>`coalesce(sum(${collections.spunCount}), 0)`,
       })
       .from(collections)
       .where(eq(collections.artistId, artistId));
+
+    const dropScheduleData = await getArtistDropSchedule(
+      db,
+      env.DB,
+      artistId,
+      roundList,
+    );
 
     return {
       artist: artist ?? null,
@@ -370,6 +379,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         fallers: biggestFallers,
       },
       events: eventsWithMembers,
+      dropSchedule: dropScheduleData,
       syncState: syncRows,
       abstractLagMinutes,
       totals: {
@@ -377,6 +387,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         popularityRoundCount: Number(roundTotals?.popularityRoundCount ?? 0),
         collectionCount: Number(collectionTotals?.collectionCount ?? 0),
         totalMints: Number(collectionTotals?.totalMints ?? 0),
+        totalSpins: Number(collectionTotals?.totalSpins ?? 0),
         estGrossUsd: Number(roundTotals?.estGrossUsd ?? 0),
       },
     };

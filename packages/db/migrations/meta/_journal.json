@@ -78,6 +78,13 @@
       "when": 1795523407402,
       "tag": "0010_purple_callisto",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1795528300400,
+      "tag": "0011_right_dexter_bennett",
+      "breakpoints": true
     }
   ]
 }

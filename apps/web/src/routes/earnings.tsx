@@ -1,19 +1,11 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import {
-  AlertTriangle,
-  BarChart3,
   Check,
   ChevronDown,
   ChevronUp,
-  CircleDollarSign,
   Copy,
   Download,
-  Info,
   RotateCcw,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Trophy,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -80,7 +72,6 @@ function EarningsPage() {
   const artistSlug: ArtistSlug = artist === "artms" ? "artms" : "triples";
   const isArtms = artistSlug === "artms";
   const artistName = data.artist?.name ?? (isArtms ? "ARTMS" : "tripleS");
-  const accent = data.artist?.accentColor ?? (isArtms ? "#ED0090" : "#22AEFF");
 
   // Default to 100%-indexed seasons for this artist
   const fullCoverageSeasonNames = useMemo(
@@ -357,53 +348,43 @@ function EarningsPage() {
 
   return (
     <div className="space-y-8">
-      {/* Hero Header */}
-      <section className="relative overflow-hidden rounded-2xl border border-zinc-800/90 bg-gradient-to-br from-zinc-900/90 via-zinc-950 to-zinc-950 p-6 sm:p-8">
-        <div
-          className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full opacity-15 blur-3xl"
-          style={{ backgroundColor: accent }}
-        />
-        <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-3xl space-y-2.5">
-            <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/80 px-3 py-1 text-xs font-mono text-zinc-300">
-              <CircleDollarSign className="h-3.5 w-3.5 text-emerald-400" />
-              <span>{artistName} Revenue &amp; Settlement Model</span>
-              <span className="text-zinc-600">•</span>
-              <span className="text-emerald-400">
-                {selectedSeasons.join(" + ")}
-              </span>
+      {/* Compact Editorial Header + Inline Stats */}
+      <header className="border-b border-zinc-800/90 pb-6 space-y-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-3xl space-y-1">
+            <div className="flex flex-wrap items-center gap-x-2 font-mono text-xs text-zinc-500">
+              <span className="text-zinc-300">{selectedSeasons.join(" + ")}</span>
               {analysis.spanDays && (
                 <>
-                  <span className="text-zinc-600">•</span>
-                  <span className="text-zinc-400">
-                    {analysis.spanDays}d window
-                  </span>
+                  <span className="text-zinc-700">/</span>
+                  <span>{analysis.spanDays}d window</span>
                 </>
               )}
             </div>
 
             <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
-              {artistName} Member Objekt Earnings Estimator
+              {artistName}{" "}
+              <span className="font-normal text-zinc-400">
+                Earnings Estimator
+              </span>
             </h1>
 
-            <p className="text-sm leading-relaxed text-zinc-400">
+            <p className="text-sm text-zinc-400">
               Estimates individual member revenue and take-home payouts from
-              on-chain COSMO sales — automatically excluding free rewards
-              (Welcome, Grid SCO, Spin PCO, promotional gifts) and deducting
-              free <strong className="text-zinc-200">COSMO Spin</strong>{" "}
-              replacement FCOs.
+              on-chain COSMO sales — excluding free rewards and deducting free
+              COSMO Spin replacement FCOs.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5 text-xs">
+            <div className="inline-flex rounded-md border border-zinc-800 bg-[#121215] p-0.5 text-xs">
               <button
                 type="button"
                 onClick={() => setCurrency("usd")}
-                className={`rounded-md px-2.5 py-1.5 font-mono font-semibold transition ${
+                className={`rounded-[4px] px-2.5 py-1 font-mono font-medium transition-colors ${
                   currency === "usd"
-                    ? "bg-white text-zinc-950"
-                    : "text-zinc-400 hover:text-white"
+                    ? "bg-zinc-200 text-zinc-950"
+                    : "text-zinc-400 hover:text-zinc-100"
                 }`}
               >
                 USD ($)
@@ -411,10 +392,10 @@ function EarningsPage() {
               <button
                 type="button"
                 onClick={() => setCurrency("krw")}
-                className={`rounded-md px-2.5 py-1.5 font-mono font-semibold transition ${
+                className={`rounded-[4px] px-2.5 py-1 font-mono font-medium transition-colors ${
                   currency === "krw"
-                    ? "bg-white text-zinc-950"
-                    : "text-zinc-400 hover:text-white"
+                    ? "bg-zinc-200 text-zinc-950"
+                    : "text-zinc-400 hover:text-zinc-100"
                 }`}
               >
                 KRW (₩)
@@ -424,7 +405,7 @@ function EarningsPage() {
             <button
               type="button"
               onClick={copySummary}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:text-white"
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 bg-[#121215] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-white"
             >
               {copied ? (
                 <>
@@ -442,52 +423,110 @@ function EarningsPage() {
             <button
               type="button"
               onClick={exportCsv}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:text-white"
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 bg-[#121215] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:border-zinc-600 hover:text-white"
             >
               <Download className="h-3.5 w-3.5" />
               CSV
             </button>
           </div>
         </div>
-      </section>
 
-      {/* Transparent Disclosure Banner */}
-      <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3.5 text-xs leading-relaxed text-amber-200/90">
-        <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-        <div className="space-y-1">
-          <p className="font-semibold text-amber-200">
-            Contractual Modhaus vs. Member Split Is Not Publicly Disclosed
-          </p>
-          <p className="text-amber-200/80">
-            Modhaus has confirmed that Objekt revenue is settled directly to
-            members without waiting to clear traditional trainee/debut debt, but
-            has never published the exact percentage split. All numbers below
-            are <strong className="text-white">transparent estimates</strong> —
-            drag the Member Cut slider or enter a sourced rate to recalculate
-            every girl&apos;s payout instantly.
-          </p>
+        {/* Inline Metric Strip */}
+        <div className="flex flex-wrap items-baseline gap-x-8 gap-y-3 pt-1">
+          <div>
+            <div className="text-xs text-zinc-500">Est. Fan Gross Spend</div>
+            <div className="mt-0.5 flex items-baseline gap-2">
+              <span className="font-mono text-xl font-semibold text-white tabular-nums">
+                {fmt(analysis.totals.totalGrossUsd, true)}
+              </span>
+              <span className="font-mono text-xs text-zinc-500 tabular-nums">
+                {analysis.totals.totalPaidObjekts.toLocaleString()} paid mints
+              </span>
+            </div>
+          </div>
+
+          <div className="hidden sm:block h-7 w-px bg-zinc-800 self-center" />
+
+          <div>
+            <div className="text-xs text-zinc-500">Store &amp; PG Fees</div>
+            <div className="mt-0.5 flex items-baseline gap-2">
+              <span className="font-mono text-xl font-semibold text-rose-400 tabular-nums">
+                {fmt(analysis.totals.platformFeesUsd, true)}
+              </span>
+              <span className="font-mono text-xs text-zinc-500 tabular-nums">
+                {analysis.totals.effectiveFeePct.toFixed(1)}% cut
+              </span>
+            </div>
+          </div>
+
+          <div className="hidden sm:block h-7 w-px bg-zinc-800 self-center" />
+
+          <div>
+            <div className="text-xs text-zinc-500">
+              Modhaus ({100 - config.memberSplitPct}%)
+            </div>
+            <div className="mt-0.5 flex items-baseline gap-2">
+              <span className="font-mono text-xl font-semibold text-white tabular-nums">
+                {fmt(analysis.totals.totalModhausEarningsUsd, true)}
+              </span>
+              <span className="font-mono text-xs text-zinc-500 tabular-nums">
+                {modhausShareOfGrossPct.toFixed(1)}% of gross
+              </span>
+            </div>
+          </div>
+
+          <div className="hidden sm:block h-7 w-px bg-zinc-800 self-center" />
+
+          <div>
+            <div className="text-xs text-zinc-500">
+              Members ({config.memberSplitPct}%)
+            </div>
+            <div className="mt-0.5 flex items-baseline gap-2">
+              <span className="font-mono text-xl font-semibold text-emerald-400 tabular-nums">
+                {fmt(analysis.totals.totalMemberEarningsUsd, true)}
+              </span>
+              <span className="font-mono text-xs text-zinc-500 tabular-nums">
+                median {fmt(analysis.totals.medianMemberEarningsUsd)}
+                {topEarner ? ` · #1 ${topEarner.member.name}` : ""}
+              </span>
+            </div>
+          </div>
         </div>
+      </header>
+
+      {/* Transparent Disclosure Note */}
+      <div className="rounded-lg border-l-2 border-l-amber-500/80 border border-zinc-800/90 bg-[#121215] px-4 py-3 text-xs leading-relaxed text-zinc-400">
+        <span className="font-semibold text-zinc-200">
+          Split is not publicly disclosed.
+        </span>{" "}
+        Modhaus settles Objekt revenue directly to members without trainee-debt
+        recoupment, but has never published the percentage split. Drag the
+        slider below to test assumptions — band{" "}
+        <span className="font-mono text-zinc-300">
+          {fmt(analysis.totals.lowGrossUsd, true)}–
+          {fmt(analysis.totals.highGrossUsd, true)}
+        </span>{" "}
+        gross.
       </div>
 
       {/* Interactive Split, Channel Mix & Season Scope Panel */}
-      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 sm:p-6 space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <section className="rounded-lg border border-zinc-800/90 bg-[#121215]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/90 px-4 py-3.5 sm:px-5">
           <div>
             <h2 className="text-base font-semibold text-white">
               Settlement Split &amp; Revenue Assumptions
             </h2>
             <p className="text-xs text-zinc-400">
-              Platform fees are deducted from gross fan spend first; remaining
-              net revenue is split between Modhaus and the pictured member.
+              Platform fees are deducted first; remaining net revenue is split
+              between Modhaus and the pictured member.
             </p>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setShowAdvanced((v) => !v)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:text-white"
+              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-800 bg-[#0c0c0e] px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white"
             >
-              <Settings2 className="h-3.5 w-3.5" />
               Unit Prices &amp; Fees
               {showAdvanced ? (
                 <ChevronUp className="h-3.5 w-3.5" />
@@ -498,7 +537,7 @@ function EarningsPage() {
             <button
               type="button"
               onClick={resetDefaults}
-              className="inline-flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-400 transition hover:border-zinc-600 hover:text-white"
+              className="inline-flex items-center gap-1 rounded-md border border-zinc-800 bg-[#0c0c0e] px-2.5 py-1.5 text-xs text-zinc-400 transition-colors hover:border-zinc-600 hover:text-white"
               title="Reset assumptions to defaults"
             >
               <RotateCcw className="h-3.5 w-3.5" />
@@ -508,9 +547,9 @@ function EarningsPage() {
         </div>
 
         {/* Sliders Row */}
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid border-b border-zinc-800/80 lg:grid-cols-2 lg:divide-x divide-zinc-800/80">
           {/* Member Split Control */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 space-y-3">
+          <div className="p-4 sm:p-5 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <label
                 htmlFor="member-split-slider"
@@ -518,7 +557,7 @@ function EarningsPage() {
               >
                 Member Cut of Net Revenue
               </label>
-              <span className="font-mono text-sm font-bold text-emerald-300 tabular-nums">
+              <span className="font-mono text-sm font-semibold text-emerald-400 tabular-nums">
                 {config.memberSplitPct}% Member / {100 - config.memberSplitPct}%
                 Modhaus
               </span>
@@ -531,10 +570,10 @@ function EarningsPage() {
                   type="button"
                   onClick={() => applySplitPreset(p.id, p.memberSplitPct)}
                   title={p.description}
-                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                     config.memberSplitPct === p.memberSplitPct
-                      ? "bg-emerald-400 text-zinc-950 font-semibold"
-                      : "border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-100"
+                      ? "bg-zinc-200 text-zinc-950"
+                      : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
                   }`}
                 >
                   {p.shortLabel}
@@ -570,7 +609,7 @@ function EarningsPage() {
           </div>
 
           {/* Web Shop vs App Store Mix Control */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 space-y-3">
+          <div className="border-t border-zinc-800/80 lg:border-t-0 p-4 sm:p-5 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <label
                 htmlFor="web-shop-slider"
@@ -578,7 +617,7 @@ function EarningsPage() {
               >
                 Web Shop vs. Mobile App Store Mix
               </label>
-              <span className="font-mono text-sm font-bold text-sky-300 tabular-nums">
+              <span className="font-mono text-sm font-semibold text-zinc-100 tabular-nums">
                 {config.webShopSharePct}% Web / {100 - config.webShopSharePct}%
                 App
               </span>
@@ -617,317 +656,279 @@ function EarningsPage() {
           </div>
         </div>
 
-        {/* Live $1.00 Fan Spend Waterfall Bar */}
-        <div className="rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-4 space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <span className="font-semibold text-zinc-200">
-              Effective Revenue Waterfall per $1.00 of Fan Spend
-            </span>
-            <div className="flex flex-wrap items-center gap-4 font-mono text-[11px] tabular-nums">
-              <span className="inline-flex items-center gap-1.5 text-rose-300">
-                <span className="h-2 w-2 rounded-full bg-rose-400" />
-                Store/PG Fees: {feeShareOfGrossPct.toFixed(1)}%
+        {/* Live $1.00 Fan Spend Waterfall Bar + Season Scope */}
+        <div className="p-4 sm:p-5 space-y-5">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="font-medium text-zinc-300">
+                Per $1.00 of Fan Spend
               </span>
-              <span className="inline-flex items-center gap-1.5 text-zinc-300">
-                <span className="h-2 w-2 rounded-full bg-zinc-500" />
-                Modhaus: {modhausShareOfGrossPct.toFixed(1)}%
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-emerald-300">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                Member: {memberShareOfGrossPct.toFixed(1)}%
-              </span>
+              <div className="flex flex-wrap items-center gap-4 font-mono text-[11px] tabular-nums">
+                <span className="inline-flex items-center gap-1.5 text-rose-400">
+                  <span className="h-2 w-2 rounded-[1px] bg-rose-500" />
+                  Fees {feeShareOfGrossPct.toFixed(1)}%
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-zinc-400">
+                  <span className="h-2 w-2 rounded-[1px] bg-zinc-500" />
+                  Modhaus {modhausShareOfGrossPct.toFixed(1)}%
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-emerald-400">
+                  <span className="h-2 w-2 rounded-[1px] bg-emerald-400" />
+                  Member {memberShareOfGrossPct.toFixed(1)}%
+                </span>
+              </div>
             </div>
-          </div>
-          <div className="flex h-3 w-full overflow-hidden rounded-full bg-zinc-900">
-            <div
-              className="h-full bg-rose-500/80 transition-all"
-              style={{ width: `${Math.max(0, feeShareOfGrossPct)}%` }}
-              title={`Store & Payment Fees: ${feeShareOfGrossPct.toFixed(1)}% of gross`}
-            />
-            <div
-              className="h-full bg-zinc-600 transition-all"
-              style={{ width: `${Math.max(0, modhausShareOfGrossPct)}%` }}
-              title={`Modhaus Share: ${modhausShareOfGrossPct.toFixed(1)}% of gross`}
-            />
-            <div
-              className="h-full bg-emerald-400 transition-all"
-              style={{ width: `${Math.max(0, memberShareOfGrossPct)}%` }}
-              title={`Member Share: ${memberShareOfGrossPct.toFixed(1)}% of gross`}
-            />
-          </div>
-        </div>
-
-        {/* Season Scope & Inclusion Toggles */}
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-zinc-200">
-              Seasons Included ({selectedSeasons.length}/{data.seasons.length})
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {fullCoverageSeasonNames.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setSelectedSeasons(fullCoverageSeasonNames)}
-                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
-                    isFullCoveragePresetSelected
-                      ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/40"
-                      : "border border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  100% Indexed Seasons ({fullCoverageSeasonNames.join(" + ")})
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setSelectedSeasons(allSeasonNames)}
-                className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
-                  isAllSeasonsSelected
-                    ? "bg-white text-zinc-950 font-semibold"
-                    : "border border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200"
-                }`}
-              >
-                All Indexed Seasons
-              </button>
+            <div className="flex h-2 w-full overflow-hidden rounded-[2px] bg-zinc-800/90">
+              <div
+                className="h-full bg-rose-500/85 transition-all"
+                style={{ width: `${Math.max(0, feeShareOfGrossPct)}%` }}
+                title={`Store & Payment Fees: ${feeShareOfGrossPct.toFixed(1)}% of gross`}
+              />
+              <div
+                className="h-full bg-zinc-500 transition-all"
+                style={{ width: `${Math.max(0, modhausShareOfGrossPct)}%` }}
+                title={`Modhaus Share: ${modhausShareOfGrossPct.toFixed(1)}% of gross`}
+              />
+              <div
+                className="h-full bg-emerald-400 transition-all"
+                style={{ width: `${Math.max(0, memberShareOfGrossPct)}%` }}
+                title={`Member Share: ${memberShareOfGrossPct.toFixed(1)}% of gross`}
+              />
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            {analysis.seasons.map((s) => {
-              const active = selectedSeasons.includes(s.season);
-              const isFull = s.coverage === "full";
-              return (
-                <button
-                  key={s.season}
-                  type="button"
-                  onClick={() => toggleSeason(s.season)}
-                  title={`${s.season} (${s.dateLabel}) · ${s.coverageLabel} · Est. gross ${fmt(s.totalGrossUsd)}`}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-mono transition ${
-                    active
-                      ? isFull
-                        ? "border-emerald-500/50 bg-emerald-500/15 text-white"
-                        : "border-amber-500/50 bg-amber-500/15 text-amber-100"
-                      : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
-                  }`}
-                >
-                  <span className="font-semibold">{s.season}</span>
-                  <span
-                    className={`rounded px-1 py-0.2 text-[9px] uppercase ${
-                      isFull
-                        ? "bg-emerald-500/20 text-emerald-300"
-                        : "bg-amber-500/20 text-amber-300"
+          {/* Season Scope & Inclusion Toggles */}
+          <div className="space-y-3 border-t border-zinc-800/70 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-zinc-300">
+                Seasons Included ({selectedSeasons.length}/{data.seasons.length})
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {fullCoverageSeasonNames.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSeasons(fullCoverageSeasonNames)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      isFullCoveragePresetSelected
+                        ? "bg-zinc-200 text-zinc-950"
+                        : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
                     }`}
                   >
-                    {isFull ? "100%" : "Partial"}
-                  </span>
+                    100% Indexed ({fullCoverageSeasonNames.join(" + ")})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedSeasons(allSeasonNames)}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    isAllSeasonsSelected
+                      ? "bg-zinc-200 text-zinc-950"
+                      : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
+                  }`}
+                >
+                  All Indexed
                 </button>
-              );
-            })}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {analysis.seasons.map((s) => {
+                const active = selectedSeasons.includes(s.season);
+                const isFull = s.coverage === "full";
+                return (
+                  <button
+                    key={s.season}
+                    type="button"
+                    onClick={() => toggleSeason(s.season)}
+                    title={`${s.season} (${s.dateLabel}) · ${s.coverageLabel} · Est. gross ${fmt(s.totalGrossUsd)}`}
+                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-mono transition-colors ${
+                      active
+                        ? isFull
+                          ? "border-zinc-500 bg-zinc-800 text-white"
+                          : "border-amber-500/60 bg-zinc-800 text-amber-200"
+                        : "border-zinc-800 bg-[#0c0c0e] text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
+                    }`}
+                  >
+                    <span>{s.season}</span>
+                    <span
+                      className={`text-[10px] ${
+                        isFull ? "text-emerald-400" : "text-amber-400"
+                      }`}
+                    >
+                      {isFull ? "100%" : "partial"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {analysis.hasPartialCoverageSeason && (
+              <p className="text-[11px] text-amber-400/90">
+                Includes partial-coverage seasons. Switch to 100% Indexed for
+                complete trailing-year totals.
+              </p>
+            )}
+
+            {/* Feature Toggles */}
+            <div className="flex flex-wrap gap-2 pt-1">
+              <TogglePill
+                checked={config.deductSpinMints}
+                onChange={(v) =>
+                  setConfig((prev) => ({ ...prev, deductSpinMints: v }))
+                }
+                label="Deduct Spin FCOs"
+                sublabel={
+                  config.deductSpinMints
+                    ? `−${analysis.totals.estSpinFcoMints.toLocaleString()}`
+                    : "off"
+                }
+              />
+              <TogglePill
+                checked={config.includePassPlus}
+                onChange={(v) =>
+                  setConfig((prev) => ({ ...prev, includePassPlus: v }))
+                }
+                label="Include Talk Pass+"
+                sublabel={
+                  analysis.totals.passPlusMints > 0
+                    ? `${analysis.totals.passPlusMints.toLocaleString()} mo`
+                    : "none"
+                }
+              />
+              <TogglePill
+                checked={config.includePhysicalScans}
+                onChange={(v) =>
+                  setConfig((prev) => ({ ...prev, includePhysicalScans: v }))
+                }
+                label="Include Physical Scans (A)"
+                sublabel={
+                  analysis.totals.physicalMints > 0
+                    ? `${analysis.totals.physicalMints.toLocaleString()} @ $${config.rates.physicalNetUsd.toFixed(2)}`
+                    : "none"
+                }
+              />
+            </div>
           </div>
 
-          {analysis.hasPartialCoverageSeason && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/5 px-3.5 py-2.5 text-[11px] text-amber-200/85">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-              <span>
-                Your selection includes pre-Nov 2025 Polygon or partial-Abstract
-                seasons where our on-chain index holds only a partial subset of
-                mints. Use{" "}
-                <strong className="text-white">100% Indexed Seasons</strong> for
-                complete trailing-year revenue figures.
-              </span>
+          {/* Collapsible Advanced Unit Prices & Fees Editor */}
+          {showAdvanced && (
+            <div className="border-t border-zinc-800/70 pt-4 space-y-3">
+              <p className="text-xs font-medium text-zinc-300">
+                Custom Unit Pricing &amp; Processing Fees
+              </p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+                <NumberField
+                  label="Blended FCO ($)"
+                  value={config.rates.fcoUsd}
+                  step={0.05}
+                  onChange={(v) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      rates: { ...prev.rates, fcoUsd: v },
+                    }))
+                  }
+                />
+                <NumberField
+                  label="Paid DCO ($)"
+                  value={config.rates.dcoUsd}
+                  step={0.05}
+                  onChange={(v) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      rates: { ...prev.rates, dcoUsd: v },
+                    }))
+                  }
+                />
+                <NumberField
+                  label="Motion MCO ($)"
+                  value={config.rates.mcoUsd}
+                  step={0.05}
+                  onChange={(v) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      rates: { ...prev.rates, mcoUsd: v },
+                    }))
+                  }
+                />
+                <NumberField
+                  label="Pass+ / mo ($)"
+                  value={config.rates.passPlusUsd}
+                  step={0.05}
+                  onChange={(v) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      rates: { ...prev.rates, passPlusUsd: v },
+                    }))
+                  }
+                />
+                <NumberField
+                  label="Physical Net ($)"
+                  value={config.rates.physicalNetUsd}
+                  step={0.1}
+                  onChange={(v) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      rates: { ...prev.rates, physicalNetUsd: v },
+                    }))
+                  }
+                />
+                <NumberField
+                  label="App Store Fee (%)"
+                  value={config.appStoreFeePct}
+                  step={1}
+                  onChange={(v) =>
+                    setConfig((prev) => ({ ...prev, appStoreFeePct: v }))
+                  }
+                />
+                <NumberField
+                  label="Web PG Fee (%)"
+                  value={config.webPaymentFeePct}
+                  step={0.5}
+                  onChange={(v) =>
+                    setConfig((prev) => ({ ...prev, webPaymentFeePct: v }))
+                  }
+                />
+                <NumberField
+                  label="KRW per $1 USD"
+                  value={config.krwPerUsd}
+                  step={10}
+                  onChange={(v) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      krwPerUsd: Math.max(100, v),
+                    }))
+                  }
+                />
+              </div>
             </div>
           )}
-
-          {/* Feature Toggles */}
-          <div className="flex flex-wrap gap-2 pt-1">
-            <TogglePill
-              checked={config.deductSpinMints}
-              onChange={(v) =>
-                setConfig((prev) => ({ ...prev, deductSpinMints: v }))
-              }
-              label="Deduct Free COSMO Spin FCOs"
-              sublabel={
-                config.deductSpinMints
-                  ? `−${analysis.totals.estSpinFcoMints.toLocaleString()} spin FCOs`
-                  : "Off (raw FCOs)"
-              }
-            />
-            <TogglePill
-              checked={config.includePassPlus}
-              onChange={(v) =>
-                setConfig((prev) => ({ ...prev, includePassPlus: v }))
-              }
-              label="Include COSMO Talk Pass+"
-              sublabel={
-                analysis.totals.passPlusMints > 0
-                  ? `${analysis.totals.passPlusMints.toLocaleString()} member-mo`
-                  : "None in scope"
-              }
-            />
-            <TogglePill
-              checked={config.includePhysicalScans}
-              onChange={(v) =>
-                setConfig((prev) => ({ ...prev, includePhysicalScans: v }))
-              }
-              label="Include Physical QR Scans (A)"
-              sublabel={
-                analysis.totals.physicalMints > 0
-                  ? `${analysis.totals.physicalMints.toLocaleString()} scans @ $${config.rates.physicalNetUsd.toFixed(2)}`
-                  : "None in scope"
-              }
-            />
-          </div>
         </div>
-
-        {/* Collapsible Advanced Unit Prices & Fees Editor */}
-        {showAdvanced && (
-          <div className="rounded-xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
-            <p className="text-xs font-semibold text-zinc-200">
-              Custom Unit Pricing &amp; Processing Fees
-            </p>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
-              <NumberField
-                label="Blended FCO ($)"
-                value={config.rates.fcoUsd}
-                step={0.05}
-                onChange={(v) =>
-                  setConfig((prev) => ({
-                    ...prev,
-                    rates: { ...prev.rates, fcoUsd: v },
-                  }))
-                }
-              />
-              <NumberField
-                label="Paid DCO ($)"
-                value={config.rates.dcoUsd}
-                step={0.05}
-                onChange={(v) =>
-                  setConfig((prev) => ({
-                    ...prev,
-                    rates: { ...prev.rates, dcoUsd: v },
-                  }))
-                }
-              />
-              <NumberField
-                label="Motion MCO ($)"
-                value={config.rates.mcoUsd}
-                step={0.05}
-                onChange={(v) =>
-                  setConfig((prev) => ({
-                    ...prev,
-                    rates: { ...prev.rates, mcoUsd: v },
-                  }))
-                }
-              />
-              <NumberField
-                label="Pass+ / mo ($)"
-                value={config.rates.passPlusUsd}
-                step={0.05}
-                onChange={(v) =>
-                  setConfig((prev) => ({
-                    ...prev,
-                    rates: { ...prev.rates, passPlusUsd: v },
-                  }))
-                }
-              />
-              <NumberField
-                label="Physical Net ($)"
-                value={config.rates.physicalNetUsd}
-                step={0.1}
-                onChange={(v) =>
-                  setConfig((prev) => ({
-                    ...prev,
-                    rates: { ...prev.rates, physicalNetUsd: v },
-                  }))
-                }
-              />
-              <NumberField
-                label="App Store Fee (%)"
-                value={config.appStoreFeePct}
-                step={1}
-                onChange={(v) =>
-                  setConfig((prev) => ({ ...prev, appStoreFeePct: v }))
-                }
-              />
-              <NumberField
-                label="Web PG Fee (%)"
-                value={config.webPaymentFeePct}
-                step={0.5}
-                onChange={(v) =>
-                  setConfig((prev) => ({ ...prev, webPaymentFeePct: v }))
-                }
-              />
-              <NumberField
-                label="KRW per $1 USD"
-                value={config.krwPerUsd}
-                step={10}
-                onChange={(v) =>
-                  setConfig((prev) => ({ ...prev, krwPerUsd: Math.max(100, v) }))
-                }
-              />
-            </div>
-          </div>
-        )}
       </section>
 
-      {/* 4 KPI Summary Cards */}
-      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KpiCard
-          label="Est. Fan Gross Spend"
-          value={fmt(analysis.totals.totalGrossUsd, true)}
-          subtext={`Band: ${fmt(analysis.totals.lowGrossUsd, true)} – ${fmt(analysis.totals.highGrossUsd, true)}`}
-          detail={`${analysis.totals.totalPaidObjekts.toLocaleString()} est. paid mints`}
-        />
-        <KpiCard
-          label="Store & Payment Fees"
-          value={fmt(analysis.totals.platformFeesUsd, true)}
-          subtext={`${analysis.totals.effectiveFeePct.toFixed(1)}% effective cut of gross`}
-          detail={`Net pool: ${fmt(analysis.totals.netRevenueUsd, true)}`}
-          tone="rose"
-        />
-        <KpiCard
-          label={`Est. Modhaus Share (${100 - config.memberSplitPct}%)`}
-          value={fmt(analysis.totals.totalModhausEarningsUsd, true)}
-          subtext={`${modhausShareOfGrossPct.toFixed(1)}% of gross fan spend`}
-          detail="Funds ops, COSMO dev & comebacks"
-        />
-        <KpiCard
-          label={`Est. Paid to Members (${config.memberSplitPct}%)`}
-          value={fmt(analysis.totals.totalMemberEarningsUsd, true)}
-          subtext={`Median: ${fmt(analysis.totals.medianMemberEarningsUsd)} / girl`}
-          detail={
-            topEarner
-              ? `#1 ${topEarner.member.name}: ${fmt(topEarner.memberEarningsUsd)}`
-              : ""
-          }
-          tone="emerald"
-        />
-      </section>
-
-      {/* Visual Member Earnings Leaderboard Bar Chart */}
-      <section className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 sm:p-6 space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold text-white flex items-center gap-2">
-              <Trophy className="h-4 w-4 text-amber-400" />
-              {artistName} Member Earnings Leaderboard
+      {/* Member Earnings Leaderboard */}
+      <section className="rounded-lg border border-zinc-800/90 bg-[#121215]">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-zinc-800/90 px-4 py-4 sm:px-5">
+          <div className="space-y-0.5">
+            <h2 className="text-base font-semibold text-white">
+              {artistName} Member Earnings
             </h2>
             <p className="text-xs text-zinc-400">
               {effectiveChartMode === "member"
-                ? `Estimated individual payout at ${config.memberSplitPct}% of post-fee net revenue (${selectedSeasons.join(" + ")}).`
+                ? `Estimated payout at ${config.memberSplitPct}% of post-fee net (${selectedSeasons.join(" + ")}).`
                 : effectiveChartMode === "annualized"
-                  ? `12-month annualized member payout rate projected from the ${analysis.spanDays}-day 100%-indexed window.`
-                  : `Estimated gross primary fan spend per member before App Store/PG fees and Modhaus split.`}
+                  ? `12-month annualized payout rate projected from the ${analysis.spanDays}-day window.`
+                  : "Estimated gross primary fan spend per member before fees and split."}
             </p>
           </div>
 
-          <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5 text-xs">
+          <div className="inline-flex rounded-md border border-zinc-800 bg-[#0c0c0e] p-0.5 text-xs">
             <button
               type="button"
               onClick={() => setChartMode("member")}
-              className={`rounded-md px-2.5 py-1 font-medium transition ${
+              className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
                 effectiveChartMode === "member"
-                  ? "bg-white text-zinc-950"
-                  : "text-zinc-400 hover:text-white"
+                  ? "bg-zinc-200 text-zinc-950"
+                  : "text-zinc-400 hover:text-zinc-100"
               }`}
             >
               Member Payout
@@ -935,10 +936,10 @@ function EarningsPage() {
             <button
               type="button"
               onClick={() => setChartMode("gross")}
-              className={`rounded-md px-2.5 py-1 font-medium transition ${
+              className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
                 effectiveChartMode === "gross"
-                  ? "bg-white text-zinc-950"
-                  : "text-zinc-400 hover:text-white"
+                  ? "bg-zinc-200 text-zinc-950"
+                  : "text-zinc-400 hover:text-zinc-100"
               }`}
             >
               Gross Sales
@@ -947,19 +948,19 @@ function EarningsPage() {
               <button
                 type="button"
                 onClick={() => setChartMode("annualized")}
-                className={`rounded-md px-2.5 py-1 font-medium transition ${
+                className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
                   effectiveChartMode === "annualized"
-                    ? "bg-white text-zinc-950"
-                    : "text-zinc-400 hover:text-white"
+                    ? "bg-zinc-200 text-zinc-950"
+                    : "text-zinc-400 hover:text-zinc-100"
                 }`}
               >
-                Annualized / Yr
+                Annualized
               </button>
             )}
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="divide-y divide-zinc-800/60">
           {analysis.members.map((row) => {
             const activeUsd =
               effectiveChartMode === "gross"
@@ -986,18 +987,18 @@ function EarningsPage() {
                 key={row.member.id}
                 to="/members/$memberId"
                 params={{ memberId: row.member.id }}
-                className="group block rounded-xl border border-transparent p-2 transition hover:border-zinc-800 hover:bg-zinc-950/70"
+                className="group block px-4 py-3 transition-colors hover:bg-zinc-900/70 sm:px-5"
               >
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="w-6 font-mono font-bold text-zinc-400">
-                      #{row.rank}
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-6 font-mono text-zinc-500 tabular-nums">
+                      {row.rank}
                     </span>
                     <span
-                      className="h-3 w-3 rounded-full"
+                      className="h-2.5 w-2.5 rounded-[2px]"
                       style={{ backgroundColor: row.member.hexColor }}
                     />
-                    <span className="font-semibold text-white group-hover:text-sky-300">
+                    <span className="text-sm font-medium text-zinc-100 group-hover:text-white">
                       {row.member.name}
                     </span>
                     <span className="font-mono text-[11px] text-zinc-500">
@@ -1009,18 +1010,18 @@ function EarningsPage() {
                     <span className="hidden md:inline text-[11px] text-zinc-500">
                       {fmt(lowVal)} – {fmt(highVal)}
                     </span>
-                    <span className="font-bold text-emerald-300 text-sm">
+                    <span className="font-semibold text-emerald-400 text-sm">
                       {fmt(activeUsd)}
                     </span>
-                    <span className="w-11 text-right text-zinc-400">
+                    <span className="w-11 text-right text-zinc-500">
                       {row.shareOfGroupPct.toFixed(1)}%
                     </span>
                     <span
                       className={`w-11 text-right font-semibold ${
                         row.relativeToAvg >= 1.15
-                          ? "text-emerald-300"
+                          ? "text-emerald-400"
                           : row.relativeToAvg <= 0.85
-                            ? "text-rose-300"
+                            ? "text-rose-400"
                             : "text-zinc-300"
                       }`}
                     >
@@ -1028,9 +1029,9 @@ function EarningsPage() {
                     </span>
                   </div>
                 </div>
-                <div className="h-2.5 w-full overflow-hidden rounded-full bg-zinc-950">
+                <div className="mt-2 ml-8 h-1.5 overflow-hidden rounded-[2px] bg-zinc-800/90">
                   <div
-                    className="h-full rounded-full transition-all"
+                    className="h-full transition-all"
                     style={{
                       width: `${widthPct}%`,
                       backgroundColor: row.member.hexColor,
@@ -1047,40 +1048,38 @@ function EarningsPage() {
       <section className="space-y-3">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-sky-400" />
+            <h2 className="text-base font-semibold text-white">
               Per-Member Revenue Breakdown
             </h2>
             <p className="text-xs text-zinc-400">
-              Shows paid primary mints by class alongside estimated gross spend,
-              member take-home range, and revenue mix (
-              <span className="text-sky-300">FCO</span> /{" "}
-              <span className="text-violet-300">DCO</span> /{" "}
-              <span className="text-amber-300">MCO</span> /{" "}
-              <span className="text-emerald-300">Pass+</span>).
+              Paid primary mints by class and revenue mix (
+              <span className="text-sky-400">FCO</span> /{" "}
+              <span className="text-violet-400">DCO</span> /{" "}
+              <span className="text-amber-400">MCO</span> /{" "}
+              <span className="text-emerald-400">Pass+</span>).
             </p>
           </div>
 
           <div className="flex flex-wrap gap-1.5">
             {(
               [
-                ["earnings", "Sort: Earnings"],
-                ["gross", "Sort: Gross"],
-                ["fco", "Sort: Paid FCO"],
-                ["dco", "Sort: Paid DCO"],
-                ["mco", "Sort: Motion"],
-                ["pass", "Sort: Pass+"],
-                ["order", "Sort: Debut Order"],
+                ["earnings", "Earnings"],
+                ["gross", "Gross"],
+                ["fco", "Paid FCO"],
+                ["dco", "Paid DCO"],
+                ["mco", "Motion"],
+                ["pass", "Pass+"],
+                ["order", "Debut Order"],
               ] as const
             ).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
                 onClick={() => setSortBy(key)}
-                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                   sortBy === key
-                    ? "bg-white text-zinc-950"
-                    : "border border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-200"
+                    ? "bg-zinc-200 text-zinc-950"
+                    : "border border-zinc-800 bg-[#121215] text-zinc-400 hover:text-zinc-100"
                 }`}
               >
                 {label}
@@ -1089,27 +1088,27 @@ function EarningsPage() {
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/30">
+        <div className="overflow-x-auto rounded-lg border border-zinc-800/90 bg-[#121215]">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-800 text-xs uppercase text-zinc-400">
+            <thead className="border-b border-zinc-800/80 bg-[#0f0f12] font-mono text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
-                <th className="px-4 py-3">Rank</th>
-                <th className="px-4 py-3">Member</th>
-                <th className="px-4 py-3 text-right">Est. Member Payout</th>
-                <th className="px-4 py-3 text-right">Est. Gross</th>
-                <th className="px-4 py-3 text-right">
+                <th className="px-4 py-2.5">#</th>
+                <th className="px-4 py-2.5">Member</th>
+                <th className="px-4 py-2.5 text-right">Est. Payout</th>
+                <th className="px-4 py-2.5 text-right">Est. Gross</th>
+                <th className="px-4 py-2.5 text-right">
                   {config.deductSpinMints ? "Paid FCO" : "Raw FCO"}
                 </th>
-                <th className="px-4 py-3 text-right">Paid DCO</th>
-                <th className="px-4 py-3 text-right">MCO</th>
+                <th className="px-4 py-2.5 text-right">Paid DCO</th>
+                <th className="px-4 py-2.5 text-right">MCO</th>
                 {config.includePassPlus && (
-                  <th className="px-4 py-3 text-right">Pass+</th>
+                  <th className="px-4 py-2.5 text-right">Pass+</th>
                 )}
-                <th className="px-4 py-3">Revenue Mix</th>
-                <th className="px-4 py-3 text-right">Share</th>
+                <th className="px-4 py-2.5">Mix</th>
+                <th className="px-4 py-2.5 text-right">Share</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/70">
+            <tbody className="divide-y divide-zinc-800/60">
               {sortedMembers.map((m) => {
                 const denom = Math.max(1, m.totalGrossUsd);
                 const fcoPct = (m.fcoGrossUsd / denom) * 100;
@@ -1120,17 +1119,17 @@ function EarningsPage() {
 
                 return (
                   <tr key={m.member.id} className="hover:bg-zinc-900/60">
-                    <td className="px-4 py-3 font-mono text-xs font-semibold text-zinc-400">
-                      #{m.rank}
+                    <td className="px-4 py-2.5 font-mono text-xs text-zinc-500 tabular-nums">
+                      {m.rank}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-2.5">
                       <Link
                         to="/members/$memberId"
                         params={{ memberId: m.member.id }}
-                        className="flex items-center gap-2 font-semibold text-white hover:text-sky-300"
+                        className="flex items-center gap-2 font-medium text-zinc-100 hover:text-white"
                       >
                         <span
-                          className="h-2.5 w-2.5 rounded-full shrink-0"
+                          className="h-2 w-2 rounded-[2px] shrink-0"
                           style={{ backgroundColor: m.member.hexColor }}
                         />
                         <span>{m.member.name}</span>
@@ -1139,8 +1138,8 @@ function EarningsPage() {
                         </span>
                       </Link>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono tabular-nums">
-                      <div className="font-bold text-emerald-300">
+                    <td className="px-4 py-2.5 text-right font-mono tabular-nums">
+                      <div className="font-semibold text-emerald-400">
                         {fmt(m.memberEarningsUsd)}
                       </div>
                       <div className="text-[10px] text-zinc-500">
@@ -1148,11 +1147,11 @@ function EarningsPage() {
                         {fmt(m.memberEarningsHighUsd)}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-zinc-200 tabular-nums">
+                    <td className="px-4 py-2.5 text-right font-mono text-xs text-zinc-200 tabular-nums">
                       {fmt(m.totalGrossUsd)}
                     </td>
                     <td
-                      className="px-4 py-3 text-right font-mono text-xs text-zinc-200 tabular-nums"
+                      className="px-4 py-2.5 text-right font-mono text-xs text-zinc-200 tabular-nums"
                       title={
                         config.deductSpinMints
                           ? `${m.rawFcoMints.toLocaleString()} raw FCO − ${m.estSpinFcoMints.toLocaleString()} est. free spin FCOs`
@@ -1166,20 +1165,20 @@ function EarningsPage() {
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-zinc-300 tabular-nums">
+                    <td className="px-4 py-2.5 text-right font-mono text-xs text-zinc-300 tabular-nums">
                       {m.paidDcoMints.toLocaleString()}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs text-zinc-300 tabular-nums">
+                    <td className="px-4 py-2.5 text-right font-mono text-xs text-zinc-300 tabular-nums">
                       {m.paidMcoMints.toLocaleString()}
                     </td>
                     {config.includePassPlus && (
-                      <td className="px-4 py-3 text-right font-mono text-xs text-zinc-300 tabular-nums">
+                      <td className="px-4 py-2.5 text-right font-mono text-xs text-zinc-300 tabular-nums">
                         {m.passPlusMints.toLocaleString()}
                       </td>
                     )}
-                    <td className="px-4 py-3 min-w-[110px]">
+                    <td className="px-4 py-2.5 min-w-[110px]">
                       <div
-                        className="flex h-2 w-full overflow-hidden rounded-full bg-zinc-950"
+                        className="flex h-1.5 w-full overflow-hidden rounded-[2px] bg-zinc-800/90"
                         title={`FCO ${fcoPct.toFixed(0)}% · DCO ${dcoPct.toFixed(0)}% · MCO ${mcoPct.toFixed(0)}%${passPct > 0 ? ` · Pass+ ${passPct.toFixed(0)}%` : ""}${physPct > 0 ? ` · Physical ${physPct.toFixed(0)}%` : ""}`}
                       >
                         <div
@@ -1204,7 +1203,7 @@ function EarningsPage() {
                         />
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-xs tabular-nums">
+                    <td className="px-4 py-2.5 text-right font-mono text-xs tabular-nums">
                       <span className="text-zinc-200">
                         {m.shareOfGroupPct.toFixed(1)}%
                       </span>
@@ -1220,17 +1219,18 @@ function EarningsPage() {
         </div>
       </section>
 
-      {/* Public Benchmarks & Forensic Exclusions Context */}
-      <section className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-3.5">
-          <h2 className="text-base font-semibold text-white flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-sky-400" />
-            Publicly Sourced Financial Context
-          </h2>
-          <div className="space-y-3 text-xs leading-relaxed text-zinc-400">
-            <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3.5 space-y-1">
-              <p className="font-semibold text-zinc-200">
-                Kim YooYeon&apos;s Early Settlement Benchmark (
+      {/* Public Benchmarks & Exclusions */}
+      <section className="grid gap-6 lg:grid-cols-2 items-start">
+        <div className="rounded-lg border border-zinc-800/90 bg-[#121215]">
+          <div className="border-b border-zinc-800/90 px-4 py-3.5 sm:px-5">
+            <h2 className="text-sm font-semibold text-white">
+              Public Financial Benchmarks
+            </h2>
+          </div>
+          <div className="divide-y divide-zinc-800/60 text-xs leading-relaxed text-zinc-400">
+            <div className="p-4 sm:p-5 space-y-1">
+              <p className="font-medium text-zinc-200">
+                Kim YooYeon Early Settlement (
                 {MODHAUS_PUBLIC_BENCHMARKS.yooyeonDisclosure.date})
               </p>
               <p>{MODHAUS_PUBLIC_BENCHMARKS.yooyeonDisclosure.summary}</p>
@@ -1239,133 +1239,89 @@ function EarningsPage() {
               </p>
             </div>
 
-            <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3.5 space-y-2">
-              <p className="font-semibold text-zinc-200">
-                Modhaus Audited Total Company Revenue (DART Filings)
+            <div className="p-4 sm:p-5 space-y-2.5">
+              <p className="font-medium text-zinc-200">
+                Modhaus Audited Total Revenue (DART Filings)
               </p>
-              <div className="grid grid-cols-4 gap-2 font-mono text-[11px]">
+              <div className="grid grid-cols-4 gap-px overflow-hidden rounded-md border border-zinc-800/80 bg-zinc-800/70 font-mono text-[11px]">
                 {MODHAUS_PUBLIC_BENCHMARKS.auditedRevenueKrw.map((yr) => (
                   <div
                     key={yr.year}
-                    className="rounded-lg border border-zinc-800/80 bg-zinc-900/60 p-2 text-center"
+                    className="bg-[#0f0f12] p-2.5 text-center tabular-nums"
                   >
                     <div className="text-zinc-500">{yr.year}</div>
-                    <div className="font-bold text-white">
+                    <div className="font-semibold text-white">
                       ₩{yr.krwBillions}B
                     </div>
-                    <div className="text-[10px] text-zinc-400">
+                    <div className="text-[10px] text-zinc-500">
                       ~${yr.approxUsdMillions}M
                     </div>
                   </div>
                 ))}
               </div>
               <p className="text-[11px] text-zinc-500">
-                Covers all Modhaus operations (tripleS, ARTMS, idntt — digital
-                Objekts, physical albums, world tours, merch, and brand deals).
+                Covers all Modhaus operations (tripleS, ARTMS, idntt — Objekts,
+                albums, tours, merch, and brand deals).
               </p>
             </div>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-3.5">
-          <h2 className="text-base font-semibold text-white flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-emerald-400" />
-            Why Raw Mints Overstate Revenue (Exclusions Applied)
-          </h2>
-          <ul className="space-y-2.5 text-xs leading-relaxed text-zinc-400">
-            <li className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-              <div className="flex items-center justify-between font-mono text-zinc-200 mb-0.5">
-                <span className="font-sans font-semibold">
+        <div className="rounded-lg border border-zinc-800/90 bg-[#121215]">
+          <div className="border-b border-zinc-800/90 px-4 py-3.5 sm:px-5">
+            <h2 className="text-sm font-semibold text-white">
+              Exclusions Applied to Raw Mints
+            </h2>
+          </div>
+          <div className="divide-y divide-zinc-800/60 text-xs leading-relaxed text-zinc-400">
+            <div className="p-4 sm:p-5 space-y-1">
+              <div className="flex items-center justify-between font-mono text-zinc-200">
+                <span className="font-sans font-medium">
                   COSMO Spin Replacement FCOs
                 </span>
-                <span className="text-amber-300">
-                  −{analysis.totals.estSpinFcoMints.toLocaleString()} cards
+                <span className="text-amber-300 tabular-nums">
+                  −{analysis.totals.estSpinFcoMints.toLocaleString()}
                 </span>
               </div>
-              Every Objekt sent to the COSMO Spin contract mints a free
-              same-season FCO replacement at published odds (90.63% in
-              Binary02+/Ever01+; 87.50% in earlier seasons). Subtracting these
-              uniform draws prevents ~45–55% double-counting.
-            </li>
-            <li className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-              <div className="flex items-center justify-between font-mono text-zinc-200 mb-0.5">
-                <span className="font-sans font-semibold">
+              <p>
+                Every Spin mints a free same-season FCO replacement at published
+                odds (90.63% Binary02+/Ever01+; 87.50% earlier). Subtracting
+                these prevents ~45–55% double-counting.
+              </p>
+            </div>
+            <div className="p-4 sm:p-5 space-y-1">
+              <div className="flex items-center justify-between font-mono text-zinc-200">
+                <span className="font-sans font-medium">
                   Free Native &amp; Promotional Rewards
                 </span>
-                <span className="text-sky-300">
-                  −{analysis.totals.freeExcludedMints.toLocaleString()} cards
+                <span className="text-zinc-300 tabular-nums">
+                  −{analysis.totals.freeExcludedMints.toLocaleString()}
                 </span>
               </div>
-              Excludes Welcome (<code className="text-zinc-300">100Z</code>),
-              online Grid SCOs (<code className="text-zinc-300">2xxZ</code>),
-              Spin-jackpot PCOs (<code className="text-zinc-300">4xxZ</code>),
-              Zero class, and Apollo-verified voting/event/completion bonus
-              drops at $0.00.
-            </li>
-            <li className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-              <div className="flex items-center justify-between font-mono text-zinc-200 mb-0.5">
-                <span className="font-sans font-semibold">
-                  What This Does Not Include
-                </span>
+              <p>
+                Excludes Welcome (100Z), Grid SCOs (2xxZ), Spin PCOs (4xxZ),
+                Zero class, and Apollo-verified event/bonus drops at $0.00.
+              </p>
+            </div>
+            <div className="p-4 sm:p-5 space-y-1">
+              <div className="flex items-center justify-between text-zinc-200">
+                <span className="font-medium">Not Included</span>
                 <Link
                   to="/methodology"
-                  className="text-sky-400 hover:underline font-sans"
+                  className="text-zinc-300 hover:text-white underline decoration-zinc-700 underline-offset-2"
                 >
-                  Full Methodology →
+                  Methodology →
                 </Link>
               </div>
-              Excludes physical album royalties (unless toggled), concerts/world
-              tours, streaming, brand deals/CFs, Fromm/chat-only Pass tiers, and
-              any internal random-pack pooling rules Modhaus uses privately.
-            </li>
-          </ul>
+              <p>
+                Physical album royalties (unless toggled), concerts/tours,
+                streaming, CFs/brand deals, chat-only Pass tiers, and private
+                random-pack pooling rules.
+              </p>
+            </div>
+          </div>
         </div>
       </section>
-    </div>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  subtext,
-  detail,
-  tone = "default",
-}: {
-  label: string;
-  value: string;
-  subtext: string;
-  detail: string;
-  tone?: "default" | "emerald" | "rose";
-}) {
-  const toneClass =
-    tone === "emerald"
-      ? "border-emerald-500/35 bg-emerald-500/10"
-      : tone === "rose"
-        ? "border-rose-500/25 bg-rose-500/5"
-        : "border-zinc-800/80 bg-zinc-900/40";
-  const valueClass =
-    tone === "emerald"
-      ? "text-emerald-300"
-      : tone === "rose"
-        ? "text-rose-300"
-        : "text-white";
-  return (
-    <div className={`rounded-xl border p-4 space-y-1.5 ${toneClass}`}>
-      <div className="text-xs font-medium text-zinc-400">{label}</div>
-      <div
-        className={`font-mono text-2xl font-bold tracking-tight tabular-nums ${valueClass}`}
-      >
-        {value}
-      </div>
-      <div className="font-mono text-[11px] text-zinc-300 tabular-nums">
-        {subtext}
-      </div>
-      {detail && (
-        <div className="font-mono text-[10px] text-zinc-500 truncate">
-          {detail}
-        </div>
-      )}
     </div>
   );
 }
@@ -1385,15 +1341,15 @@ function TogglePill({
     <button
       type="button"
       onClick={() => onChange(!checked)}
-      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition ${
+      className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
         checked
-          ? "border-sky-500/40 bg-sky-500/10 text-white"
-          : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+          ? "border-zinc-500 bg-zinc-800/80 text-white"
+          : "border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
       }`}
     >
       <span
-        className={`h-2 w-2 rounded-full ${
-          checked ? "bg-sky-400" : "bg-zinc-600"
+        className={`h-1.5 w-1.5 rounded-[1px] ${
+          checked ? "bg-emerald-400" : "bg-zinc-600"
         }`}
       />
       <span className="font-medium">{label}</span>
@@ -1425,7 +1381,7 @@ function NumberField({
           const parsed = Number(e.target.value);
           if (!Number.isNaN(parsed) && parsed >= 0) onChange(parsed);
         }}
-        className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-2.5 py-1.5 font-mono text-xs text-white focus:border-zinc-600 focus:outline-none"
+        className="w-full rounded-md border border-zinc-800 bg-[#0c0c0e] px-2.5 py-1.5 font-mono text-xs text-white focus:border-zinc-600 focus:outline-none"
       />
     </label>
   );

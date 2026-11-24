@@ -1,5 +1,5 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { Layers, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getArtistOverview, type ArtistSlug } from "../../lib/server/queries";
 
@@ -65,19 +65,18 @@ function RoundsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight text-white">
-          {artistName} Sale Rounds
+      <header className="border-b border-zinc-800/90 pb-5 space-y-1">
+        <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
+          {artistName} <span className="font-normal text-zinc-400">Sale Rounds</span>
         </h1>
         <p className="text-sm text-zinc-400">
-          Defaults to <strong className="text-zinc-200">Paid Public Sales</strong>{" "}
-          (member-selectable shop drops). Switch tabs to inspect SCO grid
-          rewards, Welcome drops, or Physical QR scans.
+          Defaults to Paid Public Sales (member-selectable shop drops). Switch
+          filters to inspect SCO grid rewards, Welcome drops, or Physical QR scans.
         </p>
-      </div>
+      </header>
 
       {/* Controls */}
-      <div className="flex flex-col gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-4">
+      <div className="flex flex-col gap-3 rounded-lg border border-zinc-800/90 bg-[#121215] p-3.5 sm:p-4">
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-zinc-500" />
@@ -86,7 +85,7 @@ function RoundsPage() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search season, class, or collection number..."
-              className="w-full rounded-lg border border-zinc-800 bg-zinc-950 py-1.5 pl-8 pr-3 text-xs text-white placeholder:text-zinc-500 focus:border-zinc-600 focus:outline-none"
+              className="w-full rounded-md border border-zinc-800 bg-[#0c0c0e] py-1.5 pl-8 pr-3 text-xs text-white placeholder:text-zinc-500 focus:border-zinc-600 focus:outline-none"
             />
           </div>
 
@@ -94,7 +93,7 @@ function RoundsPage() {
             value={seasonFilter}
             onChange={(e) => setSeasonFilter(e.target.value)}
             aria-label="Filter by season"
-            className="rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
+            className="rounded-md border border-zinc-800 bg-[#0c0c0e] px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
           >
             <option value="all">All Seasons ({seasons.length})</option>
             {seasons.map((s) => (
@@ -112,7 +111,7 @@ function RoundsPage() {
               )
             }
             aria-label="Sort sale rounds"
-            className="rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
+            className="rounded-md border border-zinc-800 bg-[#0c0c0e] px-2.5 py-1.5 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
           >
             <option value="buyers">Sort: Most Unique Buyers</option>
             <option value="mints">Sort: Highest Mint Volume</option>
@@ -140,10 +139,10 @@ function RoundsPage() {
               key={key}
               type="button"
               onClick={() => setFilter(key)}
-              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                 filter === key
-                  ? "bg-white text-zinc-950"
-                  : "border border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200"
+                  ? "bg-zinc-200 text-zinc-950"
+                  : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
               }`}
             >
               {label}
@@ -153,31 +152,30 @@ function RoundsPage() {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-10 text-center space-y-3">
-          <Layers className="mx-auto h-8 w-8 text-zinc-500" />
-          <h2 className="text-base font-semibold text-zinc-200">
+        <div className="rounded-lg border border-zinc-800/90 bg-[#121215] p-8 text-center space-y-1.5">
+          <h2 className="text-sm font-semibold text-zinc-200">
             No matching sale rounds
           </h2>
-          <p className="mx-auto max-w-md text-xs leading-relaxed text-zinc-400">
+          <p className="text-xs text-zinc-400">
             Try clearing your search or switching category filters.
           </p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/30">
+        <div className="overflow-x-auto rounded-lg border border-zinc-800/90 bg-[#121215]">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-zinc-800 text-xs uppercase text-zinc-400">
+            <thead className="border-b border-zinc-800/80 bg-[#0f0f12] font-mono text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
-                <th className="px-4 py-3">Round</th>
-                <th className="px-4 py-3">Class</th>
-                <th className="px-4 py-3">Mechanic</th>
-                <th className="px-4 py-3">#1 by Unique Buyers</th>
-                <th className="px-4 py-3">Window</th>
-                <th className="px-4 py-3 text-right">Members</th>
-                <th className="px-4 py-3 text-right">Unique Buyers</th>
-                <th className="px-4 py-3 text-right">Total Mints</th>
+                <th className="px-4 py-2.5">Round</th>
+                <th className="px-4 py-2.5">Class</th>
+                <th className="px-4 py-2.5">Mechanic</th>
+                <th className="px-4 py-2.5">#1 by Unique Buyers</th>
+                <th className="px-4 py-2.5">Start</th>
+                <th className="px-4 py-2.5 text-right">Members</th>
+                <th className="px-4 py-2.5 text-right">Unique Buyers</th>
+                <th className="px-4 py-2.5 text-right">Total Mints</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/70">
+            <tbody className="divide-y divide-zinc-800/60">
               {filtered.map((r) => {
                 const topBuyerMember = r.topSellerByBuyers
                   ? memberById.get(r.topSellerByBuyers.memberId)
@@ -192,40 +190,42 @@ function RoundsPage() {
                 return (
                   <tr
                     key={r.slug}
-                    className="transition hover:bg-zinc-900/70"
+                    className="transition-colors hover:bg-zinc-900/60"
                   >
                     <td className="px-4 py-3">
                       <Link
                         to="/rounds/$slug"
                         params={{ slug: r.slug }}
-                        className="font-semibold text-white hover:text-sky-300 transition-colors"
+                        className="font-medium text-zinc-100 hover:text-white hover:underline underline-offset-2"
                       >
                         {r.title}
                       </Link>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-zinc-500">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-zinc-500">
                         <span>{r.season}</span>
                         {r.apolloEraName && (
-                          <span className="rounded bg-zinc-900 px-1.5 py-0.2 text-[10px] text-zinc-400">
-                            {r.apolloEraName}
-                          </span>
+                          <>
+                            <span className="text-zinc-700">·</span>
+                            <span className="text-zinc-400">{r.apolloEraName}</span>
+                          </>
                         )}
                         {r.apolloEventType && (
-                          <span className="rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.2 text-[10px] uppercase text-zinc-500">
-                            {r.apolloEventType}
-                          </span>
+                          <>
+                            <span className="text-zinc-700">·</span>
+                            <span className="uppercase">{r.apolloEventType}</span>
+                          </>
                         )}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-xs text-zinc-300">
                       {r.objektClass}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 font-mono text-xs">
                       <span
-                        className={`inline-block rounded-md px-2 py-0.5 font-mono text-[11px] ${
+                        className={
                           r.includeInPopularity
-                            ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20"
-                            : "bg-zinc-800 text-zinc-400 border border-zinc-700"
-                        }`}
+                            ? "text-zinc-300"
+                            : "text-zinc-500"
+                        }
                       >
                         {r.saleMechanic}
                       </span>
@@ -235,7 +235,7 @@ function RoundsPage() {
                         <div className="space-y-0.5">
                           <div className="flex items-center gap-2">
                             <span
-                              className="h-2.5 w-2.5 rounded-full"
+                              className="h-2 w-2 rounded-[2px]"
                               style={{
                                 backgroundColor: topBuyerMember.hexColor,
                               }}
@@ -243,21 +243,21 @@ function RoundsPage() {
                             <span className="font-medium text-zinc-100">
                               {topBuyerMember.name}
                             </span>
-                            <span className="font-mono text-zinc-500">
+                            <span className="font-mono text-zinc-500 tabular-nums">
                               {r.topSellerByBuyers.uniqueBuyers.toLocaleString()}
                             </span>
                           </div>
                           {leaderDiffers && topMintMember && (
-                            <div className="font-mono text-[10px] text-amber-300/90">
+                            <div className="font-mono text-[10px] text-zinc-500">
                               Mints #1: {topMintMember.name}
                             </div>
                           )}
                         </div>
                       ) : (
-                        <span className="text-zinc-500">—</span>
+                        <span className="text-zinc-600">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-zinc-400">
+                    <td className="px-4 py-3 font-mono text-xs text-zinc-400 tabular-nums">
                       {r.startAt.slice(0, 10)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-xs text-zinc-400 tabular-nums">

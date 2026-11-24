@@ -609,6 +609,33 @@ export const recentNotableSpins = sqliteTable(
   ],
 );
 
+/**
+ * Cached COSMO Objekt drop schedule (active, upcoming, and recent past drops)
+ * synced automatically from Apollo's live events feed and cross-linked to sale_rounds.
+ */
+export const dropSchedule = sqliteTable(
+  "drop_schedule",
+  {
+    slug: text("slug").primaryKey(),
+    artistId: text("artist_id")
+      .notNull()
+      .references(() => artists.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    eventType: text("event_type").notNull(), // "shop" | "seasonal" | "tour" | "merch" | "offline" | "promotional" | "album"
+    startAt: text("start_at"),
+    endAt: text("end_at"),
+    twitterUrl: text("twitter_url"),
+    imageUrl: text("image_url"),
+    source: text("source").notNull().default("apollo"), // "apollo" | "manual"
+    fetchedAt: text("fetched_at").notNull(),
+  },
+  (t) => [
+    index("idx_drop_schedule_artist_start").on(t.artistId, t.startAt),
+    index("idx_drop_schedule_artist_end").on(t.artistId, t.endAt),
+  ],
+);
+
 export type ArtistRow = typeof artists.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
@@ -626,3 +653,4 @@ export type ApolloCollectionCacheRow = typeof apolloCollectionCache.$inferSelect
 export type SpinOutcomeStatRow = typeof spinOutcomeStats.$inferSelect;
 export type SpinMemberOutcomeStatRow = typeof spinMemberOutcomeStats.$inferSelect;
 export type RecentNotableSpinRow = typeof recentNotableSpins.$inferSelect;
+export type DropScheduleRow = typeof dropSchedule.$inferSelect;
