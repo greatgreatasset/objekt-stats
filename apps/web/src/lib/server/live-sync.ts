@@ -1,6 +1,14 @@
 import { eq, inArray, sql } from "drizzle-orm";
 import { refreshDropScheduleIfStale } from "./drop-schedule-service";
 import {
+  COSMO_SPIN_ADDRESS,
+  enrichMissingApolloDropsLive,
+  processLiveSpinsAndPairMints,
+  updateLiveSeasonalLeaderboards,
+  type LiveResolvedMint,
+  type LiveSpinLog,
+} from "./live-leaderboards-spins";
+import {
   apolloDropMetadata,
   collectionDailyMints,
   collections,
@@ -687,6 +695,9 @@ export interface LiveSyncResult {
   roundsUpdated: number;
   p2pTransfersBuffered: number;
   tradesDetected: number;
+  spinsProcessed?: number;
+  spinsPaired?: number;
+  leaderboardSeasonsUpdated?: number;
   skippedReason?: string;
 }
 
@@ -1566,11 +1577,13 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
   }
 
   const parsedMintLogs: Array<{
+    txHash: string;
     blockNumber: number;
     tokenId: number;
     minter: string;
     timestampIso: string;
   }> = [];
+  const parsedSpinLogs: LiveSpinLog[] = [];
   const parsedP2PLogs: Array<{
     txHash: string;
     logIndex: number;
@@ -1588,6 +1601,8 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     if (l.topics.length < 4) continue;
     const fromTopic = l.topics[1]!.toLowerCase();
     const toTopic = l.topics[2]!.toLowerCase();
+    const txHash = l.transactionHash.toLowerCase();
+    const logIndex = Number(BigInt(l.logIndex));
     const blockNumber = Number(BigInt(l.blockNumber));
     const tokenId = Number(BigInt(l.topics[3]!));
     const timestampIso = l.blockTimestamp
@@ -1598,6 +1613,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     if (fromTopic === ZERO_TOPIC) {
       // Strictly newly minted primary sales ONLY
       parsedMintLogs.push({
+        txHash,
         blockNumber,
         tokenId,
         minter: topicToAddress(toTopic),
@@ -1606,11 +1622,20 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     } else if (toTopic !== ZERO_TOPIC) {
       const fromAddr = topicToAddress(fromTopic);
       const toAddr = topicToAddress(toTopic);
-      if (isEligibleP2PTransfer(fromAddr, toAddr)) {
+      if (toAddr === COSMO_SPIN_ADDRESS) {
+        parsedSpinLogs.push({
+          txHash,
+          logIndex,
+          blockNumber,
+          spunAt: timestampIso,
+          wallet: fromAddr,
+          tokenId,
+        });
+      } else if (isEligibleP2PTransfer(fromAddr, toAddr)) {
         const { pairKey } = makeWalletPairKey("abstract", fromAddr, toAddr);
         parsedP2PLogs.push({
-          txHash: l.transactionHash.toLowerCase(),
-          logIndex: Number(BigInt(l.logIndex)),
+          txHash,
+          logIndex,
           blockNumber,
           transferredAt: timestampIso,
           fromAddr,
@@ -1695,19 +1720,42 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     }
   };
 
-  // Load member lookup map once (shared by both mint sync and trade settling)
+  // Load member lookup maps once (shared by mint sync, trade settling, spins, and live leaderboards)
   const allMembers = await db.select().from(members);
   const memberLookup = new Map<string, string>();
+  const codeLookup = new Map<string, string>();
   const memberInfoById = new Map<string, { name: string; hexColor: string }>();
   for (const m of allMembers) {
     memberInfoById.set(m.id, { name: m.name, hexColor: m.hexColor });
     memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.name)}`, m.id);
     memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.cosmoName)}`, m.id);
     memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.fullName)}`, m.id);
+    codeLookup.set(`${m.artistId}:${m.code.toUpperCase()}`, m.id);
+  }
+
+  // Count mints per (txHash, minter) across the fetched logs to accurately spot 1-card Spin rewards
+  const txWalletMintCounts = new Map<string, number>();
+  for (const l of parsedMintLogs) {
+    const k = `${l.txHash}|${l.minter}`;
+    txWalletMintCounts.set(k, (txWalletMintCounts.get(k) ?? 0) + 1);
   }
 
   if (batch.length === 0) {
     await bufferP2PUpToBlock(toBlock);
+
+    const spinRes = await processLiveSpinsAndPairMints(db, env.DB, {
+      spinLogs: parsedSpinLogs.filter((s) => s.blockNumber <= toBlock),
+      resolvedMints: [],
+      txWalletMintCounts,
+      referenceIso: latestLogIso,
+      maxMetaBudget: Math.min(40, maxTokens),
+      memberLookup,
+      fetchMeta: fetchMetaV3,
+    }).catch(() => ({
+      spinsProcessed: 0,
+      spinsPaired: 0,
+      pairedSpinRewardTokenIds: new Set<number>(),
+    }));
 
     let tradesDetected = 0;
     if (tradesAvailable) {
@@ -1719,6 +1767,8 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
       }).catch(() => ({ tradesDetected: 0 }));
       tradesDetected = settled.tradesDetected;
     }
+
+    await refreshDropScheduleIfStale(db, env.DB).catch(() => 0);
 
     await db
       .insert(syncState)
@@ -1747,12 +1797,16 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
       roundsUpdated: 0,
       p2pTransfersBuffered,
       tradesDetected,
+      spinsProcessed: spinRes.spinsProcessed,
+      spinsPaired: spinRes.spinsPaired,
+      leaderboardSeasonsUpdated: 0,
       skippedReason: "no_new_mints",
     };
   }
 
   // Fetch metadata for newly minted tokens in waves of 25 (400 tokens ≈ 16 waves / ~3-5s on Paid Workers)
   const resolved: Array<{
+    txHash: string;
     tokenId: number;
     blockNumber: number;
     minter: string;
@@ -1956,7 +2010,47 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     await env.DB.batch(writeStmts.slice(i, i + 80));
   }
 
+  // Process live COSMO Spins up to newCursorBlock, pair 90s Spin rewards, and auto-enrich any brand-new drops via Apollo
+  const okResolvedMints: LiveResolvedMint[] = [];
+  for (const item of resolved) {
+    if (item.result.kind === "ok") {
+      okResolvedMints.push({
+        tokenId: item.tokenId,
+        txHash: item.txHash,
+        blockNumber: item.blockNumber,
+        minter: item.minter,
+        timestampIso: item.timestampIso,
+        meta: item.result.meta,
+      });
+    }
+  }
+
+  const spinMetaBudget = allConsumed
+    ? Math.max(15, Math.min(40, maxTokens - resolved.length))
+    : 15;
+  const spinRes = await processLiveSpinsAndPairMints(db, env.DB, {
+    spinLogs: parsedSpinLogs.filter((s) => s.blockNumber <= newCursorBlock),
+    resolvedMints: okResolvedMints,
+    txWalletMintCounts,
+    referenceIso: latestLogIso,
+    maxMetaBudget: spinMetaBudget,
+    memberLookup,
+    fetchMeta: fetchMetaV3,
+  }).catch(() => ({
+    spinsProcessed: 0,
+    spinsPaired: 0,
+    pairedSpinRewardTokenIds: new Set<number>(),
+  }));
+
+  const apolloDropMap = await enrichMissingApolloDropsLive(
+    db,
+    env.DB,
+    colDeltas.values(),
+    allConsumed ? 5 : 2,
+  );
+
   let roundsUpdated = 0;
+  let leaderboardSeasonsUpdated = 0;
   if (trackedMintsAdded > 0) {
     const dirtyRoundSlugs = new Set<string>();
     const dirtySeasons = new Set<string>();
@@ -1978,6 +2072,16 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
       dirtySeasons,
     );
     roundsUpdated = rec.roundsUpdated;
+
+    const lbRes = await updateLiveSeasonalLeaderboards(db, env.DB, {
+      resolvedMints: okResolvedMints,
+      pairedSpinRewardTokenIds: spinRes.pairedSpinRewardTokenIds,
+      apolloDropMap,
+      allMembers,
+      memberLookup,
+      codeLookup,
+    });
+    leaderboardSeasonsUpdated = lbRes.leaderboardSeasonsUpdated;
   }
 
   // Only settle P2P trades when caught up on mints (dedicate 100% of subrequests to mints during drops!)
@@ -2009,5 +2113,8 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     roundsUpdated,
     p2pTransfersBuffered,
     tradesDetected,
+    spinsProcessed: spinRes.spinsProcessed,
+    spinsPaired: spinRes.spinsPaired,
+    leaderboardSeasonsUpdated,
   };
 }

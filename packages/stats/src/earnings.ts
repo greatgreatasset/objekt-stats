@@ -408,48 +408,48 @@ export function getSeasonCoverageInfo(
     if (snLower === "atom01" || snLower === "binary01" || snLower === "cream01") {
       return {
         season: sn,
-        coverage: "partial_polygon",
-        coverageLabel: "Polygon Era (Partial)",
+        coverage: "full",
+        coverageLabel: "100% On-Chain (Polygon)",
         webShopShareFactor: 0, // Entirely before Sep 2024 shop.cosmo.fans launch
-        spinFcoReturnRate: 0.875,
+        spinFcoReturnRate: 0, // Season ended before COSMO Spin launched (Feb 26, 2025)
         dateLabel,
       };
     }
     if (snLower === "divine01") {
       return {
         season: sn,
-        coverage: "partial_polygon",
-        coverageLabel: "Polygon Era (Partial)",
+        coverage: "full",
+        coverageLabel: "100% On-Chain (Polygon)",
         webShopShareFactor: 0.3, // May–Nov 2024 straddled Sep 2024 Web Shop launch
-        spinFcoReturnRate: 0.875,
+        spinFcoReturnRate: 0, // Season ended before COSMO Spin launched (Feb 26, 2025)
         dateLabel,
       };
     }
     if (snLower === "ever01") {
       return {
         season: sn,
-        coverage: "partial_polygon",
-        coverageLabel: "Polygon Era (Partial)",
+        coverage: "full",
+        coverageLabel: "100% On-Chain (Polygon)",
         webShopShareFactor: 1.0,
-        spinFcoReturnRate: 0.875,
+        spinFcoReturnRate: 0.875, // COSMO Spin launched mid-Ever01 (Feb 26, 2025)
         dateLabel,
       };
     }
     if (snLower === "atom02") {
       return {
         season: sn,
-        coverage: "partial_abstract",
-        coverageLabel: "Partial (~30–50%)",
+        coverage: "full",
+        coverageLabel: "100% On-Chain (Abstract)",
         webShopShareFactor: 1.0,
         spinFcoReturnRate: 0.875,
         dateLabel,
       };
     }
-    // Binary02, Cream02, and all future seasons (Nov 2025+)
+    // Binary02, Cream02, Divine02, and all future seasons (Nov 2025+)
     return {
       season: sn,
       coverage: "full",
-      coverageLabel: "100% On-Chain",
+      coverageLabel: "100% On-Chain (Abstract)",
       webShopShareFactor: 1.0,
       spinFcoReturnRate: 0.9063, // SCOs removed from spin pool in Binary02+
       dateLabel,
@@ -457,21 +457,31 @@ export function getSeasonCoverageInfo(
   }
 
   // ARTMS
-  if (snLower === "atom01" || snLower === "binary01") {
+  if (snLower === "atom01") {
     return {
       season: sn,
-      coverage: "partial_polygon",
-      coverageLabel: "Polygon Era (Partial)",
-      webShopShareFactor: snLower === "atom01" ? 0 : 0.4,
-      spinFcoReturnRate: 0.875,
+      coverage: "full",
+      coverageLabel: "100% On-Chain (Polygon)",
+      webShopShareFactor: 0,
+      spinFcoReturnRate: 0, // Ended before COSMO Spin launched
+      dateLabel,
+    };
+  }
+  if (snLower === "binary01") {
+    return {
+      season: sn,
+      coverage: "full",
+      coverageLabel: "100% On-Chain (Polygon)",
+      webShopShareFactor: 0.4,
+      spinFcoReturnRate: 0, // Ended before COSMO Spin launched
       dateLabel,
     };
   }
   if (snLower === "cream01") {
     return {
       season: sn,
-      coverage: "partial_polygon",
-      coverageLabel: "Polygon Era (Partial)",
+      coverage: "full",
+      coverageLabel: "100% On-Chain (Polygon)",
       webShopShareFactor: 1.0,
       spinFcoReturnRate: 0.875,
       dateLabel,
@@ -480,8 +490,8 @@ export function getSeasonCoverageInfo(
   if (snLower === "divine01") {
     return {
       season: sn,
-      coverage: "partial_abstract",
-      coverageLabel: "Partial (~55–90%)",
+      coverage: "full",
+      coverageLabel: "100% On-Chain (Abstract)",
       webShopShareFactor: 1.0,
       spinFcoReturnRate: 0.875,
       dateLabel,
@@ -491,7 +501,7 @@ export function getSeasonCoverageInfo(
   return {
     season: sn,
     coverage: "full",
-    coverageLabel: "100% On-Chain",
+    coverageLabel: "100% On-Chain (Abstract)",
     webShopShareFactor: 1.0,
     spinFcoReturnRate: 0.9063,
     dateLabel,

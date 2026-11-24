@@ -14,7 +14,6 @@ import {
   EARNINGS_SPLIT_PRESETS,
   MODHAUS_PUBLIC_BENCHMARKS,
   computeMemberEarnings,
-  getSeasonCoverageInfo,
   type EarningsModelConfig,
   type EarningsSplitPresetId,
 } from "@objekt-stats/stats";
@@ -73,42 +72,37 @@ function EarningsPage() {
   const isArtms = artistSlug === "artms";
   const artistName = data.artist?.name ?? (isArtms ? "ARTMS" : "tripleS");
 
-  // Default to 100%-indexed seasons for this artist
-  const fullCoverageSeasonNames = useMemo(
+  // Dynamically order all indexed seasons newest-first (automatically includes Divine02+ on arrival)
+  const orderedSeasonNames = useMemo(
     () =>
-      data.seasons
-        .filter(
-          (s) =>
-            getSeasonCoverageInfo(
-              artistSlug,
-              s.season,
-              s.firstMintAt,
-              s.lastMintAt,
-            ).coverage === "full",
+      [...data.seasons]
+        .sort(
+          (a, b) =>
+            (b.firstMintAt ?? "").localeCompare(a.firstMintAt ?? "") ||
+            b.season.localeCompare(a.season),
         )
         .map((s) => s.season),
-    [artistSlug, data.seasons],
-  );
-
-  const allSeasonNames = useMemo(
-    () => data.seasons.map((s) => s.season),
     [data.seasons],
   );
 
-  const [selectedSeasons, setSelectedSeasons] = useState<string[]>(() =>
-    fullCoverageSeasonNames.length > 0
-      ? fullCoverageSeasonNames
-      : allSeasonNames,
+  const recentTwoSeasonNames = useMemo(
+    () => orderedSeasonNames.slice(0, 2),
+    [orderedSeasonNames],
+  );
+
+  const latestSeasonOnly = useMemo(
+    () => orderedSeasonNames.slice(0, 1),
+    [orderedSeasonNames],
+  );
+
+  const [selectedSeasons, setSelectedSeasons] = useState<string[]>(
+    () => orderedSeasonNames,
   );
 
   // Reset season selection cleanly whenever switching tripleS <-> ARTMS
   useEffect(() => {
-    setSelectedSeasons(
-      fullCoverageSeasonNames.length > 0
-        ? fullCoverageSeasonNames
-        : allSeasonNames,
-    );
-  }, [artistSlug, fullCoverageSeasonNames, allSeasonNames]);
+    setSelectedSeasons(orderedSeasonNames);
+  }, [artistSlug, orderedSeasonNames]);
 
   const [config, setConfig] = useState<EarningsModelConfig>(() => ({
     ...DEFAULT_EARNINGS_CONFIG,
@@ -141,7 +135,7 @@ function EarningsPage() {
     (m) => m.annualizedMemberEarningsUsd !== null,
   );
 
-  // If user switches to a partial season where annualization is disabled, fall back to member mode
+  // Fall back to member mode only if selected span is too short (< 60d) to annualize
   const effectiveChartMode =
     chartMode === "annualized" && !canAnnualize ? "member" : chartMode;
 
@@ -210,14 +204,19 @@ function EarningsPage() {
   const modhausShareOfGrossPct =
     Math.round((netShareOfGrossPct - memberShareOfGrossPct) * 10) / 10;
 
-  const isFullCoveragePresetSelected =
-    fullCoverageSeasonNames.length > 0 &&
-    selectedSeasons.length === fullCoverageSeasonNames.length &&
-    fullCoverageSeasonNames.every((s) => selectedSeasons.includes(s));
-
   const isAllSeasonsSelected =
-    allSeasonNames.length > 0 &&
-    selectedSeasons.length === allSeasonNames.length;
+    orderedSeasonNames.length > 0 &&
+    selectedSeasons.length === orderedSeasonNames.length;
+
+  const isRecentTwoSelected =
+    recentTwoSeasonNames.length > 0 &&
+    selectedSeasons.length === recentTwoSeasonNames.length &&
+    recentTwoSeasonNames.every((s) => selectedSeasons.includes(s));
+
+  const isLatestOnlySelected =
+    latestSeasonOnly.length === 1 &&
+    selectedSeasons.length === 1 &&
+    selectedSeasons[0] === latestSeasonOnly[0];
 
   const toggleSeason = (season: string) => {
     setSelectedSeasons((prev) => {
@@ -245,11 +244,7 @@ function EarningsPage() {
       ...DEFAULT_EARNINGS_CONFIG,
       rates: { ...DEFAULT_EARNINGS_RATES },
     });
-    setSelectedSeasons(
-      fullCoverageSeasonNames.length > 0
-        ? fullCoverageSeasonNames
-        : allSeasonNames,
-    );
+    setSelectedSeasons(orderedSeasonNames);
   };
 
   const fmt = (usd: number, compact = false) =>
@@ -704,37 +699,50 @@ function EarningsPage() {
                 Seasons Included ({selectedSeasons.length}/{data.seasons.length})
               </span>
               <div className="flex flex-wrap gap-1.5">
-                {fullCoverageSeasonNames.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedSeasons(fullCoverageSeasonNames)}
-                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                      isFullCoveragePresetSelected
-                        ? "bg-zinc-200 text-zinc-950"
-                        : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
-                    }`}
-                  >
-                    100% Indexed ({fullCoverageSeasonNames.join(" + ")})
-                  </button>
-                )}
                 <button
                   type="button"
-                  onClick={() => setSelectedSeasons(allSeasonNames)}
+                  onClick={() => setSelectedSeasons(orderedSeasonNames)}
                   className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
                     isAllSeasonsSelected
                       ? "bg-zinc-200 text-zinc-950"
                       : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
                   }`}
                 >
-                  All Indexed
+                  All-Time ({orderedSeasonNames.length} Seasons)
                 </button>
+                {recentTwoSeasonNames.length >= 2 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSeasons(recentTwoSeasonNames)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      isRecentTwoSelected
+                        ? "bg-zinc-200 text-zinc-950"
+                        : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
+                    }`}
+                  >
+                    Last 2 Seasons ({recentTwoSeasonNames.join(" + ")})
+                  </button>
+                )}
+                {latestSeasonOnly.length === 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSeasons(latestSeasonOnly)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      isLatestOnlySelected
+                        ? "bg-zinc-200 text-zinc-950"
+                        : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
+                    }`}
+                  >
+                    Latest ({latestSeasonOnly[0]})
+                  </button>
+                )}
               </div>
             </div>
 
             <div className="flex flex-wrap gap-1.5">
               {analysis.seasons.map((s) => {
                 const active = selectedSeasons.includes(s.season);
-                const isFull = s.coverage === "full";
+                const isPolygon = s.coverageLabel.includes("Polygon");
                 return (
                   <button
                     key={s.season}
@@ -743,31 +751,22 @@ function EarningsPage() {
                     title={`${s.season} (${s.dateLabel}) · ${s.coverageLabel} · Est. gross ${fmt(s.totalGrossUsd)}`}
                     className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-mono transition-colors ${
                       active
-                        ? isFull
-                          ? "border-zinc-500 bg-zinc-800 text-white"
-                          : "border-amber-500/60 bg-zinc-800 text-amber-200"
+                        ? "border-zinc-500 bg-zinc-800 text-white"
                         : "border-zinc-800 bg-[#0c0c0e] text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
                     }`}
                   >
                     <span>{s.season}</span>
                     <span
                       className={`text-[10px] ${
-                        isFull ? "text-emerald-400" : "text-amber-400"
+                        isPolygon ? "text-violet-400/90" : "text-emerald-400"
                       }`}
                     >
-                      {isFull ? "100%" : "partial"}
+                      {isPolygon ? "Polygon" : "Abstract"}
                     </span>
                   </button>
                 );
               })}
             </div>
-
-            {analysis.hasPartialCoverageSeason && (
-              <p className="text-[11px] text-amber-400/90">
-                Includes partial-coverage seasons. Switch to 100% Indexed for
-                complete trailing-year totals.
-              </p>
-            )}
 
             {/* Feature Toggles */}
             <div className="flex flex-wrap gap-2 pt-1">
@@ -1285,8 +1284,9 @@ function EarningsPage() {
               </div>
               <p>
                 Every Spin mints a free same-season FCO replacement at published
-                odds (90.63% Binary02+/Ever01+; 87.50% earlier). Subtracting
-                these prevents ~45–55% double-counting.
+                odds (90.63% Binary02+/Ever01+; 87.50% legacy Spin era; 0% on
+                pre-Spin seasons before Feb 26, 2025). Subtracting these
+                prevents ~45–55% double-counting.
               </p>
             </div>
             <div className="p-4 sm:p-5 space-y-1">

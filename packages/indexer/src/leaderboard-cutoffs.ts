@@ -49,6 +49,8 @@ export interface AggregateLeaderboardsSummary {
   rowsCount: number;
   outFile: string;
   rows: ComputedLeaderboardCutoffRow[];
+  walletSeedFiles?: string[];
+  walletSeedRows?: number;
 }
 
 const COSMO_SPIN_LAUNCH_ISO = "2025-02-26T00:00:00.000Z";
@@ -183,6 +185,9 @@ export function aggregateLeaderboardCutoffsAndEmitSql(
     apolloMetadataPath?: string;
     tradesDbPath?: string;
     outFile?: string;
+    onlySeasons?: string[]; // e.g. ["triples:Cream02", "artms:Atom02"]
+    walletSeedDir?: string; // emits chunked seasonal_wallet_leaderboard SQL seed files
+    skipCutoffsSql?: boolean;
     now?: string;
     onProgress?: (msg: string) => void;
   } = {},
@@ -243,8 +248,23 @@ export function aggregateLeaderboardCutoffsAndEmitSql(
     isGridRewardSco: boolean;
   }
 
+  const onlySeasonFilter =
+    options.onlySeasons && options.onlySeasons.length > 0
+      ? new Set(
+          options.onlySeasons.map((s) =>
+            s.trim().toLowerCase().replace(":", "|"),
+          ),
+        )
+      : null;
+
   const colsByArtistSeason = new Map<string, MappedCol[]>();
   for (const c of allCatalog) {
+    if (
+      onlySeasonFilter &&
+      !onlySeasonFilter.has(`${c.artist_id.toLowerCase()}|${c.season.toLowerCase()}`)
+    ) {
+      continue;
+    }
     const memberIds = resolveCollectionMemberIds(
       c.artist_id,
       c.raw_member,
@@ -552,6 +572,31 @@ export function aggregateLeaderboardCutoffsAndEmitSql(
 
   const finalRows: ComputedLeaderboardCutoffRow[] = [];
   let seasonsCount = 0;
+  const walletSeedFiles: string[] = [];
+  let walletSeedRows = 0;
+  let walletSeedChunkIdx = 0;
+  let walletSeedStmts: string[] = [];
+
+  const flushWalletSeedChunk = (force = false) => {
+    if (!options.walletSeedDir) return;
+    if (!force && walletSeedStmts.length < 1_200) return;
+    if (walletSeedStmts.length === 0) return;
+    walletSeedChunkIdx++;
+    mkdirSync(options.walletSeedDir, { recursive: true });
+    const filePath = resolve(
+      options.walletSeedDir,
+      `wallet-seed-${String(walletSeedChunkIdx).padStart(3, "0")}.sql`,
+    );
+    writeFileSync(
+      filePath,
+      `-- Active seasonal wallet leaderboard seed part ${walletSeedChunkIdx} (${now})\n` +
+        walletSeedStmts.join("\n") +
+        "\n",
+      "utf8",
+    );
+    walletSeedFiles.push(filePath);
+    walletSeedStmts = [];
+  };
 
   for (const [artistId, artistDrafts] of draftsByArtist.entries()) {
     artistDrafts.sort((a, b) =>
@@ -566,6 +611,11 @@ export function aggregateLeaderboardCutoffsAndEmitSql(
       seasonsCount++;
 
       const seasonMemberRows: ComputedLeaderboardCutoffRow[] = [];
+      if (options.walletSeedDir) {
+        walletSeedStmts.push(
+          `DELETE FROM seasonal_wallet_leaderboard WHERE artist_id = ${sqlStr(artistId)} AND season = ${sqlStr(draft.season)};`,
+        );
+      }
 
       for (const memberId of orderedMemberIds) {
         const om = draft.memberObjekts.get(memberId);
@@ -588,6 +638,36 @@ export function aggregateLeaderboardCutoffsAndEmitSql(
               if (nextVal > 0) adjustedObjekts.set(w, nextVal);
               else adjustedObjekts.delete(w);
             }
+          }
+        }
+
+        if (options.walletSeedDir) {
+          const allWallets = new Set<string>(adjustedObjekts.keys());
+          if (gm) {
+            for (const w of gm.keys()) allWallets.add(w);
+          }
+          const batchTuples: string[] = [];
+          for (const w of allWallets) {
+            const oc = adjustedObjekts.get(w) ?? 0;
+            const gc = gm?.get(w) ?? 0;
+            if (oc <= 0 && gc <= 0) continue;
+            batchTuples.push(
+              `(${sqlStr(artistId)}, ${sqlStr(draft.season)}, ${sqlStr(memberId)}, ${sqlStr(w)}, ${oc}, ${gc}, ${sqlStr(now)})`,
+            );
+            walletSeedRows++;
+            if (batchTuples.length >= 60) {
+              walletSeedStmts.push(
+                `INSERT OR REPLACE INTO seasonal_wallet_leaderboard (artist_id, season, member_id, wallet, objekt_count, grid_count, updated_at) VALUES ${batchTuples.join(",")};`,
+              );
+              batchTuples.length = 0;
+              flushWalletSeedChunk(false);
+            }
+          }
+          if (batchTuples.length > 0) {
+            walletSeedStmts.push(
+              `INSERT OR REPLACE INTO seasonal_wallet_leaderboard (artist_id, season, member_id, wallet, objekt_count, grid_count, updated_at) VALUES ${batchTuples.join(",")};`,
+            );
+            flushWalletSeedChunk(false);
           }
         }
 
@@ -656,32 +736,38 @@ export function aggregateLeaderboardCutoffsAndEmitSql(
     });
   }
 
-  // Emit compact batched SQL
-  const lines: string[] = [
-    `-- Auto-generated verified seasonal COSMO leaderboard cutoffs (${now})`,
-    "",
-    "DELETE FROM seasonal_leaderboard_cutoffs;",
-    "",
-  ];
+  flushWalletSeedChunk(true);
 
-  const tuples = finalRows.map(
-    (r) =>
-      `(${sqlStr(r.artistId)}, ${sqlStr(r.season)}, ${r.seasonOrder}, ${sqlStr(r.memberId)}, ${sqlStr(r.seasonStartAt)}, ${sqlStr(r.seasonEndAt)}, ${r.objektTop1}, ${r.objektTop3}, ${r.objektTop10}, ${r.objektTop25}, ${r.objektTop50}, ${r.objektTop10Sum}, ${r.objektTotalEligible}, ${r.objektUniqueCollectors}, ${r.objektTop10SharePct}, ${r.objektTop10EstUsd}, ${r.objektCutoffRank}, ${r.objektBuyersRank}, ${r.gridTop1}, ${r.gridTop3}, ${r.gridTop10}, ${r.gridTop25}, ${r.gridTop50}, ${r.gridTotalCompleted}, ${r.gridUniqueGridders}, ${r.gridTop10SharePct}, ${r.gridCutoffRank}, ${sqlStr(now)})`,
-  );
+  if (!options.skipCutoffsSql) {
+    // Emit compact batched SQL
+    const lines: string[] = [
+      `-- Auto-generated verified seasonal COSMO leaderboard cutoffs (${now})`,
+      "",
+      "DELETE FROM seasonal_leaderboard_cutoffs;",
+      "",
+    ];
 
-  for (let i = 0; i < tuples.length; i += 25) {
-    lines.push(
-      `INSERT OR REPLACE INTO seasonal_leaderboard_cutoffs (artist_id, season, season_order, member_id, season_start_at, season_end_at, objekt_top1, objekt_top3, objekt_top10, objekt_top25, objekt_top50, objekt_top10_sum, objekt_total_eligible, objekt_unique_collectors, objekt_top10_share_pct, objekt_top10_est_usd, objekt_cutoff_rank, objekt_buyers_rank, grid_top1, grid_top3, grid_top10, grid_top25, grid_top50, grid_total_completed, grid_unique_gridders, grid_top10_share_pct, grid_cutoff_rank, updated_at) VALUES ${tuples.slice(i, i + 25).join(", ")};`,
+    const tuples = finalRows.map(
+      (r) =>
+        `(${sqlStr(r.artistId)}, ${sqlStr(r.season)}, ${r.seasonOrder}, ${sqlStr(r.memberId)}, ${sqlStr(r.seasonStartAt)}, ${sqlStr(r.seasonEndAt)}, ${r.objektTop1}, ${r.objektTop3}, ${r.objektTop10}, ${r.objektTop25}, ${r.objektTop50}, ${r.objektTop10Sum}, ${r.objektTotalEligible}, ${r.objektUniqueCollectors}, ${r.objektTop10SharePct}, ${r.objektTop10EstUsd}, ${r.objektCutoffRank}, ${r.objektBuyersRank}, ${r.gridTop1}, ${r.gridTop3}, ${r.gridTop10}, ${r.gridTop25}, ${r.gridTop50}, ${r.gridTotalCompleted}, ${r.gridUniqueGridders}, ${r.gridTop10SharePct}, ${r.gridCutoffRank}, ${sqlStr(now)})`,
     );
-  }
 
-  mkdirSync(resolve(outFile, ".."), { recursive: true });
-  writeFileSync(outFile, lines.join("\n") + "\n", "utf8");
+    for (let i = 0; i < tuples.length; i += 25) {
+      lines.push(
+        `INSERT OR REPLACE INTO seasonal_leaderboard_cutoffs (artist_id, season, season_order, member_id, season_start_at, season_end_at, objekt_top1, objekt_top3, objekt_top10, objekt_top25, objekt_top50, objekt_top10_sum, objekt_total_eligible, objekt_unique_collectors, objekt_top10_share_pct, objekt_top10_est_usd, objekt_cutoff_rank, objekt_buyers_rank, grid_top1, grid_top3, grid_top10, grid_top25, grid_top50, grid_total_completed, grid_unique_gridders, grid_top10_share_pct, grid_cutoff_rank, updated_at) VALUES ${tuples.slice(i, i + 25).join(", ")};`,
+      );
+    }
+
+    mkdirSync(resolve(outFile, ".."), { recursive: true });
+    writeFileSync(outFile, lines.join("\n") + "\n", "utf8");
+  }
 
   return {
     seasonsCount,
     rowsCount: finalRows.length,
     outFile,
     rows: finalRows,
+    walletSeedFiles: options.walletSeedDir ? walletSeedFiles : undefined,
+    walletSeedRows: options.walletSeedDir ? walletSeedRows : undefined,
   };
 }

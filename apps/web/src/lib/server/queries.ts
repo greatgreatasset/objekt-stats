@@ -917,6 +917,14 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       .orderBy(desc(collections.totalMints))
       .limit(24);
 
+    const [memberMintTotals] = await db
+      .select({
+        totalIndexedMints: sql<number>`COALESCE(SUM(${collections.totalMints}), 0)`,
+        totalCollectionCount: sql<number>`COUNT(*)`,
+      })
+      .from(collections)
+      .where(eq(collections.memberId, memberId));
+
     const memberApolloSlugs = memberCollectionsRaw.map((c) =>
       toApolloSlug(c.season, c.rawMemberName, c.collectionNo),
     );
@@ -1202,6 +1210,8 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       classBreakdown,
       anomalies,
       collections: memberCollections,
+      totalIndexedMints: Number(memberMintTotals?.totalIndexedMints ?? 0),
+      totalCollectionCount: Number(memberMintTotals?.totalCollectionCount ?? 0),
       events: relatedEvents,
       gridSummary,
       memberEarnings,

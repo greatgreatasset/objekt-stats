@@ -690,6 +690,61 @@ export const seasonalLeaderboardCutoffs = sqliteTable(
   ],
 );
 
+/**
+ * Live per-wallet seasonal Objekt & Grid counters for active and newly launching
+ * seasons, enabling Cloudflare Cron live-sync to recompute `seasonal_leaderboard_cutoffs`
+ * dynamically every minute without touching historical closed seasons.
+ */
+export const seasonalWalletLeaderboard = sqliteTable(
+  "seasonal_wallet_leaderboard",
+  {
+    artistId: text("artist_id").notNull(),
+    season: text("season").notNull(),
+    memberId: text("member_id").notNull(),
+    wallet: text("wallet").notNull(),
+    objektCount: integer("objekt_count").notNull().default(0),
+    gridCount: integer("grid_count").notNull().default(0),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.artistId, t.season, t.memberId, t.wallet] }),
+    index("idx_swl_obj").on(t.artistId, t.season, t.memberId, t.objektCount),
+    index("idx_swl_grd").on(t.artistId, t.season, t.memberId, t.gridCount),
+  ],
+);
+
+/**
+ * Live COSMO Spin deduplication & 90-second Spin -> Reward Mint pairing buffer
+ * used by the 1-minute edge cron worker to keep `collections.spun_count`,
+ * `spin_outcome_stats`, `recent_notable_spins`, and leaderboard Spin exclusions live.
+ */
+export const processedLiveSpins = sqliteTable(
+  "processed_live_spins",
+  {
+    txHash: text("tx_hash").notNull(),
+    logIndex: integer("log_index").notNull(),
+    wallet: text("wallet").notNull(),
+    tokenId: integer("token_id").notNull(),
+    spunAt: text("spun_at").notNull(),
+    inputArtistId: text("input_artist_id"),
+    inputMemberId: text("input_member_id"),
+    inputCollectionId: text("input_collection_id"),
+    inputMemberName: text("input_member_name"),
+    inputClass: text("input_class"),
+    inputSeason: text("input_season"),
+    inputCollectionNo: text("input_collection_no"),
+    inputImageUrl: text("input_image_url"),
+    inputSupply: integer("input_supply"),
+    status: text("status").notNull().default("open"), // "open" | "paired" | "blank"
+    syncedAt: text("synced_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.txHash, t.logIndex] }),
+    index("idx_pls_wallet_time").on(t.wallet, t.spunAt),
+    index("idx_pls_status_time").on(t.status, t.spunAt),
+  ],
+);
+
 export type ArtistRow = typeof artists.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
@@ -709,3 +764,5 @@ export type SpinMemberOutcomeStatRow = typeof spinMemberOutcomeStats.$inferSelec
 export type RecentNotableSpinRow = typeof recentNotableSpins.$inferSelect;
 export type DropScheduleRow = typeof dropSchedule.$inferSelect;
 export type SeasonalLeaderboardCutoffRow = typeof seasonalLeaderboardCutoffs.$inferSelect;
+export type SeasonalWalletLeaderboardRow = typeof seasonalWalletLeaderboard.$inferSelect;
+export type ProcessedLiveSpinRow = typeof processedLiveSpins.$inferSelect;

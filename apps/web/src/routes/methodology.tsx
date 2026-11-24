@@ -336,13 +336,15 @@ function MethodologyPage() {
           <li>
             <strong>COSMO Spin Replacement Deduction:</strong> Sending any
             Objekt (including physical or free promo cards) to the COSMO Spin
-            address mints a free same-season FCO replacement at published drop
-            rates (<span className="font-mono text-zinc-200">90.63%</span> in{" "}
-            <code className="text-zinc-200">Binary02+</code> /{" "}
+            address mints a free current-season FCO replacement at published
+            drop rates (<span className="font-mono text-zinc-200">90.63%</span>{" "}
+            in <code className="text-zinc-200">Binary02+</code> / ARTMS{" "}
             <code className="text-zinc-200">Ever01+</code>;{" "}
-            <span className="font-mono text-zinc-200">87.50%</span> in earlier
-            seasons). Because Spin draws uniformly across participating members
-            of a season, we deduct{" "}
+            <span className="font-mono text-zinc-200">87.50%</span> in legacy
+            Spin seasons; <span className="font-mono text-zinc-200">0%</span> on
+            pre-Spin seasons that ended before COSMO Spin launched on Feb 26,
+            2025). Because Spin draws uniformly across participating members of
+            a season, we deduct{" "}
             <code className="text-zinc-200">
               (season_total_spins × return_rate) / participating_members
             </code>{" "}
@@ -358,16 +360,13 @@ function MethodologyPage() {
             group rounds.
           </li>
           <li>
-            <strong>Channel-Aware Platform Fees &amp; Coverage Guard:</strong>{" "}
+            <strong>Channel-Aware Platform Fees &amp; Full History:</strong>{" "}
             Digital Objekt revenue deducts a configurable blend of{" "}
             <code className="text-zinc-200">shop.cosmo.fans</code> payment
             processing (~4%) and Apple/Google IAP fees (30%, automatically
-            enforced at 100% for pre-Sep 2024 seasons). The calculator defaults
-            to <strong>100%-indexed on-chain seasons</strong> (
-            <code className="text-zinc-200">Binary02 + Cream02</code> for
-            tripleS; <code className="text-zinc-200">Ever01 + Atom02</code> for
-            ARTMS) so partial Polygon-era seasons are never misrepresented as
-            complete career totals.
+            enforced at 100% for pre-Sep 2024 Polygon seasons). All Polygon and
+            Abstract seasons are 100% indexed on-chain and update automatically
+            every minute as new drops launch.
           </li>
         </ul>
       </section>
@@ -418,7 +417,10 @@ function MethodologyPage() {
             cutoff). Estimated minimum spend uses the standard{" "}
             <span className="font-mono text-zinc-200">$3.29</span> single-Objekt
             reference price; bulk Web Shop packs or physical album QR scans can
-            lower real-world cost per card.
+            lower real-world cost per card. Active and newly launching seasons
+            (such as <code className="text-zinc-200">Divine02</code>) update
+            automatically every minute on Cloudflare Cron alongside live mints,
+            trades, Spins, and Apollo drop provenance.
           </li>
         </ul>
       </section>

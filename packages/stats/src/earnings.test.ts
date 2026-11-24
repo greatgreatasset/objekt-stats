@@ -106,16 +106,20 @@ describe("classifyCollectionForEarnings", () => {
 });
 
 describe("getSeasonCoverageInfo", () => {
-  it("marks Binary02/Cream02 (tripleS) and Ever01/Atom02 (ARTMS) as full coverage with 90.63% spin FCO rate", () => {
+  it("marks all Polygon and Abstract seasons as 100% full coverage with era-accurate store fee and Spin rates", () => {
     const b2 = getSeasonCoverageInfo("triples", "Binary02");
     expect(b2.coverage).toBe("full");
     expect(b2.spinFcoReturnRate).toBe(0.9063);
     expect(b2.webShopShareFactor).toBe(1);
 
     const a1 = getSeasonCoverageInfo("triples", "Atom01");
-    expect(a1.coverage).toBe("partial_polygon");
+    expect(a1.coverage).toBe("full");
     expect(a1.webShopShareFactor).toBe(0);
-    expect(a1.spinFcoReturnRate).toBe(0.875);
+    expect(a1.spinFcoReturnRate).toBe(0); // Ended before COSMO Spin launched
+
+    const a2 = getSeasonCoverageInfo("triples", "Atom02");
+    expect(a2.coverage).toBe("full");
+    expect(a2.spinFcoReturnRate).toBe(0.875);
 
     const artmsEver = getSeasonCoverageInfo("artms", "Ever01");
     expect(artmsEver.coverage).toBe("full");
@@ -192,7 +196,7 @@ describe("computeMemberEarnings", () => {
     },
   ];
 
-  it("defaults to full-coverage seasons only and deducts uniform COSMO Spin FCO mints", () => {
+  it("includes all full-coverage seasons by default and deducts COSMO Spin FCO mints only on Spin-era seasons", () => {
     const res = computeMemberEarnings({
       artistId: "triples",
       members: MEMBERS,
@@ -200,13 +204,14 @@ describe("computeMemberEarnings", () => {
       rows,
     });
 
-    expect(res.selectedSeasons).toEqual(["Binary02"]);
+    expect(res.selectedSeasons).toEqual(["Binary02", "Atom01"]);
     expect(res.hasPartialCoverageSeason).toBe(false);
     expect(res.members[0]!.member.id).toBe("triples-seoyeon");
+    // Binary02 deducts 453 spin FCOs per member; pre-Spin Atom01 deducts 0
     expect(res.members[0]!.estSpinFcoMints).toBe(453);
-    expect(res.members[0]!.paidFcoMints).toBe(1047);
+    expect(res.members[0]!.paidFcoMints).toBe(1047 + 250);
     expect(res.members[1]!.estSpinFcoMints).toBe(453);
-    expect(res.members[1]!.paidFcoMints).toBe(547);
+    expect(res.members[1]!.paidFcoMints).toBe(547 + 150);
 
     // Verify waterfall conservation: gross = platformFees + modhaus + member
     const t = res.totals;
@@ -267,7 +272,7 @@ describe("computeMemberEarnings", () => {
       },
     });
 
-    expect(preWeb.hasPartialCoverageSeason).toBe(true);
+    expect(preWeb.hasPartialCoverageSeason).toBe(false);
     expect(preWeb.totals.effectiveFeePct).toBeCloseTo(30, 1);
   });
 

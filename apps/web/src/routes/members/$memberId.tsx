@@ -62,6 +62,7 @@ function MemberDetailPage() {
     classBreakdown,
     anomalies,
     collections,
+    totalIndexedMints,
     events,
     gridSummary,
     memberEarnings,
@@ -70,7 +71,10 @@ function MemberDetailPage() {
   const popHistory = [...roundHistory]
     .filter((r) => r.includeInPopularity && r.roundUniqueBuyers >= minBuyers)
     .reverse(); // chronological for trajectory chart
-  const totalMints = collections.reduce((s, c) => s + c.totalMints, 0);
+  const totalMints =
+    totalIndexedMints > 0
+      ? totalIndexedMints
+      : collections.reduce((s, c) => s + c.totalMints, 0);
   const popMintsSum = popHistory.reduce((s, r) => s + r.mintCount, 0);
   const popBuyersSum = popHistory.reduce((s, r) => s + r.uniqueBuyers, 0);
   const avgBuyersRank =
@@ -177,13 +181,13 @@ function MemberDetailPage() {
             <div className="space-y-1">
               <h2 className="text-base font-semibold text-white flex items-center gap-2">
                 <CircleDollarSign className="h-4 w-4 text-emerald-400" />
-                Estimated Digital Objekt Earnings (
-                {memberEarnings.selectedSeasons.join(" + ")})
+                Estimated Career Digital Objekt Earnings (
+                {memberEarnings.selectedSeasons.length} Seasons)
               </h2>
               <p className="text-xs text-zinc-400">
-                100%-indexed on-chain seasons
+                100% Polygon + Abstract on-chain history
                 {memberEarnings.spanDays
-                  ? ` (${memberEarnings.spanDays}d window)`
+                  ? ` (${memberEarnings.spanDays.toLocaleString()}d span)`
                   : ""}{" "}
                 · Ranked{" "}
                 <strong className="text-zinc-200">

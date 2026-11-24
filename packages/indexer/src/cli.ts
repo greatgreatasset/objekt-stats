@@ -503,18 +503,30 @@ async function main() {
     const tradesDbArg = args.get("trades-db") ?? "data/raw/trades-abstract.sqlite";
     const apolloArg = args.get("apollo") ?? "data/raw/apollo-drop-metadata.json";
     const outArg = args.get("out") ?? "packages/db/generated/sync-leaderboards.sql";
+    const onlySeasonsArg = args.get("only-seasons");
+    const walletSeedDirArg = args.get("wallet-seed-dir");
+    const skipCutoffsSql = args.get("skip-cutoffs-sql") === "true";
     try {
       const summary = aggregateLeaderboardCutoffsAndEmitSql(roDb, {
         dataRoot: resolve(rootDir, "data"),
         apolloMetadataPath: resolve(rootDir, apolloArg),
         tradesDbPath: resolve(rootDir, tradesDbArg),
         outFile: resolve(rootDir, outArg),
+        onlySeasons: onlySeasonsArg
+          ? onlySeasonsArg.split(",").map((s) => s.trim()).filter(Boolean)
+          : undefined,
+        walletSeedDir: walletSeedDirArg
+          ? resolve(rootDir, walletSeedDirArg)
+          : undefined,
+        skipCutoffsSql,
         onProgress: (msg) => console.log(msg),
       });
       console.log("✓ Seasonal leaderboard cutoffs aggregation complete:", {
         seasonsCount: summary.seasonsCount,
         rowsCount: summary.rowsCount,
         outFile: summary.outFile,
+        walletSeedRows: summary.walletSeedRows,
+        walletSeedFiles: summary.walletSeedFiles?.length,
       });
     } finally {
       roDb.close();
