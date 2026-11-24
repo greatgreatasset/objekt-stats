@@ -1,5 +1,6 @@
 import { eq, inArray, sql } from "drizzle-orm";
 import {
+  apolloDropMetadata,
   collectionDailyMints,
   collections,
   createDb,
@@ -14,6 +15,8 @@ import {
   type AppDatabase,
 } from "@objekt-stats/db";
 import {
+  applyApolloToRoundMeta,
+  buildEnrichedRoundTitle,
   classifyTradeSymmetry,
   computeArtistSeriesStats,
   computeMemberTradeRankings,
@@ -23,9 +26,12 @@ import {
   isRealisticAsymmetricSwap,
   isSameClassSwap,
   isSameEditionSoloSwap,
+  makeApolloDropKey,
   makeWalletPairKey,
   shortenAddress,
+  type ApolloDropProvenance,
   type P2PTransferEvent,
+  type ProvenanceClass,
   type SaleRoundInput,
 } from "@objekt-stats/stats";
 
@@ -191,55 +197,80 @@ async function rpc<T>(rpcUrl: string, method: string, params: unknown[]): Promis
   return json.result as T;
 }
 
-async function fetchMetaV3(tokenId: number): Promise<ParsedMeta | null> {
-  const res = await fetch(`${COSMO_API}/bff/v3/objekts/nft-metadata/${tokenId}`, {
-    headers: {
-      "user-agent": "objektstats.com (live-sync)",
-      accept: "application/json",
-    },
-  });
-  if (!res.ok) return null;
-  const raw = (await res.json()) as {
-    image?: string;
-    background_color?: string;
-    attributes?: Array<{ trait_type: string; value: string | number }>;
-  };
-  const attrs = new Map<string, string>();
-  for (const a of raw.attributes ?? []) {
-    attrs.set(a.trait_type.toLowerCase(), String(a.value).trim());
+type FetchMetaResult =
+  | { kind: "ok"; meta: ParsedMeta }
+  | { kind: "not_found" }
+  | { kind: "error" };
+
+async function fetchMetaV3Detailed(tokenId: number): Promise<FetchMetaResult> {
+  try {
+    const res = await fetch(
+      `${COSMO_API}/bff/v3/objekts/nft-metadata/${tokenId}`,
+      {
+        headers: {
+          "user-agent": "objektstats.com (live-sync)",
+          accept: "application/json",
+        },
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
+    if (res.status === 404) return { kind: "not_found" };
+    if (!res.ok) return { kind: "error" };
+    const raw = (await res.json()) as {
+      image?: string;
+      background_color?: string;
+      attributes?: Array<{ trait_type: string; value: string | number }>;
+    };
+    const attrs = new Map<string, string>();
+    for (const a of raw.attributes ?? []) {
+      attrs.set(a.trait_type.toLowerCase(), String(a.value).trim());
+    }
+    const rawArtist = attrs.get("artist") ?? "";
+    const rawMember = attrs.get("member") ?? "";
+    const season = attrs.get("season") ?? "";
+    const objektClass = attrs.get("class") ?? "";
+    const collectionNo = attrs.get("collection") ?? "";
+    if (!rawArtist || !season || !collectionNo) return { kind: "not_found" };
+
+    const lowerArtist = rawArtist.toLowerCase();
+    const artistId =
+      lowerArtist === "triples"
+        ? "triples"
+        : lowerArtist === "artms"
+          ? "artms"
+          : lowerArtist;
+    const collectionId =
+      `${season} ${rawMember || rawArtist} ${collectionNo}`.trim();
+    const slug = slugifyCollection(`${artistId}-${collectionId}`);
+    const onOffline: "online" | "offline" = collectionNo
+      .toUpperCase()
+      .includes("Z")
+      ? "online"
+      : "offline";
+
+    return {
+      kind: "ok",
+      meta: {
+        slug,
+        collectionId,
+        artistId,
+        rawMember: rawMember || rawArtist,
+        season,
+        objektClass: objektClass || "First",
+        collectionNo,
+        onOffline,
+        imageUrl: raw.image ?? "",
+        backgroundColor: raw.background_color ?? "#09090b",
+      },
+    };
+  } catch {
+    return { kind: "error" };
   }
-  const rawArtist = attrs.get("artist") ?? "";
-  const rawMember = attrs.get("member") ?? "";
-  const season = attrs.get("season") ?? "";
-  const objektClass = attrs.get("class") ?? "";
-  const collectionNo = attrs.get("collection") ?? "";
-  if (!rawArtist || !season || !collectionNo) return null;
+}
 
-  const lowerArtist = rawArtist.toLowerCase();
-  const artistId =
-    lowerArtist === "triples"
-      ? "triples"
-      : lowerArtist === "artms"
-        ? "artms"
-        : lowerArtist;
-  const collectionId = `${season} ${rawMember || rawArtist} ${collectionNo}`.trim();
-  const slug = slugifyCollection(`${artistId}-${collectionId}`);
-  const onOffline: "online" | "offline" = collectionNo.toUpperCase().includes("Z")
-    ? "online"
-    : "offline";
-
-  return {
-    slug,
-    collectionId,
-    artistId,
-    rawMember: rawMember || rawArtist,
-    season,
-    objektClass: objektClass || "First",
-    collectionNo,
-    onOffline,
-    imageUrl: raw.image ?? "",
-    backgroundColor: raw.background_color ?? "#09090b",
-  };
+async function fetchMetaV3(tokenId: number): Promise<ParsedMeta | null> {
+  const res = await fetchMetaV3Detailed(tokenId);
+  return res.kind === "ok" ? res.meta : null;
 }
 
 /**
@@ -251,6 +282,7 @@ export async function recomputeSaleRoundsInD1(
   db: AppDatabase,
   rawD1: D1Database,
   dirtyRounds?: Set<string>,
+  dirtySeasonsHint?: Set<string>,
 ) {
   const allMembers = await db.select().from(members);
   const memberTotalsByArtist = new Map<string, number>();
@@ -268,18 +300,59 @@ export async function recomputeSaleRoundsInD1(
       .map((r) => [r.slug, r]),
   );
 
-  // When live-sync touches only 1-5 active rounds, skip loading all 20k historical collections
-  const dirtySeasons = new Set<string>();
+  // Load cached Apollo drop provenance so live cron upserts preserve/apply event titles & popularity exclusions
+  const apolloDropMap = new Map<string, ApolloDropProvenance>();
+  try {
+    const dropRows = await db.select().from(apolloDropMetadata);
+    for (const d of dropRows) {
+      apolloDropMap.set(d.dropKey, {
+        dropKey: d.dropKey,
+        sampleApolloSlug: d.sampleApolloSlug,
+        artistId: d.artistId,
+        season: d.season,
+        collectionNo: d.collectionNo,
+        description: d.description ?? null,
+        eventSlug: d.eventSlug ?? null,
+        eventName: d.eventName ?? null,
+        eventType: d.eventType ?? null,
+        eventDescription: d.eventDescription ?? null,
+        twitterUrl: d.twitterUrl ?? null,
+        eraSlug: d.eraSlug ?? null,
+        eraName: d.eraName ?? null,
+        eraImageUrl: d.eraImageUrl ?? null,
+        provenanceClass: (d.provenanceClass as ProvenanceClass) || "unknown",
+        passBillingMonth: d.passBillingMonth ?? null,
+        passBillingLabel: d.passBillingLabel ?? null,
+        isFreeDistribution: Boolean(d.isFreeDistribution),
+        fetchedAt: d.fetchedAt,
+      });
+    }
+  } catch {
+    // Graceful before migration
+  }
+
+  // When live-sync touches only 1-5 active rounds, skip loading all 20k historical collections.
+  // Always include `dirtySeasonsHint` so brand-new rounds (not yet in `sale_rounds`) never have their season omitted!
+  const dirtySeasons = new Set<string>(dirtySeasonsHint ?? []);
   const existingRoundBySlug = new Map(existingRounds.map((r) => [r.slug, r]));
+  let hasUnknownSeasonRound = false;
   if (dirtyRounds && dirtyRounds.size > 0) {
     for (const slug of dirtyRounds) {
       const ex = existingRoundBySlug.get(slug);
-      if (ex) dirtySeasons.add(ex.season);
+      if (ex) {
+        dirtySeasons.add(ex.season);
+      } else if (!dirtySeasonsHint || dirtySeasonsHint.size === 0) {
+        hasUnknownSeasonRound = true;
+      }
     }
   }
 
   const allCols =
-    dirtyRounds && dirtyRounds.size > 0 && dirtySeasons.size > 0 && dirtySeasons.size <= 10
+    dirtyRounds &&
+    dirtyRounds.size > 0 &&
+    !hasUnknownSeasonRound &&
+    dirtySeasons.size > 0 &&
+    dirtySeasons.size <= 10
       ? await db
           .select()
           .from(collections)
@@ -300,6 +373,12 @@ export async function recomputeSaleRoundsInD1(
     includeInPopularity: boolean;
     isAutoDetected: boolean;
     notes: string | null;
+    apolloEventSlug: string | null;
+    apolloEventName: string | null;
+    apolloEventType: string | null;
+    apolloEraName: string | null;
+    apolloTwitterUrl: string | null;
+    apolloDescription: string | null;
     collectionSlugs: string[];
     memberMints: Map<string, number>;
     memberUniqueBuyers: Map<string, number>;
@@ -334,6 +413,8 @@ export async function recomputeSaleRoundsInD1(
       col.onOffline === "offline" ? "offline" : "online",
     );
     const curated = curatedMetaBySlug.get(auto.slug);
+    const dropKey = makeApolloDropKey(col.artistId, col.season, col.collectionNo);
+    const apolloProv = apolloDropMap.get(dropKey) ?? null;
 
     const key = curated?.slug ?? auto.slug;
     let acc = rounds.get(key);
@@ -341,21 +422,61 @@ export async function recomputeSaleRoundsInD1(
     const lastTs = col.lastMintAt ?? col.updatedAt;
 
     if (!acc) {
+      const baseTitle = curated?.title ?? auto.title;
+      const baseMechanic = curated?.saleMechanic ?? auto.saleMechanic;
+      const basePop = curated?.includeInPopularity ?? auto.includeInPopularity;
+      const basePrice = curated?.unitPriceUsd ?? auto.unitPriceUsd;
+      const onOff: "online" | "offline" =
+        col.onOffline === "offline" ? "offline" : "online";
+
+      const apolloAdjusted = apolloProv
+        ? applyApolloToRoundMeta({
+            objektClass: col.objektClass,
+            onOffline: onOff,
+            baseSaleMechanic: baseMechanic,
+            baseIncludeInPopularity: basePop,
+            baseUnitPriceUsd: basePrice,
+            provenance: apolloProv,
+          })
+        : {
+            saleMechanic: baseMechanic,
+            includeInPopularity: basePop,
+            unitPriceUsd: basePrice,
+          };
+
+      const enrichedTitle = apolloProv
+        ? buildEnrichedRoundTitle({
+            fallbackTitle: baseTitle,
+            season: col.season,
+            objektClass: col.objektClass,
+            collectionNo: col.collectionNo,
+            apolloEventName: apolloProv.eventName,
+            apolloDescription: apolloProv.description,
+            provenanceClass: apolloProv.provenanceClass,
+          })
+        : baseTitle;
+
       acc = {
         slug: key,
         artistId: col.artistId,
-        title: curated?.title ?? auto.title,
+        title: enrichedTitle,
         season: col.season,
         objektClass: col.objektClass,
-        onOffline: col.onOffline === "offline" ? "offline" : "online",
-        saleMechanic: curated?.saleMechanic ?? auto.saleMechanic,
+        onOffline: onOff,
+        saleMechanic: apolloAdjusted.saleMechanic,
         startAt: firstTs,
         endAt: lastTs,
-        unitPriceUsd: curated?.unitPriceUsd ?? auto.unitPriceUsd,
-        includeInPopularity:
-          curated?.includeInPopularity ?? auto.includeInPopularity,
+        unitPriceUsd: apolloAdjusted.unitPriceUsd,
+        includeInPopularity: apolloAdjusted.includeInPopularity,
         isAutoDetected: curated ? false : true,
-        notes: curated?.notes ?? null,
+        notes: curated?.notes ?? apolloProv?.description ?? null,
+        apolloEventSlug: apolloProv?.eventSlug ?? curated?.apolloEventSlug ?? null,
+        apolloEventName: apolloProv?.eventName ?? curated?.apolloEventName ?? null,
+        apolloEventType: apolloProv?.eventType ?? curated?.apolloEventType ?? null,
+        apolloEraName: apolloProv?.eraName ?? curated?.apolloEraName ?? null,
+        apolloTwitterUrl: apolloProv?.twitterUrl ?? curated?.apolloTwitterUrl ?? null,
+        apolloDescription:
+          apolloProv?.description ?? curated?.apolloDescription ?? null,
         collectionSlugs: [],
         memberMints: new Map(),
         memberUniqueBuyers: new Map(),
@@ -437,10 +558,20 @@ export async function recomputeSaleRoundsInD1(
 
   const upsertRound = rawD1.prepare(
     `INSERT INTO sale_rounds
-      (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, unique_buyers, participating_members, include_in_popularity, is_auto_detected, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (slug, artist_id, title, season, objekt_class, on_offline, sale_mechanic, start_at, end_at, unit_price_usd, total_mints, unique_buyers, participating_members, include_in_popularity, is_auto_detected, notes, apollo_event_slug, apollo_event_name, apollo_event_type, apollo_era_name, apollo_twitter_url, apollo_description)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(slug) DO UPDATE SET
-       title = excluded.title,
+       title = COALESCE(excluded.title, sale_rounds.title),
+       sale_mechanic = excluded.sale_mechanic,
+       include_in_popularity = excluded.include_in_popularity,
+       unit_price_usd = excluded.unit_price_usd,
+       notes = COALESCE(sale_rounds.notes, excluded.notes),
+       apollo_event_slug = COALESCE(excluded.apollo_event_slug, sale_rounds.apollo_event_slug),
+       apollo_event_name = COALESCE(excluded.apollo_event_name, sale_rounds.apollo_event_name),
+       apollo_event_type = COALESCE(excluded.apollo_event_type, sale_rounds.apollo_event_type),
+       apollo_era_name = COALESCE(excluded.apollo_era_name, sale_rounds.apollo_era_name),
+       apollo_twitter_url = COALESCE(excluded.apollo_twitter_url, sale_rounds.apollo_twitter_url),
+       apollo_description = COALESCE(excluded.apollo_description, sale_rounds.apollo_description),
        start_at = MIN(sale_rounds.start_at, excluded.start_at),
        end_at = MAX(COALESCE(sale_rounds.end_at, excluded.end_at), excluded.end_at),
        total_mints = excluded.total_mints,
@@ -499,6 +630,12 @@ export async function recomputeSaleRoundsInD1(
         r.includeInPopularity ? 1 : 0,
         r.isAutoDetected ? 1 : 0,
         r.notes,
+        r.apolloEventSlug,
+        r.apolloEventName,
+        r.apolloEventType,
+        r.apolloEraName,
+        r.apolloTwitterUrl,
+        r.apolloDescription,
       ),
     );
     for (const cSlug of r.collectionSlugs) {
@@ -1374,7 +1511,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
   const rpcUrl = env.ABSTRACT_RPC_URL || "https://api.mainnet.abs.xyz";
   const maxTokens = Math.min(
     800,
-    Math.max(10, Number(env.SYNC_MAX_TOKENS || "35")),
+    Math.max(10, Number(env.SYNC_MAX_TOKENS || "400")),
   );
 
   const headHex = await rpc<string>(rpcUrl, "eth_blockNumber", []);
@@ -1389,7 +1526,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
   const fromBlock = state?.lastIndexedBlock
     ? state.lastIndexedBlock
     : Math.max(6_363_806, headBlock - 500);
-  let toBlock = Math.min(headBlock, fromBlock + 1_200);
+  let toBlock = Math.min(headBlock, fromBlock + 2_000);
 
   if (fromBlock > headBlock) {
     return {
@@ -1430,6 +1567,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
   const parsedMintLogs: Array<{
     blockNumber: number;
     tokenId: number;
+    minter: string;
     timestampIso: string;
   }> = [];
   const parsedP2PLogs: Array<{
@@ -1458,7 +1596,12 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
 
     if (fromTopic === ZERO_TOPIC) {
       // Strictly newly minted primary sales ONLY
-      parsedMintLogs.push({ blockNumber, tokenId, timestampIso });
+      parsedMintLogs.push({
+        blockNumber,
+        tokenId,
+        minter: topicToAddress(toTopic),
+        timestampIso,
+      });
     } else if (toTopic !== ZERO_TOPIC) {
       const fromAddr = topicToAddress(fromTopic);
       const toAddr = topicToAddress(toTopic);
@@ -1478,17 +1621,59 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     }
   }
 
-  // Buffer eligible P2P transfers idempotently (never touches collections/sale_rounds)
+  // Sort mints monotonically so cursor advancement never skips an earlier-block token
+  parsedMintLogs.sort(
+    (a, b) => a.blockNumber - b.blockNumber || a.tokenId - b.tokenId,
+  );
+
+  // Deduplicate newly minted tokens incrementally in 80-param chunks and STOP as soon as
+  // we have `maxTokens + 1` pending tokens (avoids 40+ wasted D1 queries during big drops!)
+  const seen = new Set<number>();
+  const uniqueLogs: typeof parsedMintLogs = [];
+  const seenInLogs = new Set<number>();
+  for (const l of parsedMintLogs) {
+    if (seenInLogs.has(l.tokenId)) continue;
+    seenInLogs.add(l.tokenId);
+    uniqueLogs.push(l);
+  }
+
+  const pending: typeof parsedMintLogs = [];
+  for (let i = 0; i < uniqueLogs.length && pending.length <= maxTokens; i += 80) {
+    const slice = uniqueLogs.slice(i, i + 80);
+    const rows = await db
+      .select({ tokenId: processedLiveMints.tokenId })
+      .from(processedLiveMints)
+      .where(
+        inArray(
+          processedLiveMints.tokenId,
+          slice.map((s) => s.tokenId),
+        ),
+      );
+    for (const r of rows) seen.add(r.tokenId);
+    for (const item of slice) {
+      if (!seen.has(item.tokenId)) {
+        pending.push(item);
+        if (pending.length > maxTokens) break;
+      }
+    }
+  }
+
+  const hasMorePending = pending.length > maxTokens;
+  const batch = pending.slice(0, maxTokens);
+
+  // Helper to buffer only P2P transfers within the block range actually consumed this tick
   let p2pTransfersBuffered = 0;
   let tradesAvailable = true;
-  if (parsedP2PLogs.length > 0) {
+  const bufferP2PUpToBlock = async (maxBlock: number) => {
+    const eligible = parsedP2PLogs.filter((p) => p.blockNumber <= maxBlock);
+    if (eligible.length === 0) return;
     try {
       const insertP2p = env.DB.prepare(
         `INSERT OR IGNORE INTO pending_p2p_transfers
           (tx_hash, log_index, chain, block_number, transferred_at, from_addr, to_addr, pair_key, token_id, status)
          VALUES (?, ?, 'abstract', ?, ?, ?, ?, ?, ?, 'open')`,
       );
-      const p2pStmts = parsedP2PLogs.map((p) =>
+      const p2pStmts = eligible.map((p) =>
         insertP2p.bind(
           p.txHash,
           p.logIndex,
@@ -1503,12 +1688,11 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
       for (let i = 0; i < p2pStmts.length; i += 80) {
         await env.DB.batch(p2pStmts.slice(i, i + 80));
       }
-      p2pTransfersBuffered = parsedP2PLogs.length;
+      p2pTransfersBuffered = eligible.length;
     } catch {
-      // Allow graceful operation if migration 0002 has not been applied yet
       tradesAvailable = false;
     }
-  }
+  };
 
   // Load member lookup map once (shared by both mint sync and trade settling)
   const allMembers = await db.select().from(members);
@@ -1521,22 +1705,9 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     memberLookup.set(`${m.artistId}:${normalizeMemberKey(m.fullName)}`, m.id);
   }
 
-  // Deduplicate newly minted tokens against processed_live_mints in <= 80-param chunks
-  const seen = new Set<number>();
-  const uniqueIds = Array.from(new Set(parsedMintLogs.map((l) => l.tokenId)));
-  for (let i = 0; i < uniqueIds.length; i += 80) {
-    const slice = uniqueIds.slice(i, i + 80);
-    const rows = await db
-      .select({ tokenId: processedLiveMints.tokenId })
-      .from(processedLiveMints)
-      .where(inArray(processedLiveMints.tokenId, slice));
-    for (const r of rows) seen.add(r.tokenId);
-  }
-
-  const pending = parsedMintLogs.filter((l) => !seen.has(l.tokenId));
-  const batch = pending.slice(0, maxTokens);
-
   if (batch.length === 0) {
+    await bufferP2PUpToBlock(toBlock);
+
     let tradesDetected = 0;
     if (tradesAvailable) {
       const settled = await settlePendingTradesInD1(db, env.DB, {
@@ -1553,7 +1724,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
       .values({
         chain: "abstract",
         lastIndexedBlock: toBlock,
-        lastIndexedTimestamp: new Date().toISOString(),
+        lastIndexedTimestamp: latestLogIso,
         totalTokensIndexed: state?.totalTokensIndexed ?? 0,
         updatedAt: new Date().toISOString(),
       })
@@ -1561,6 +1732,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
         target: syncState.chain,
         set: {
           lastIndexedBlock: toBlock,
+          lastIndexedTimestamp: latestLogIso,
           updatedAt: new Date().toISOString(),
         },
       });
@@ -1578,20 +1750,21 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     };
   }
 
-  // Fetch metadata for newly minted tokens in polite waves of 10
+  // Fetch metadata for newly minted tokens in waves of 25 (400 tokens ≈ 16 waves / ~3-5s on Paid Workers)
   const resolved: Array<{
     tokenId: number;
     blockNumber: number;
+    minter: string;
     timestampIso: string;
-    meta: ParsedMeta | null;
+    result: FetchMetaResult;
   }> = [];
 
-  for (let i = 0; i < batch.length; i += 10) {
-    const wave = batch.slice(i, i + 10);
+  for (let i = 0; i < batch.length; i += 25) {
+    const wave = batch.slice(i, i + 25);
     const waveRes = await Promise.all(
       wave.map(async (item) => ({
         ...item,
-        meta: await fetchMetaV3(item.tokenId).catch(() => null),
+        result: await fetchMetaV3Detailed(item.tokenId),
       })),
     );
     resolved.push(...waveRes);
@@ -1604,48 +1777,69 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
       meta: ParsedMeta;
       memberId: string | null;
       count: number;
+      minters: Set<string>;
       firstAt: string;
       lastAt: string;
     }
   >();
-  const dailyDeltas = new Map<string, { slug: string; date: string; count: number }>();
+  const dailyDeltas = new Map<
+    string,
+    { slug: string; date: string; count: number; minters: Set<string> }
+  >();
 
   let trackedMintsAdded = 0;
+  let processedCount = 0;
+  let minFailedBlock: number | null = null;
   const now = new Date().toISOString();
 
   for (const item of resolved) {
-    if (!item.meta) continue;
-    if (item.meta.artistId !== "triples" && item.meta.artistId !== "artms") {
+    if (item.result.kind === "error") {
+      if (minFailedBlock === null || item.blockNumber < minFailedBlock) {
+        minFailedBlock = item.blockNumber;
+      }
+      continue;
+    }
+    processedCount++;
+    if (item.result.kind !== "ok") continue;
+    const meta = item.result.meta;
+    if (meta.artistId !== "triples" && meta.artistId !== "artms") {
       continue;
     }
     trackedMintsAdded++;
     const memberId =
-      memberLookup.get(
-        `${item.meta.artistId}:${normalizeMemberKey(item.meta.rawMember)}`,
-      ) ?? null;
+      memberLookup.get(`${meta.artistId}:${normalizeMemberKey(meta.rawMember)}`) ??
+      null;
 
-    const existing = colDeltas.get(item.meta.slug);
+    const existing = colDeltas.get(meta.slug);
     if (existing) {
       existing.count++;
+      existing.minters.add(item.minter);
       if (item.timestampIso < existing.firstAt) existing.firstAt = item.timestampIso;
       if (item.timestampIso > existing.lastAt) existing.lastAt = item.timestampIso;
     } else {
-      colDeltas.set(item.meta.slug, {
-        meta: item.meta,
+      colDeltas.set(meta.slug, {
+        meta,
         memberId,
         count: 1,
+        minters: new Set([item.minter]),
         firstAt: item.timestampIso,
         lastAt: item.timestampIso,
       });
     }
 
     const day = item.timestampIso.slice(0, 10);
-    const dKey = `${item.meta.slug}|${day}`;
+    const dKey = `${meta.slug}|${day}`;
     const dPrev = dailyDeltas.get(dKey);
     if (dPrev) {
       dPrev.count++;
+      dPrev.minters.add(item.minter);
     } else {
-      dailyDeltas.set(dKey, { slug: item.meta.slug, date: day, count: 1 });
+      dailyDeltas.set(dKey, {
+        slug: meta.slug,
+        date: day,
+        count: 1,
+        minters: new Set([item.minter]),
+      });
     }
   }
 
@@ -1653,8 +1847,11 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
   const markToken = env.DB.prepare(
     "INSERT OR IGNORE INTO processed_live_mints (token_id, synced_at) VALUES (?, ?)",
   );
+  // Only mark successfully resolved or confirmed 404 tokens as processed — never drop transient errors!
   for (const item of resolved) {
-    writeStmts.push(markToken.bind(item.tokenId, now));
+    if (item.result.kind !== "error") {
+      writeStmts.push(markToken.bind(item.tokenId, now));
+    }
   }
 
   const upsertCol = env.DB.prepare(
@@ -1688,7 +1885,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
         como,
         d.count,
         d.count,
-        d.count,
+        d.minters.size,
         d.firstAt,
         d.lastAt,
         d.meta.imageUrl,
@@ -1708,14 +1905,25 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
        unique_minters = collection_daily_mints.unique_minters + excluded.unique_minters`,
   );
   for (const d of dailyDeltas.values()) {
-    writeStmts.push(upsertDaily.bind(d.slug, d.date, d.count, d.count));
+    writeStmts.push(upsertDaily.bind(d.slug, d.date, d.count, d.minters.size));
   }
 
-  // Only advance cursor past blocks where all pending tokens were consumed
-  const allConsumed = pending.length <= batch.length;
+  // Only advance cursor past blocks where all pending tokens succeeded cleanly
+  const allConsumed = !hasMorePending && minFailedBlock === null;
   const highestBatchBlock = batch[batch.length - 1]!.blockNumber;
-  const newCursorBlock = allConsumed ? toBlock : highestBatchBlock;
-  const newCursorTs = batch[batch.length - 1]!.timestampIso;
+  const newCursorBlock =
+    minFailedBlock !== null
+      ? minFailedBlock
+      : allConsumed
+        ? toBlock
+        : highestBatchBlock;
+  const newCursorTs =
+    minFailedBlock !== null
+      ? (batch.find((b) => b.blockNumber === minFailedBlock)?.timestampIso ??
+        batch[0]!.timestampIso)
+      : batch[batch.length - 1]!.timestampIso;
+
+  await bufferP2PUpToBlock(newCursorBlock);
 
   writeStmts.push(
     env.DB.prepare(
@@ -1729,9 +1937,9 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     ).bind(
       newCursorBlock,
       newCursorTs,
-      (state?.totalTokensIndexed ?? 0) + resolved.length,
+      (state?.totalTokensIndexed ?? 0) + processedCount,
       now,
-      resolved.length,
+      processedCount,
     ),
   );
 
@@ -1750,6 +1958,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
   let roundsUpdated = 0;
   if (trackedMintsAdded > 0) {
     const dirtyRoundSlugs = new Set<string>();
+    const dirtySeasons = new Set<string>();
     for (const d of colDeltas.values()) {
       const auto = inferAutoRoundGroup(
         d.meta.artistId,
@@ -1759,14 +1968,22 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
         d.meta.onOffline,
       );
       dirtyRoundSlugs.add(auto.slug);
+      dirtySeasons.add(d.meta.season);
     }
-    const rec = await recomputeSaleRoundsInD1(db, env.DB, dirtyRoundSlugs);
+    const rec = await recomputeSaleRoundsInD1(
+      db,
+      env.DB,
+      dirtyRoundSlugs,
+      dirtySeasons,
+    );
     roundsUpdated = rec.roundsUpdated;
   }
 
-  // Settle any ready P2P trade sessions using remaining Worker subrequest budget
+  // Only settle P2P trades when caught up on mints (dedicate 100% of subrequests to mints during drops!)
   let tradesDetected = 0;
-  const remainingTradeBudget = Math.max(0, Math.min(10, 42 - resolved.length));
+  const remainingTradeBudget = allConsumed
+    ? Math.max(0, Math.min(25, Math.max(46, maxTokens) - resolved.length - 4))
+    : 0;
   if (tradesAvailable && remainingTradeBudget >= 2) {
     const settled = await settlePendingTradesInD1(db, env.DB, {
       referenceIso: latestLogIso,
@@ -1783,7 +2000,7 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     fromBlock,
     toBlock: newCursorBlock,
     headBlock,
-    tokensResolved: resolved.length,
+    tokensResolved: processedCount,
     trackedMintsAdded,
     roundsUpdated,
     p2pTransfersBuffered,

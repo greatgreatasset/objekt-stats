@@ -273,6 +273,104 @@ function MethodologyPage() {
           </li>
         </ul>
       </section>
+
+      <section className="space-y-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-6">
+        <h2 className="text-lg font-semibold text-white">
+          7. Release Provenance, Tradeable Supply &amp; Market Stats (Apollo)
+        </h2>
+        <p className="text-sm leading-relaxed text-zinc-300">
+          On-chain <code className="text-zinc-200">Transfer</code> logs prove
+          exact mint volumes and wallet ownership, but do not encode human
+          release names, promotional eligibility rules, or live{" "}
+          <code className="text-zinc-200">transferable</code> lock states.
+          Objekt Stats caches public collection metadata from{" "}
+          <a
+            href="https://apollo.cafe"
+            target="_blank"
+            rel="noreferrer"
+            className="text-sky-400 underline underline-offset-2 hover:text-sky-300"
+          >
+            Apollo (apollo.cafe)
+          </a>{" "}
+          in D1 to enrich both Sale Rounds and the User Cost Estimator:
+        </p>
+        <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-400">
+          <li>
+            <strong>Clean Popularity Filtering:</strong> Community-curated event
+            types and descriptions let us automatically identify and exclude
+            free promotional voting drops, set-completion bonus cards, tour
+            attendance perks, offline pop-up exclusives, and monthly Pass+
+            subscription drops from paid shop popularity averages.
+          </li>
+          <li>
+            <strong>Automatic Free Event &amp; Pass+ Detection:</strong> In{" "}
+            <code className="text-zinc-200">/wallet</code>, verified free event
+            drops automatically price at{" "}
+            <span className="font-mono text-zinc-200">$0.00</span>, while newly
+            released <code className="text-zinc-200">Pass+</code> monthly drops
+            are recognized without manual hardcoding.
+          </li>
+          <li>
+            <strong>All-Time Copies, Tradeable % &amp; Median Market Prices:</strong>{" "}
+            Round detail pages and wallet item cards surface Apollo&apos;s
+            all-time Polygon + Abstract supply, circulating tradeable share, and
+            secondary-market median listing prices (with direct links back to
+            Apollo).
+          </li>
+        </ul>
+      </section>
+
+      <section className="space-y-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-6">
+        <h2 className="text-lg font-semibold text-white">
+          8. Member Objekt Revenue &amp; Settlement Estimation
+        </h2>
+        <p className="text-sm leading-relaxed text-zinc-300">
+          While Modhaus has confirmed that Objekt sales are settled separately
+          from traditional trainee/debut debt recoupment, the exact contractual
+          percentage split between Modhaus and individual members has{" "}
+          <strong>never been publicly disclosed</strong>. The{" "}
+          <code className="text-zinc-200">/earnings</code> estimator models
+          member payouts transparently using adjustable assumptions:
+        </p>
+        <ul className="list-disc space-y-2 pl-5 text-sm text-zinc-400">
+          <li>
+            <strong>COSMO Spin Replacement Deduction:</strong> Sending any
+            Objekt (including physical or free promo cards) to the COSMO Spin
+            address mints a free same-season FCO replacement at published drop
+            rates (<span className="font-mono text-zinc-200">90.63%</span> in{" "}
+            <code className="text-zinc-200">Binary02+</code> /{" "}
+            <code className="text-zinc-200">Ever01+</code>;{" "}
+            <span className="font-mono text-zinc-200">87.50%</span> in earlier
+            seasons). Because Spin draws uniformly across participating members
+            of a season, we deduct{" "}
+            <code className="text-zinc-200">
+              (season_total_spins × return_rate) / participating_members
+            </code>{" "}
+            from each member&apos;s raw FCO count before pricing.
+          </li>
+          <li>
+            <strong>Strict $0 Free-Reward Filtering:</strong> Welcome (
+            <code className="text-zinc-200">100Z</code>), online Grid SCOs (
+            <code className="text-zinc-200">2xxZ</code>), Spin-jackpot PCOs (
+            <code className="text-zinc-200">4xxZ</code>), Zero class, and
+            Apollo-verified voting/set-bonus/event gifts are excluded at $0.00.
+            Solo-member shop drops (e.g., birthday DCOs) are included alongside
+            group rounds.
+          </li>
+          <li>
+            <strong>Channel-Aware Platform Fees &amp; Coverage Guard:</strong>{" "}
+            Digital Objekt revenue deducts a configurable blend of{" "}
+            <code className="text-zinc-200">shop.cosmo.fans</code> payment
+            processing (~4%) and Apple/Google IAP fees (30%, automatically
+            enforced at 100% for pre-Sep 2024 seasons). The calculator defaults
+            to <strong>100%-indexed on-chain seasons</strong> (
+            <code className="text-zinc-200">Binary02 + Cream02</code> for
+            tripleS; <code className="text-zinc-200">Ever01 + Atom02</code> for
+            ARTMS) so partial Polygon-era seasons are never misrepresented as
+            complete career totals.
+          </li>
+        </ul>
+      </section>
     </div>
   );
 }

@@ -9,22 +9,37 @@ import {
   eventMembers,
   events,
   members,
+  recentNotableSpins,
   roundDailyMints,
   saleRoundCollections,
   saleRoundMemberStats,
   saleRounds,
+  spinMemberOutcomeStats,
+  spinOutcomeStats,
   syncState,
 } from "@objekt-stats/db";
 import {
+  classifyCollectionForEarnings,
   classifyFcoGridEdition,
   classifyGridRewardSco,
   computeEditionGridSupply,
+  computeMemberEarnings,
+  computeSpinAnalytics,
   correlateEventsForMemberRound,
+  DEFAULT_EARNINGS_CONFIG,
   toApolloSlug,
+  type EarningsMemberInfo,
+  type EarningsMemberSeasonRow,
+  type EarningsSeasonInput,
   type GridEditionId,
+  type PairedMemberSpinOutcome,
+  type PairedSpinOutcomeSummary,
+  type SpinCollectionInput,
+  type SpinMemberInfo,
 } from "@objekt-stats/stats";
 import {
   getRoundApolloSupply,
+  readCachedApolloCollections,
   type RoundApolloSupplySummary,
 } from "./apollo-service";
 
@@ -311,12 +326,19 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       });
 
     const syncRows = await db.select().from(syncState);
+    const absSyncRow = syncRows.find((s) => s.chain === "abstract");
+    const absSyncMs = absSyncRow?.lastIndexedTimestamp
+      ? Date.parse(absSyncRow.lastIndexedTimestamp)
+      : NaN;
+    const abstractLagMinutes = Number.isNaN(absSyncMs)
+      ? null
+      : Math.max(0, Math.round((Date.now() - absSyncMs) / 60_000));
 
     const [roundTotals] = await db
       .select({
         roundCount: sql<number>`count(*)`,
         popularityRoundCount: sql<number>`sum(case when ${saleRounds.includeInPopularity} = 1 then 1 else 0 end)`,
-        estGrossUsd: sql<number>`coalesce(sum(case when ${saleRounds.unitPriceUsd} > 0 then ${saleRounds.totalMints} * ${saleRounds.unitPriceUsd} else 0 end), 0)`,
+        estGrossUsd: sql<number>`coalesce(sum(case when ${saleRounds.unitPriceUsd} > 0 and ${saleRounds.saleMechanic} != 'reward' and ${saleRounds.objektClass} NOT IN ('Welcome', 'Special', 'Zero', 'Premier') then ${saleRounds.totalMints} * ${saleRounds.unitPriceUsd} else 0 end), 0)`,
       })
       .from(saleRounds)
       .where(eq(saleRounds.artistId, artistId));
@@ -349,6 +371,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       },
       events: eventsWithMembers,
       syncState: syncRows,
+      abstractLagMinutes,
       totals: {
         roundCount: Number(roundTotals?.roundCount ?? 0),
         popularityRoundCount: Number(roundTotals?.popularityRoundCount ?? 0),
@@ -533,8 +556,27 @@ export const getRoundDetail = createServerFn({ method: "GET" })
       }
     }
 
+    const [abstractSyncRow] = await db
+      .select()
+      .from(syncState)
+      .where(eq(syncState.chain, "abstract"))
+      .limit(1);
+    const absSyncMs = abstractSyncRow?.lastIndexedTimestamp
+      ? Date.parse(abstractSyncRow.lastIndexedTimestamp)
+      : NaN;
+    const abstractLagMinutes = Number.isNaN(absSyncMs)
+      ? null
+      : Math.max(0, Math.round((Date.now() - absSyncMs) / 60_000));
+
     return {
       round,
+      abstractSync: abstractSyncRow
+        ? {
+            lastIndexedBlock: abstractSyncRow.lastIndexedBlock,
+            lastIndexedTimestamp: abstractSyncRow.lastIndexedTimestamp,
+            lagMinutes: abstractLagMinutes,
+          }
+        : null,
       apolloSupply: {
         matchedCollections: apolloSupply.matchedCollections,
         totalCollections: apolloSupply.totalCollections,
@@ -568,7 +610,10 @@ export const getRoundDetail = createServerFn({ method: "GET" })
           apolloTransferableCopies: apollo?.transferableCopies ?? null,
           apolloTransferablePct: apollo?.transferablePct ?? null,
           apolloMedianPriceUsd: apollo?.medianPriceUsd ?? null,
+          apolloMinPriceUsd: apollo?.minPriceUsd ?? null,
+          apolloMaxPriceUsd: apollo?.maxPriceUsd ?? null,
           apolloListingCount: apollo?.listingCount ?? null,
+          apolloPriceUpdatedAt: apollo?.priceUpdatedAt ?? null,
         };
       }),
       dailyCurve,
@@ -853,12 +898,37 @@ export const getMemberDetail = createServerFn({ method: "GET" })
           : 1,
     }));
 
-    const memberCollections = await db
+    const memberCollectionsRaw = await db
       .select()
       .from(collections)
       .where(eq(collections.memberId, memberId))
       .orderBy(desc(collections.totalMints))
       .limit(24);
+
+    const memberApolloSlugs = memberCollectionsRaw.map((c) =>
+      toApolloSlug(c.season, c.rawMemberName, c.collectionNo),
+    );
+    const { found: memberApolloBySlug } = await readCachedApolloCollections(
+      db,
+      memberApolloSlugs,
+    ).catch(() => ({ found: {} as Record<string, never>, staleOrMissingSlugs: [] }));
+
+    const memberCollections = memberCollectionsRaw.map((c) => {
+      const apolloSlug = toApolloSlug(c.season, c.rawMemberName, c.collectionNo);
+      const apollo = memberApolloBySlug[apolloSlug] ?? null;
+      return {
+        ...c,
+        apolloSlug,
+        apolloTotalCopies: apollo?.totalCopies ?? null,
+        apolloTransferableCopies: apollo?.transferableCopies ?? null,
+        apolloTransferablePct: apollo?.transferablePct ?? null,
+        apolloMedianPriceUsd: apollo?.medianPriceUsd ?? null,
+        apolloMinPriceUsd: apollo?.minPriceUsd ?? null,
+        apolloMaxPriceUsd: apollo?.maxPriceUsd ?? null,
+        apolloListingCount: apollo?.listingCount ?? null,
+        apolloPriceUpdatedAt: apollo?.priceUpdatedAt ?? null,
+      };
+    });
 
     // Compute per-edition COSMO Grid completion & supply lock stats for this member
     const memberGridRows = await db
@@ -1031,6 +1101,89 @@ export const getMemberDetail = createServerFn({ method: "GET" })
         };
       });
 
+    // Compute compact member earnings snapshot across 100%-indexed seasons
+    let memberEarnings: {
+      selectedSeasons: string[];
+      spanDays: number | null;
+      hasPartialCoverageSeason: boolean;
+      rawFcoMints: number;
+      estSpinFcoMints: number;
+      paidFcoMints: number;
+      paidDcoMints: number;
+      paidMcoMints: number;
+      passPlusMints: number;
+      physicalMints: number;
+      freeExcludedMints: number;
+      totalGrossUsd: number;
+      netRevenueUsd: number;
+      effectiveFeePct: number;
+      earningsAt20Usd: number;
+      earningsAt30Usd: number;
+      earningsAt50Usd: number;
+      rankInGroup: number;
+      groupMemberCount: number;
+      shareOfGroupPct: number;
+      relativeToAvg: number;
+    } | null = null;
+
+    try {
+      const artistSlugNorm = normalizeArtist(member.artistId);
+      const artistMembers = await db
+        .select()
+        .from(members)
+        .where(eq(members.artistId, artistSlugNorm))
+        .orderBy(asc(members.memberOrder));
+      const { seasons: earningsSeasons, rows: earningsRows } =
+        await loadArtistEarningsAggregates(env.DB, artistSlugNorm);
+
+      if (earningsSeasons.length > 0 && earningsRows.length > 0) {
+        const memberInfos: EarningsMemberInfo[] = artistMembers.map((m) => ({
+          id: m.id,
+          code: m.code,
+          memberOrder: m.memberOrder,
+          name: m.name,
+          fullName: m.fullName,
+          hexColor: m.hexColor,
+          revealDate: m.revealDate,
+        }));
+        const base30 = computeMemberEarnings({
+          artistId: artistSlugNorm,
+          members: memberInfos,
+          seasons: earningsSeasons,
+          rows: earningsRows,
+          config: { ...DEFAULT_EARNINGS_CONFIG, memberSplitPct: 30 },
+        });
+        const mine = base30.members.find((m) => m.member.id === memberId);
+        if (mine && mine.totalGrossUsd > 0) {
+          memberEarnings = {
+            selectedSeasons: base30.selectedSeasons,
+            spanDays: base30.spanDays,
+            hasPartialCoverageSeason: base30.hasPartialCoverageSeason,
+            rawFcoMints: mine.rawFcoMints,
+            estSpinFcoMints: mine.estSpinFcoMints,
+            paidFcoMints: mine.paidFcoMints,
+            paidDcoMints: mine.paidDcoMints,
+            paidMcoMints: mine.paidMcoMints,
+            passPlusMints: mine.passPlusMints,
+            physicalMints: mine.physicalMints,
+            freeExcludedMints: mine.freeExcludedMints,
+            totalGrossUsd: mine.totalGrossUsd,
+            netRevenueUsd: mine.netRevenueUsd,
+            effectiveFeePct: mine.effectiveFeePct,
+            earningsAt20Usd: Math.round(mine.netRevenueUsd * 0.2),
+            earningsAt30Usd: Math.round(mine.netRevenueUsd * 0.3),
+            earningsAt50Usd: Math.round(mine.netRevenueUsd * 0.5),
+            rankInGroup: mine.rank,
+            groupMemberCount: artistMembers.length,
+            shareOfGroupPct: mine.shareOfGroupPct,
+            relativeToAvg: mine.relativeToAvg,
+          };
+        }
+      }
+    } catch {
+      memberEarnings = null;
+    }
+
     return {
       member,
       roundHistory,
@@ -1039,6 +1192,248 @@ export const getMemberDetail = createServerFn({ method: "GET" })
       collections: memberCollections,
       events: relatedEvents,
       gridSummary,
+      memberEarnings,
+    };
+  });
+
+interface RawEarningsCollectionRow {
+  slug: string;
+  season: string;
+  member_id: string | null;
+  objekt_class: string;
+  on_offline: string;
+  collection_no: string;
+  total_mints: number;
+  spun_count: number;
+  first_mint_at: string | null;
+  last_mint_at: string | null;
+  round_sale_mechanic: string | null;
+  apollo_provenance_class: string | null;
+}
+
+async function loadArtistEarningsAggregates(
+  d1: D1Database,
+  artistId: ArtistSlug,
+): Promise<{
+  seasons: EarningsSeasonInput[];
+  rows: EarningsMemberSeasonRow[];
+}> {
+  let rawCols: RawEarningsCollectionRow[] = [];
+  try {
+    const res = await d1
+      .prepare(
+        `SELECT
+           c.slug,
+           c.season,
+           c.member_id,
+           c.objekt_class,
+           c.on_offline,
+           c.collection_no,
+           c.total_mints,
+           c.spun_count,
+           c.first_mint_at,
+           c.last_mint_at,
+           MIN(sr.sale_mechanic) AS round_sale_mechanic,
+           MAX(adm.provenance_class) AS apollo_provenance_class
+         FROM collections c
+         LEFT JOIN sale_round_collections src ON src.collection_slug = c.slug
+         LEFT JOIN sale_rounds sr ON sr.slug = src.round_slug
+         LEFT JOIN apollo_drop_metadata adm
+           ON adm.drop_key = lower(c.artist_id) || '|' || lower(c.season) || '|' || upper(c.collection_no)
+         WHERE c.artist_id = ?
+         GROUP BY c.slug`,
+      )
+      .bind(artistId)
+      .all<RawEarningsCollectionRow>();
+    rawCols = res.results ?? [];
+  } catch {
+    // Fallback if apollo_drop_metadata table is not yet migrated in a local dev DB
+    const res = await d1
+      .prepare(
+        `SELECT
+           c.slug,
+           c.season,
+           c.member_id,
+           c.objekt_class,
+           c.on_offline,
+           c.collection_no,
+           c.total_mints,
+           c.spun_count,
+           c.first_mint_at,
+           c.last_mint_at,
+           MIN(sr.sale_mechanic) AS round_sale_mechanic,
+           NULL AS apollo_provenance_class
+         FROM collections c
+         LEFT JOIN sale_round_collections src ON src.collection_slug = c.slug
+         LEFT JOIN sale_rounds sr ON sr.slug = src.round_slug
+         WHERE c.artist_id = ?
+         GROUP BY c.slug`,
+      )
+      .bind(artistId)
+      .all<RawEarningsCollectionRow>();
+    rawCols = res.results ?? [];
+  }
+
+  const seasonMap = new Map<
+    string,
+    {
+      season: string;
+      firstMintAt: string | null;
+      lastMintAt: string | null;
+      allClassSpins: number;
+      fcoMembers: Set<string>;
+      totalRawFcoMints: number;
+    }
+  >();
+
+  const memberSeasonMap = new Map<string, EarningsMemberSeasonRow>();
+
+  for (const c of rawCols) {
+    const mints = Number(c.total_mints ?? 0);
+    const spins = Number(c.spun_count ?? 0);
+    if (mints <= 0 && spins <= 0) continue;
+
+    let sAcc = seasonMap.get(c.season);
+    if (!sAcc) {
+      sAcc = {
+        season: c.season,
+        firstMintAt: c.first_mint_at,
+        lastMintAt: c.last_mint_at,
+        allClassSpins: 0,
+        fcoMembers: new Set(),
+        totalRawFcoMints: 0,
+      };
+      seasonMap.set(c.season, sAcc);
+    }
+
+    // Track ALL spins in the season across every class (including physical & unlinked group/unit cards!)
+    sAcc.allClassSpins += spins;
+
+    const bucket = classifyCollectionForEarnings({
+      objektClass: c.objekt_class,
+      onOffline: c.on_offline,
+      collectionNo: c.collection_no,
+      apolloProvenanceClass: c.apollo_provenance_class,
+      roundSaleMechanic: c.round_sale_mechanic,
+    });
+
+    // Anchor season date span on paid online drops when available
+    if (
+      bucket === "fco" ||
+      bucket === "dco" ||
+      bucket === "mco" ||
+      bucket === "pass_plus"
+    ) {
+      if (c.first_mint_at && (!sAcc.firstMintAt || c.first_mint_at < sAcc.firstMintAt)) {
+        sAcc.firstMintAt = c.first_mint_at;
+      }
+      if (c.last_mint_at && (!sAcc.lastMintAt || c.last_mint_at > sAcc.lastMintAt)) {
+        sAcc.lastMintAt = c.last_mint_at;
+      }
+    }
+
+    if (!c.member_id) continue;
+
+    const key = `${c.season}|${c.member_id}`;
+    let row = memberSeasonMap.get(key);
+    if (!row) {
+      row = {
+        season: c.season,
+        memberId: c.member_id,
+        rawFcoMints: 0,
+        paidDcoMints: 0,
+        paidMcoMints: 0,
+        paidUnitMints: 0,
+        passPlusMints: 0,
+        physicalMints: 0,
+        freeExcludedMints: 0,
+      };
+      memberSeasonMap.set(key, row);
+    }
+
+    switch (bucket) {
+      case "fco":
+        row.rawFcoMints += mints;
+        sAcc.totalRawFcoMints += mints;
+        if (mints > 0) sAcc.fcoMembers.add(c.member_id);
+        break;
+      case "dco":
+        row.paidDcoMints += mints;
+        break;
+      case "mco":
+        row.paidMcoMints += mints;
+        break;
+      case "unit":
+        row.paidUnitMints += mints;
+        break;
+      case "pass_plus":
+        row.passPlusMints += mints;
+        break;
+      case "physical":
+        row.physicalMints += mints;
+        break;
+      case "free":
+        row.freeExcludedMints += mints;
+        break;
+    }
+  }
+
+  const seasons: EarningsSeasonInput[] = Array.from(seasonMap.values()).map(
+    (s) => ({
+      season: s.season,
+      artistId,
+      firstMintAt: s.firstMintAt,
+      lastMintAt: s.lastMintAt,
+      allClassSpins: s.allClassSpins,
+      fcoMemberCount: s.fcoMembers.size,
+      totalRawFcoMints: s.totalRawFcoMints,
+    }),
+  );
+
+  return {
+    seasons,
+    rows: Array.from(memberSeasonMap.values()),
+  };
+}
+
+export const getEarningsDataset = createServerFn({ method: "GET" })
+  .validator((artistId?: string) => normalizeArtist(artistId))
+  .handler(async ({ data: artistId }) => {
+    const db = createDb(env.DB);
+
+    const [artist] = await db
+      .select()
+      .from(artists)
+      .where(eq(artists.id, artistId))
+      .limit(1);
+
+    const memberList = await db
+      .select()
+      .from(members)
+      .where(eq(members.artistId, artistId))
+      .orderBy(asc(members.memberOrder));
+
+    const { seasons, rows } = await loadArtistEarningsAggregates(
+      env.DB,
+      artistId,
+    );
+
+    const syncRows = await db.select().from(syncState);
+
+    return {
+      artist: artist ?? null,
+      members: memberList.map((m) => ({
+        id: m.id,
+        code: m.code,
+        memberOrder: m.memberOrder,
+        name: m.name,
+        fullName: m.fullName,
+        hexColor: m.hexColor,
+        revealDate: m.revealDate,
+      })),
+      seasons,
+      rows,
+      syncState: syncRows,
     };
   });
 
@@ -1093,5 +1488,202 @@ export const getEventsWithImpact = createServerFn({ method: "GET" })
       artist: artist ?? null,
       members: memberList,
       events: eventsWithRounds,
+    };
+  });
+
+interface RawSpinCollectionRow {
+  slug: string;
+  collection_id: string;
+  artist_id: string;
+  member_id: string | null;
+  raw_member_name: string;
+  season: string;
+  objekt_class: string;
+  collection_no: string;
+  on_offline: string;
+  total_mints: number;
+  spun_count: number;
+  front_image_url: string | null;
+  apollo_total_copies: number | null;
+  apollo_median_price_usd: number | null;
+  apollo_listing_count: number | null;
+}
+
+export const getSpinAnalytics = createServerFn({ method: "GET" })
+  .validator((input?: { artist?: string; season?: string }) => ({
+    artist: normalizeArtist(input?.artist),
+    season: input?.season && input.season.trim() ? input.season.trim() : "all",
+  }))
+  .handler(async ({ data }) => {
+    const { artist: artistId, season: seasonFilter } = data;
+    const db = createDb(env.DB);
+
+    const [artist] = await db
+      .select()
+      .from(artists)
+      .where(eq(artists.id, artistId))
+      .limit(1);
+
+    const memberList = await db
+      .select()
+      .from(members)
+      .where(eq(members.artistId, artistId))
+      .orderBy(asc(members.memberOrder));
+
+    let rawCols: RawSpinCollectionRow[] = [];
+    try {
+      const res = await env.DB.prepare(
+        `SELECT
+           c.slug,
+           c.collection_id,
+           c.artist_id,
+           c.member_id,
+           c.raw_member_name,
+           c.season,
+           c.objekt_class,
+           c.collection_no,
+           c.on_offline,
+           c.total_mints,
+           c.spun_count,
+           c.front_image_url,
+           acc.total_copies AS apollo_total_copies,
+           acc.median_price_usd AS apollo_median_price_usd,
+           acc.listing_count AS apollo_listing_count
+         FROM collections c
+         LEFT JOIN apollo_collection_cache acc
+           ON acc.apollo_slug = lower(c.season) || '-' || replace(lower(c.raw_member_name), ' ', '') || '-' || lower(c.collection_no)
+         WHERE c.artist_id = ?`,
+      )
+        .bind(artistId)
+        .all<RawSpinCollectionRow>();
+      rawCols = res.results ?? [];
+    } catch {
+      const res = await env.DB.prepare(
+        `SELECT
+           c.slug,
+           c.collection_id,
+           c.artist_id,
+           c.member_id,
+           c.raw_member_name,
+           c.season,
+           c.objekt_class,
+           c.collection_no,
+           c.on_offline,
+           c.total_mints,
+           c.spun_count,
+           c.front_image_url,
+           NULL AS apollo_total_copies,
+           NULL AS apollo_median_price_usd,
+           NULL AS apollo_listing_count
+         FROM collections c
+         WHERE c.artist_id = ?`,
+      )
+        .bind(artistId)
+        .all<RawSpinCollectionRow>();
+      rawCols = res.results ?? [];
+    }
+
+    const availableSeasons = Array.from(
+      new Set(rawCols.map((c) => c.season).filter(Boolean)),
+    ).sort((a, b) => b.localeCompare(a));
+
+    const spinInputs: SpinCollectionInput[] = rawCols.map((c) => ({
+      slug: c.slug,
+      collectionId: c.collection_id,
+      artistId: c.artist_id,
+      memberId: c.member_id,
+      rawMemberName: c.raw_member_name,
+      season: c.season,
+      objektClass: c.objekt_class,
+      collectionNo: c.collection_no,
+      onOffline: c.on_offline,
+      totalMints: Number(c.total_mints ?? 0),
+      spunCount: Number(c.spun_count ?? 0),
+      frontImageUrl: c.front_image_url ?? null,
+      apolloTotalCopies:
+        c.apollo_total_copies !== null && c.apollo_total_copies !== undefined
+          ? Number(c.apollo_total_copies)
+          : null,
+      apolloMedianPriceUsd:
+        c.apollo_median_price_usd !== null &&
+        c.apollo_median_price_usd !== undefined
+          ? Number(c.apollo_median_price_usd)
+          : null,
+      apolloListingCount:
+        c.apollo_listing_count !== null && c.apollo_listing_count !== undefined
+          ? Number(c.apollo_listing_count)
+          : null,
+    }));
+
+    const memberInfos: SpinMemberInfo[] = memberList.map((m) => ({
+      id: m.id,
+      code: m.code,
+      memberOrder: m.memberOrder,
+      name: m.name,
+      fullName: m.fullName,
+      hexColor: m.hexColor,
+    }));
+
+    // Load verified on-chain paired spin outcomes if migration 0010 & sync-spins.sql have been applied
+    const [outcomeRow] = await db
+      .select()
+      .from(spinOutcomeStats)
+      .where(eq(spinOutcomeStats.artistId, artistId))
+      .limit(1)
+      .catch(() => []);
+
+    const pairedSummary: PairedSpinOutcomeSummary | null =
+      outcomeRow && outcomeRow.totalPairedSpins > 0
+        ? {
+            totalPairedSpins: Number(outcomeRow.totalPairedSpins),
+            blankCount: Number(outcomeRow.blankCount),
+            fcoCount: Number(outcomeRow.fcoCount),
+            scoCount: Number(outcomeRow.scoCount),
+            premierCount: Number(outcomeRow.premierCount),
+            otherCount: Number(outcomeRow.otherCount),
+            uniqueSpinners: Number(outcomeRow.uniqueSpinners),
+            sampleStartAt: outcomeRow.sampleStartAt ?? null,
+            sampleEndAt: outcomeRow.sampleEndAt ?? null,
+          }
+        : null;
+
+    const memberOutcomeRows = await db
+      .select()
+      .from(spinMemberOutcomeStats)
+      .where(eq(spinMemberOutcomeStats.artistId, artistId))
+      .catch(() => []);
+
+    const pairedMemberOutcomes: PairedMemberSpinOutcome[] =
+      memberOutcomeRows.map((r) => ({
+        memberId: r.memberId,
+        pairedSentCount: Number(r.pairedSentCount),
+        pairedPulledCount: Number(r.pairedPulledCount),
+        pairedBlankFromCount: Number(r.pairedBlankFromCount),
+        pairedRarePulledCount: Number(r.pairedRarePulledCount),
+      }));
+
+    const notableSpins = await db
+      .select()
+      .from(recentNotableSpins)
+      .where(eq(recentNotableSpins.artistId, artistId))
+      .orderBy(desc(recentNotableSpins.spunAt))
+      .limit(40)
+      .catch(() => []);
+
+    const analytics = computeSpinAnalytics({
+      artistId,
+      members: memberInfos,
+      collections: spinInputs,
+      seasonFilter,
+      pairedSummary,
+      pairedMemberOutcomes,
+    });
+
+    return {
+      artist: artist ?? null,
+      seasonFilter,
+      availableSeasons,
+      analytics,
+      notableSpins,
     };
   });

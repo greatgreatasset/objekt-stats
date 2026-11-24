@@ -27,6 +27,7 @@ build/
 *.db
 .cache/
 data/raw/
+data/apollo-*-cache.json
 packages/db/generated/
 
 # Logs

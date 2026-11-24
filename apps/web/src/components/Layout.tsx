@@ -3,9 +3,11 @@ import {
   ArrowLeftRight,
   BarChart3,
   Calendar,
+  CircleDollarSign,
   Compass,
   Layers,
   Receipt,
+  RefreshCw,
   Users,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -101,10 +103,24 @@ export function Layout({ children }: { children: ReactNode }) {
               label="Most Traded"
             />
             <NavLink
+              to="/spins"
+              search={artistQuery}
+              active={location.pathname === "/spins"}
+              icon={<RefreshCw className="h-3.5 w-3.5" />}
+              label="Spins"
+            />
+            <NavLink
               to="/wallet"
               active={location.pathname === "/wallet"}
               icon={<Receipt className="h-3.5 w-3.5" />}
               label="User Cost"
+            />
+            <NavLink
+              to="/earnings"
+              search={artistQuery}
+              active={location.pathname === "/earnings"}
+              icon={<CircleDollarSign className="h-3.5 w-3.5" />}
+              label="Earnings"
             />
             <NavLink
               to="/members"

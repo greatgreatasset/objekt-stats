@@ -34,9 +34,14 @@ import {
   DEFAULT_PRICING_CONFIG,
   DEFAULT_PRICING_RATES,
   analyzeWalletCost,
+  apolloCollectionUrl,
+  makeApolloDropKey,
   shortenAddress,
+  toApolloSlug,
   type ActivityCategory,
   type ActivityTokenItem,
+  type ApolloCollectionStats,
+  type ApolloDropProvenance,
   type PricingConfig,
   type PricingPresetId,
   type PricingRates,
@@ -96,6 +101,15 @@ interface LookupApiResponse {
   unresolvedTokenIds: number[];
   members: WalletMemberInfo[];
   curatedPrices: Record<string, number>;
+  apolloDrops?: Record<string, ApolloDropProvenance>;
+  apolloCollections?: Record<string, ApolloCollectionStats>;
+  error?: string;
+}
+
+interface ApolloEnrichApiResponse {
+  collections: Record<string, ApolloCollectionStats>;
+  newDrops: Record<string, ApolloDropProvenance>;
+  remainingSlugs: string[];
   error?: string;
 }
 
@@ -205,6 +219,12 @@ function WalletCostPage() {
   const [curatedPrices, setCuratedPrices] = useState<Map<string, number>>(
     () => new Map(),
   );
+  const [apolloDrops, setApolloDrops] = useState<
+    Map<string, ApolloDropProvenance>
+  >(() => new Map());
+  const [apolloCollections, setApolloCollections] = useState<
+    Map<string, ApolloCollectionStats>
+  >(() => new Map());
 
   // Interactive pricing configuration
   const [pricingConfig, setPricingConfig] = useState<PricingConfig>(() => ({
@@ -225,6 +245,78 @@ function WalletCostPage() {
   const activeRunIdRef = useRef(0);
   const resolvedTokensRef = useRef<Set<number>>(new Set());
   const inFlightMetaRef = useRef<Set<number>>(new Set());
+  const apolloEnrichedSlugsRef = useRef<Set<string>>(new Set());
+
+  const enrichApolloTargets = useCallback(
+    async (runId: number, metas: WalletTokenMetadata[]) => {
+      if (metas.length === 0) return;
+      const targets: Array<{
+        apolloSlug: string;
+        dropKey: string;
+        artistId: string;
+        season: string;
+        collectionNo: string;
+        objektClass: string;
+        onOffline: "online" | "offline";
+      }> = [];
+
+      for (const m of metas) {
+        if (!m.season || !m.memberName || !m.collectionNo) continue;
+        const apolloSlug = toApolloSlug(m.season, m.memberName, m.collectionNo);
+        if (apolloEnrichedSlugsRef.current.has(apolloSlug)) continue;
+        apolloEnrichedSlugsRef.current.add(apolloSlug);
+        targets.push({
+          apolloSlug,
+          dropKey: makeApolloDropKey(m.artistId, m.season, m.collectionNo),
+          artistId: m.artistId,
+          season: m.season,
+          collectionNo: m.collectionNo,
+          objektClass: m.objektClass,
+          onOffline: m.onOffline,
+        });
+        // Cap per-session live enrichment politely (cached collections already arrived on lookup)
+        if (apolloEnrichedSlugsRef.current.size >= 180) break;
+      }
+
+      if (targets.length === 0) return;
+
+      // Send sequentially in gentle chunks of 15 to be respectful to apollo.cafe
+      for (let i = 0; i < targets.length; i += 15) {
+        if (activeRunIdRef.current !== runId) return;
+        const chunk = targets.slice(i, i + 15);
+        try {
+          const res = await fetch("/api/wallet/apollo-enrich", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ targets: chunk }),
+          });
+          if (activeRunIdRef.current !== runId) return;
+          if (res.ok) {
+            const payload = (await res.json()) as ApolloEnrichApiResponse;
+            const colEntries = Object.entries(payload.collections ?? {});
+            if (colEntries.length > 0) {
+              setApolloCollections((prev) => {
+                const next = new Map(prev);
+                for (const [k, v] of colEntries) next.set(k, v);
+                return next;
+              });
+            }
+            const dropEntries = Object.entries(payload.newDrops ?? {});
+            if (dropEntries.length > 0) {
+              setApolloDrops((prev) => {
+                const next = new Map(prev);
+                for (const [k, v] of dropEntries) next.set(k, v);
+                return next;
+              });
+            }
+          }
+        } catch {
+          // Non-fatal: wallet works seamlessly with cached drop provenance
+        }
+      }
+    },
+    [],
+  );
 
   const resolveTokenQueue = useCallback(
     async (runId: number, candidateIds: number[]) => {
@@ -274,6 +366,7 @@ function WalletCostPage() {
                   for (const m of entries) next.set(m.tokenId, m);
                   return next;
                 });
+                void enrichApolloTargets(runId, entries);
               }
               setMetaProgress((prev) => ({
                 ...prev,
@@ -303,7 +396,7 @@ function WalletCostPage() {
         setMetaProgress((prev) => ({ ...prev, active: false }));
       }
     },
-    [],
+    [enrichApolloTargets],
   );
 
   const runSearch = useCallback(
@@ -314,6 +407,7 @@ function WalletCostPage() {
       const runId = ++activeRunIdRef.current;
       resolvedTokensRef.current = new Set();
       inFlightMetaRef.current = new Set();
+      apolloEnrichedSlugsRef.current = new Set();
 
       setLoadingLookup(true);
       setLookupError(null);
@@ -324,6 +418,7 @@ function WalletCostPage() {
       setAbstractLogs([]);
       setPolygonLogs([]);
       setPolygonLoaded(false);
+      setApolloCollections(new Map());
       setPolygonProgress({
         active: false,
         doneEras: 0,
@@ -364,6 +459,16 @@ function WalletCostPage() {
         setCuratedPrices(
           new Map(Object.entries(data.curatedPrices ?? {})),
         );
+        setApolloDrops(
+          new Map(Object.entries(data.apolloDrops ?? {})),
+        );
+        const initialApolloCols = new Map(
+          Object.entries(data.apolloCollections ?? {}),
+        );
+        setApolloCollections(initialApolloCols);
+        for (const slug of initialApolloCols.keys()) {
+          apolloEnrichedSlugsRef.current.add(slug);
+        }
 
         const initialMeta = new Map<number, WalletTokenMetadata>();
         for (const m of Object.values(data.metadata ?? {})) {
@@ -375,6 +480,11 @@ function WalletCostPage() {
         }
         setMetadataMap(initialMeta);
         setLoadingLookup(false);
+
+        // Politely enrich any uncached held/recent collections with Apollo supply & priceStats in background
+        if (initialMeta.size > 0) {
+          void enrichApolloTargets(runId, Array.from(initialMeta.values()));
+        }
 
         // Kick off progressive token resolution for Abstract + cached Polygon tokens immediately
         const initialUnresolved = data.unresolvedTokenIds ?? [];
@@ -436,6 +546,7 @@ function WalletCostPage() {
                       for (const m of foundMeta) next.set(m.tokenId, m);
                       return next;
                     });
+                    void enrichApolloTargets(runId, foundMeta);
                   }
                   for (const mid of eraData.missingTokenIds ?? []) {
                     resolvedTokensRef.current.add(mid);
@@ -499,7 +610,7 @@ function WalletCostPage() {
         setLoadingLookup(false);
       }
     },
-    [resolveTokenQueue],
+    [resolveTokenQueue, enrichApolloTargets],
   );
 
   // Automatically execute lookup whenever URL ?q=... changes
@@ -550,6 +661,8 @@ function WalletCostPage() {
       polygonLoaded,
       config: pricingConfig,
       curatedPriceBySlug: curatedPrices,
+      apolloDropByKey: apolloDrops,
+      apolloCollectionBySlug: apolloCollections,
     });
   }, [
     identity,
@@ -561,6 +674,8 @@ function WalletCostPage() {
     polygonLoaded,
     pricingConfig,
     curatedPrices,
+    apolloDrops,
+    apolloCollections,
   ]);
 
   const filteredActivities = useMemo(() => {
@@ -1038,6 +1153,31 @@ function WalletCostPage() {
                     COSMO Talk: {analysis.summary.detectedSubscriptionTier} ·{" "}
                     {analysis.summary.subscriptionMonths} mo
                     {analysis.summary.subscriptionMonths === 1 ? "" : "s"}
+                  </span>
+                </span>
+              )}
+              {analysis.summary.apolloFreeRewardsCount > 0 && (
+                <span
+                  title="Free promotional, voting, set-completion bonus, and event perk drops identified via Apollo provenance and priced at $0.00"
+                  className="inline-flex items-center gap-1 rounded-md border border-emerald-500/35 bg-emerald-500/10 px-2 py-0.5 text-emerald-300"
+                >
+                  <Gift className="h-3 w-3" />
+                  <span>
+                    {analysis.summary.apolloFreeRewardsCount.toLocaleString()} Apollo free event
+                    {analysis.summary.apolloFreeRewardsCount === 1 ? "" : "s"} ($0)
+                  </span>
+                </span>
+              )}
+              {analysis.summary.marketPricedHeldCount > 0 && (
+                <span
+                  title={`Sum of Apollo secondary-market median listing prices across ${analysis.summary.marketPricedHeldCount} of ${analysis.summary.currentlyHeld} currently held Objekts that have active market listings`}
+                  className="inline-flex items-center gap-1 rounded-md border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-amber-200"
+                >
+                  <Coins className="h-3 w-3" />
+                  <span>
+                    Market Value (priced {analysis.summary.marketPricedHeldCount}/
+                    {analysis.summary.currentlyHeld} held):{" "}
+                    {formatUsd(analysis.summary.estimatedMarketValueUsd)}
                   </span>
                 </span>
               )}
@@ -2319,6 +2459,38 @@ function ActivityRow({
             </div>
           </div>
 
+          {activity.apolloDescription && (
+            <div className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2 text-xs">
+              <div className="space-y-0.5 min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10px]">
+                  <span className="text-sky-300 font-semibold">
+                    {activity.apolloEventName ?? "Release Provenance"}
+                  </span>
+                  {activity.apolloEventType && (
+                    <span className="rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.2 uppercase text-zinc-400">
+                      {activity.apolloEventType}
+                    </span>
+                  )}
+                  <span className="text-zinc-500">via apollo.cafe</span>
+                </div>
+                <p className="text-zinc-300 leading-relaxed">
+                  {activity.apolloDescription}
+                </p>
+              </div>
+              {activity.apolloTwitterUrl && (
+                <a
+                  href={activity.apolloTwitterUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-mono text-[10px] text-sky-400 hover:text-sky-300 shrink-0"
+                >
+                  Announcement
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </div>
+          )}
+
           {activity.category === "trade_swap" || activity.category === "spin" ? (
             <div className="grid gap-3 md:grid-cols-2">
               <TokenSubList
@@ -2382,6 +2554,11 @@ function TokenSubList({
 }
 
 function TokenMiniCard({ item }: { item: ActivityTokenItem }) {
+  const hasApolloHref = Boolean(item.season && item.memberName && item.collectionNo);
+  const apolloHref = hasApolloHref
+    ? apolloCollectionUrl(item.season, item.memberName, item.collectionNo)
+    : null;
+
   return (
     <div className="flex items-center justify-between gap-2.5 rounded-lg border border-zinc-800/70 bg-zinc-950/70 p-2 text-xs">
       <div className="flex items-center gap-2.5 min-w-0">
@@ -2399,18 +2576,45 @@ function TokenMiniCard({ item }: { item: ActivityTokenItem }) {
           />
         )}
         <div className="min-w-0">
-          <p className="font-medium text-zinc-100 truncate">
-            {item.collectionId}
-          </p>
+          {apolloHref ? (
+            <a
+              href={apolloHref}
+              target="_blank"
+              rel="noreferrer"
+              title={item.apolloDescription ?? `View ${item.collectionId} on apollo.cafe`}
+              className="font-medium text-zinc-100 hover:text-sky-300 truncate block"
+            >
+              {item.collectionId}
+            </a>
+          ) : (
+            <p className="font-medium text-zinc-100 truncate">
+              {item.collectionId}
+            </p>
+          )}
           <p className="font-mono text-[10px] text-zinc-500 truncate">
             #{item.tokenId} · {item.objektClass}{" "}
             {item.onOffline === "offline" ? "(Physical)" : "(Digital)"}
+            {item.apolloTotalCopies
+              ? ` · ${item.apolloTotalCopies.toLocaleString()} copies (${item.apolloTransferablePct?.toFixed(0) ?? "?"}% tradeable)`
+              : ""}
           </p>
         </div>
       </div>
-      <span className="font-mono text-[11px] text-zinc-300 tabular-nums shrink-0">
-        {formatUsd(item.estimatedUsd)}
-      </span>
+      <div className="text-right font-mono tabular-nums shrink-0">
+        <span className="text-[11px] text-zinc-300 block">
+          {formatUsd(item.estimatedUsd)}
+        </span>
+        {item.apolloMedianPriceUsd !== null &&
+          item.apolloMedianPriceUsd !== undefined &&
+          item.apolloMedianPriceUsd > 0 && (
+            <span
+              title={`Apollo secondary market median (${item.apolloListingCount ?? 0} listings)`}
+              className="text-[10px] text-amber-300/90 block"
+            >
+              mkt {formatUsd(item.apolloMedianPriceUsd)}
+            </span>
+          )}
+      </div>
     </div>
   );
 }

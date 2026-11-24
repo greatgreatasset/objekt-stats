@@ -46,16 +46,25 @@ export const Route = createFileRoute("/api/health")({
           .from(recentTrades)
           .catch(() => [{ count: 0 }]);
         const chains = await db.select().from(syncState);
+        const now = new Date();
+        const absChain = chains.find((c) => c.chain === "abstract");
+        const absTsMs = absChain?.lastIndexedTimestamp
+          ? Date.parse(absChain.lastIndexedTimestamp)
+          : NaN;
+        const abstractLagMinutes = Number.isNaN(absTsMs)
+          ? null
+          : Math.max(0, Math.round((now.getTime() - absTsMs) / 60_000));
 
         return Response.json({
           status: "ok",
           service: "objekt-stats",
           domain: "objektstats.com",
-          timestamp: new Date().toISOString(),
+          timestamp: now.toISOString(),
           liveSync: {
-            cronSchedule: "*/5 * * * *",
-            maxTokensPerTick: Number(env.SYNC_MAX_TOKENS || "35"),
+            cronSchedule: "* * * * *",
+            maxTokensPerTick: Number(env.SYNC_MAX_TOKENS || "400"),
             liveMintsDedupeTracked: Number(liveDedupeRow?.count ?? 0),
+            abstractLagMinutes,
           },
           counts: {
             artists: Number(artistRow?.count ?? 0),

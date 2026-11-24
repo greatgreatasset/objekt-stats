@@ -134,6 +134,12 @@ export const saleRounds = sqliteTable(
       .notNull()
       .default(false),
     notes: text("notes"),
+    apolloEventSlug: text("apollo_event_slug"),
+    apolloEventName: text("apollo_event_name"),
+    apolloEventType: text("apollo_event_type"),
+    apolloEraName: text("apollo_era_name"),
+    apolloTwitterUrl: text("apollo_twitter_url"),
+    apolloDescription: text("apollo_description"),
   },
   (t) => [
     index("idx_sale_rounds_artist_start").on(t.artistId, t.startAt),
@@ -461,6 +467,148 @@ export const walletPolygonCache = sqliteTable("wallet_polygon_cache", {
   cachedAt: text("cached_at").notNull(),
 });
 
+/**
+ * Drop-level release provenance & classification sourced from Apollo (https://apollo.cafe).
+ * Keyed by normalized drop key (`artistId|seasonLower|collectionNoUpper`), shared across
+ * all members of a drop so 1 polite Apollo lookup covers up to 24 member collections.
+ */
+export const apolloDropMetadata = sqliteTable(
+  "apollo_drop_metadata",
+  {
+    dropKey: text("drop_key").primaryKey(),
+    sampleApolloSlug: text("sample_apollo_slug").notNull(),
+    artistId: text("artist_id").notNull(),
+    season: text("season").notNull(),
+    collectionNo: text("collection_no").notNull(),
+    description: text("description"),
+    eventSlug: text("event_slug"),
+    eventName: text("event_name"),
+    eventType: text("event_type"),
+    eventDescription: text("event_description"),
+    twitterUrl: text("twitter_url"),
+    eraSlug: text("era_slug"),
+    eraName: text("era_name"),
+    eraImageUrl: text("era_image_url"),
+    provenanceClass: text("provenance_class").notNull().default("unknown"),
+    passBillingMonth: text("pass_billing_month"),
+    passBillingLabel: text("pass_billing_label"),
+    isFreeDistribution: integer("is_free_distribution", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    fetchedAt: text("fetched_at").notNull(),
+  },
+  (t) => [
+    index("idx_adm_artist_class").on(t.artistId, t.provenanceClass),
+    index("idx_adm_event_slug").on(t.eventSlug),
+  ],
+);
+
+/**
+ * Per-member collection supply (total + transferable), provenance, and secondary
+ * market price stats cached from Apollo (https://apollo.cafe).
+ */
+export const apolloCollectionCache = sqliteTable(
+  "apollo_collection_cache",
+  {
+    apolloSlug: text("apollo_slug").primaryKey(),
+    dropKey: text("drop_key").notNull(),
+    totalCopies: integer("total_copies").notNull().default(0),
+    transferableCopies: integer("transferable_copies").notNull().default(0),
+    transferablePct: real("transferable_pct").notNull().default(0),
+    unobtainable: integer("unobtainable", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    description: text("description"),
+    eventSlug: text("event_slug"),
+    eventName: text("event_name"),
+    eventType: text("event_type"),
+    eventDescription: text("event_description"),
+    twitterUrl: text("twitter_url"),
+    eraSlug: text("era_slug"),
+    eraName: text("era_name"),
+    eraImageUrl: text("era_image_url"),
+    medianPriceUsd: real("median_price_usd"),
+    minPriceUsd: real("min_price_usd"),
+    maxPriceUsd: real("max_price_usd"),
+    listingCount: integer("listing_count"),
+    priceUpdatedAt: text("price_updated_at"),
+    fetchedAt: text("fetched_at").notNull(),
+  },
+  (t) => [index("idx_acc_drop_key").on(t.dropKey)],
+);
+
+/**
+ * Verified on-chain COSMO Spin outcome statistics paired from `Transfer(wallet -> SPIN)`
+ * and subsequent `Transfer(0x0 -> wallet)` reward mints (blank/nothing vs FCO vs SCO vs Premier).
+ */
+export const spinOutcomeStats = sqliteTable("spin_outcome_stats", {
+  artistId: text("artist_id")
+    .primaryKey()
+    .references(() => artists.id, { onDelete: "cascade" }),
+  totalPairedSpins: integer("total_paired_spins").notNull().default(0),
+  blankCount: integer("blank_count").notNull().default(0),
+  fcoCount: integer("fco_count").notNull().default(0),
+  scoCount: integer("sco_count").notNull().default(0),
+  premierCount: integer("premier_count").notNull().default(0),
+  otherCount: integer("other_count").notNull().default(0),
+  uniqueSpinners: integer("unique_spinners").notNull().default(0),
+  sampleStartAt: text("sample_start_at"),
+  sampleEndAt: text("sample_end_at"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const spinMemberOutcomeStats = sqliteTable(
+  "spin_member_outcome_stats",
+  {
+    memberId: text("member_id")
+      .primaryKey()
+      .references(() => members.id, { onDelete: "cascade" }),
+    artistId: text("artist_id")
+      .notNull()
+      .references(() => artists.id, { onDelete: "cascade" }),
+    pairedSentCount: integer("paired_sent_count").notNull().default(0),
+    pairedPulledCount: integer("paired_pulled_count").notNull().default(0),
+    pairedBlankFromCount: integer("paired_blank_from_count").notNull().default(0),
+    pairedRarePulledCount: integer("paired_rare_pulled_count").notNull().default(0),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("idx_smos_artist").on(t.artistId)],
+);
+
+export const recentNotableSpins = sqliteTable(
+  "recent_notable_spins",
+  {
+    spinKey: text("spin_key").primaryKey(), // txHash:logIndex
+    artistId: text("artist_id")
+      .notNull()
+      .references(() => artists.id, { onDelete: "cascade" }),
+    chain: text("chain").notNull(), // "abstract" | "polygon"
+    spunAt: text("spun_at").notNull(),
+    walletShort: text("wallet_short").notNull(),
+    inputTokenId: integer("input_token_id").notNull(),
+    inputCollectionId: text("input_collection_id").notNull(),
+    inputMemberName: text("input_member_name").notNull(),
+    inputClass: text("input_class").notNull(),
+    inputSeason: text("input_season").notNull(),
+    inputCollectionNo: text("input_collection_no").notNull(),
+    inputImageUrl: text("input_image_url"),
+    inputSupply: integer("input_supply"),
+    outcomeKind: text("outcome_kind").notNull(), // "blank" | "fco" | "sco" | "premier" | "other"
+    outputTokenId: integer("output_token_id"),
+    outputCollectionId: text("output_collection_id"),
+    outputMemberName: text("output_member_name"),
+    outputClass: text("output_class"),
+    outputSeason: text("output_season"),
+    outputCollectionNo: text("output_collection_no"),
+    outputImageUrl: text("output_image_url"),
+    delaySeconds: integer("delay_seconds"),
+  },
+  (t) => [
+    index("idx_rns_artist_time").on(t.artistId, t.spunAt),
+    index("idx_rns_artist_outcome").on(t.artistId, t.outcomeKind),
+  ],
+);
+
 export type ArtistRow = typeof artists.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
@@ -473,3 +621,8 @@ export type DailyTradeStatRow = typeof dailyTradeStats.$inferSelect;
 export type RecentTradeRow = typeof recentTrades.$inferSelect;
 export type TokenMetadataCacheRow = typeof tokenMetadataCache.$inferSelect;
 export type WalletPolygonCacheRow = typeof walletPolygonCache.$inferSelect;
+export type ApolloDropMetadataRow = typeof apolloDropMetadata.$inferSelect;
+export type ApolloCollectionCacheRow = typeof apolloCollectionCache.$inferSelect;
+export type SpinOutcomeStatRow = typeof spinOutcomeStats.$inferSelect;
+export type SpinMemberOutcomeStatRow = typeof spinMemberOutcomeStats.$inferSelect;
+export type RecentNotableSpinRow = typeof recentNotableSpins.$inferSelect;

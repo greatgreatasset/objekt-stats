@@ -9,7 +9,10 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "cli": "tsx src/cli.ts"
+    "cli": "tsx src/cli.ts",
+    "enrich:apollo": "tsx src/enrich-apollo.ts",
+    "enrich:apollo:full": "tsx src/enrich-apollo-full.ts",
+    "sync:spins": "tsx src/sync-spin-outcomes.ts"
   },
   "dependencies": {
     "@objekt-stats/db": "*",

@@ -11,8 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ArtmsRouteImport } from './routes/artms'
+import { Route as EarningsRouteImport } from './routes/earnings'
 import { Route as EventsRouteImport } from './routes/events'
 import { Route as MethodologyRouteImport } from './routes/methodology'
+import { Route as SpinsRouteImport } from './routes/spins'
 import { Route as TradesRouteImport } from './routes/trades'
 import { Route as WalletRouteImport } from './routes/wallet'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
@@ -20,6 +22,7 @@ import { Route as MembersIndexRouteImport } from './routes/members/index'
 import { Route as MembersMemberIdRouteImport } from './routes/members/$memberId'
 import { Route as RoundsIndexRouteImport } from './routes/rounds/index'
 import { Route as RoundsSlugRouteImport } from './routes/rounds/$slug'
+import { Route as ApiWalletApolloEnrichRouteImport } from './routes/api/wallet/apollo-enrich'
 import { Route as ApiWalletLookupRouteImport } from './routes/api/wallet/lookup'
 import { Route as ApiWalletPolygonRouteImport } from './routes/api/wallet/polygon'
 import { Route as ApiWalletResolveTokensRouteImport } from './routes/api/wallet/resolve-tokens'
@@ -34,6 +37,11 @@ const ArtmsRoute = ArtmsRouteImport.update({
   path: '/artms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const EarningsRoute = EarningsRouteImport.update({
+  id: '/earnings',
+  path: '/earnings',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const EventsRoute = EventsRouteImport.update({
   id: '/events',
   path: '/events',
@@ -42,6 +50,11 @@ const EventsRoute = EventsRouteImport.update({
 const MethodologyRoute = MethodologyRouteImport.update({
   id: '/methodology',
   path: '/methodology',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SpinsRoute = SpinsRouteImport.update({
+  id: '/spins',
+  path: '/spins',
   getParentRoute: () => rootRouteImport,
 } as any)
 const TradesRoute = TradesRouteImport.update({
@@ -79,6 +92,11 @@ const RoundsSlugRoute = RoundsSlugRouteImport.update({
   path: '/rounds/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiWalletApolloEnrichRoute = ApiWalletApolloEnrichRouteImport.update({
+  id: '/api/wallet/apollo-enrich',
+  path: '/api/wallet/apollo-enrich',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiWalletLookupRoute = ApiWalletLookupRouteImport.update({
   id: '/api/wallet/lookup',
   path: '/api/wallet/lookup',
@@ -98,8 +116,10 @@ const ApiWalletResolveTokensRoute = ApiWalletResolveTokensRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/artms': typeof ArtmsRoute
+  '/earnings': typeof EarningsRoute
   '/events': typeof EventsRoute
   '/methodology': typeof MethodologyRoute
+  '/spins': typeof SpinsRoute
   '/trades': typeof TradesRoute
   '/wallet': typeof WalletRoute
   '/api/health': typeof ApiHealthRoute
@@ -107,6 +127,7 @@ export interface FileRoutesByFullPath {
   '/rounds/$slug': typeof RoundsSlugRoute
   '/members/': typeof MembersIndexRoute
   '/rounds/': typeof RoundsIndexRoute
+  '/api/wallet/apollo-enrich': typeof ApiWalletApolloEnrichRoute
   '/api/wallet/lookup': typeof ApiWalletLookupRoute
   '/api/wallet/polygon': typeof ApiWalletPolygonRoute
   '/api/wallet/resolve-tokens': typeof ApiWalletResolveTokensRoute
@@ -114,8 +135,10 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/artms': typeof ArtmsRoute
+  '/earnings': typeof EarningsRoute
   '/events': typeof EventsRoute
   '/methodology': typeof MethodologyRoute
+  '/spins': typeof SpinsRoute
   '/trades': typeof TradesRoute
   '/wallet': typeof WalletRoute
   '/api/health': typeof ApiHealthRoute
@@ -123,6 +146,7 @@ export interface FileRoutesByTo {
   '/rounds/$slug': typeof RoundsSlugRoute
   '/members': typeof MembersIndexRoute
   '/rounds': typeof RoundsIndexRoute
+  '/api/wallet/apollo-enrich': typeof ApiWalletApolloEnrichRoute
   '/api/wallet/lookup': typeof ApiWalletLookupRoute
   '/api/wallet/polygon': typeof ApiWalletPolygonRoute
   '/api/wallet/resolve-tokens': typeof ApiWalletResolveTokensRoute
@@ -131,8 +155,10 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/artms': typeof ArtmsRoute
+  '/earnings': typeof EarningsRoute
   '/events': typeof EventsRoute
   '/methodology': typeof MethodologyRoute
+  '/spins': typeof SpinsRoute
   '/trades': typeof TradesRoute
   '/wallet': typeof WalletRoute
   '/api/health': typeof ApiHealthRoute
@@ -140,6 +166,7 @@ export interface FileRoutesById {
   '/rounds/$slug': typeof RoundsSlugRoute
   '/members/': typeof MembersIndexRoute
   '/rounds/': typeof RoundsIndexRoute
+  '/api/wallet/apollo-enrich': typeof ApiWalletApolloEnrichRoute
   '/api/wallet/lookup': typeof ApiWalletLookupRoute
   '/api/wallet/polygon': typeof ApiWalletPolygonRoute
   '/api/wallet/resolve-tokens': typeof ApiWalletResolveTokensRoute
@@ -149,8 +176,10 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/artms'
+    | '/earnings'
     | '/events'
     | '/methodology'
+    | '/spins'
     | '/trades'
     | '/wallet'
     | '/api/health'
@@ -158,6 +187,7 @@ export interface FileRouteTypes {
     | '/rounds/$slug'
     | '/members/'
     | '/rounds/'
+    | '/api/wallet/apollo-enrich'
     | '/api/wallet/lookup'
     | '/api/wallet/polygon'
     | '/api/wallet/resolve-tokens'
@@ -165,8 +195,10 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/artms'
+    | '/earnings'
     | '/events'
     | '/methodology'
+    | '/spins'
     | '/trades'
     | '/wallet'
     | '/api/health'
@@ -174,6 +206,7 @@ export interface FileRouteTypes {
     | '/rounds/$slug'
     | '/members'
     | '/rounds'
+    | '/api/wallet/apollo-enrich'
     | '/api/wallet/lookup'
     | '/api/wallet/polygon'
     | '/api/wallet/resolve-tokens'
@@ -181,8 +214,10 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/artms'
+    | '/earnings'
     | '/events'
     | '/methodology'
+    | '/spins'
     | '/trades'
     | '/wallet'
     | '/api/health'
@@ -190,6 +225,7 @@ export interface FileRouteTypes {
     | '/rounds/$slug'
     | '/members/'
     | '/rounds/'
+    | '/api/wallet/apollo-enrich'
     | '/api/wallet/lookup'
     | '/api/wallet/polygon'
     | '/api/wallet/resolve-tokens'
@@ -198,8 +234,10 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ArtmsRoute: typeof ArtmsRoute
+  EarningsRoute: typeof EarningsRoute
   EventsRoute: typeof EventsRoute
   MethodologyRoute: typeof MethodologyRoute
+  SpinsRoute: typeof SpinsRoute
   TradesRoute: typeof TradesRoute
   WalletRoute: typeof WalletRoute
   ApiHealthRoute: typeof ApiHealthRoute
@@ -207,6 +245,7 @@ export interface RootRouteChildren {
   RoundsSlugRoute: typeof RoundsSlugRoute
   MembersIndexRoute: typeof MembersIndexRoute
   RoundsIndexRoute: typeof RoundsIndexRoute
+  ApiWalletApolloEnrichRoute: typeof ApiWalletApolloEnrichRoute
   ApiWalletLookupRoute: typeof ApiWalletLookupRoute
   ApiWalletPolygonRoute: typeof ApiWalletPolygonRoute
   ApiWalletResolveTokensRoute: typeof ApiWalletResolveTokensRoute
@@ -228,6 +267,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ArtmsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/earnings': {
+      id: '/earnings'
+      path: '/earnings'
+      fullPath: '/earnings'
+      preLoaderRoute: typeof EarningsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/events': {
       id: '/events'
       path: '/events'
@@ -240,6 +286,13 @@ declare module '@tanstack/react-router' {
       path: '/methodology'
       fullPath: '/methodology'
       preLoaderRoute: typeof MethodologyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/spins': {
+      id: '/spins'
+      path: '/spins'
+      fullPath: '/spins'
+      preLoaderRoute: typeof SpinsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/trades': {
@@ -291,6 +344,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RoundsSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/wallet/apollo-enrich': {
+      id: '/api/wallet/apollo-enrich'
+      path: '/api/wallet/apollo-enrich'
+      fullPath: '/api/wallet/apollo-enrich'
+      preLoaderRoute: typeof ApiWalletApolloEnrichRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/wallet/lookup': {
       id: '/api/wallet/lookup'
       path: '/api/wallet/lookup'
@@ -318,8 +378,10 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ArtmsRoute: ArtmsRoute,
+  EarningsRoute: EarningsRoute,
   EventsRoute: EventsRoute,
   MethodologyRoute: MethodologyRoute,
+  SpinsRoute: SpinsRoute,
   TradesRoute: TradesRoute,
   WalletRoute: WalletRoute,
   ApiHealthRoute: ApiHealthRoute,
@@ -327,6 +389,7 @@ const rootRouteChildren: RootRouteChildren = {
   RoundsSlugRoute: RoundsSlugRoute,
   MembersIndexRoute: MembersIndexRoute,
   RoundsIndexRoute: RoundsIndexRoute,
+  ApiWalletApolloEnrichRoute: ApiWalletApolloEnrichRoute,
   ApiWalletLookupRoute: ApiWalletLookupRoute,
   ApiWalletPolygonRoute: ApiWalletPolygonRoute,
   ApiWalletResolveTokensRoute: ApiWalletResolveTokensRoute,

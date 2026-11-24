@@ -592,4 +592,172 @@ describe("analyzeWalletCost", () => {
     expect(res.activities.filter((a) => a.isGridReward)).toHaveLength(2);
     expect(res.memberBreakdown.find((m) => m.memberName === "YooYeon")?.gridsCompleted).toBe(1);
   });
+
+  it("uses Apollo provenance to auto-detect unseen Pass+ drops, price free promotional/bonus DCOs at $0, and compute market value", () => {
+    const logs: WalletTransferLog[] = [
+      // 1. Free promotional 1st-win gift (Atom02 320Z)
+      {
+        chain: "abstract",
+        txHash: "0xwin1",
+        logIndex: 0,
+        blockNumber: 12_000_000,
+        timestamp: "2025-05-22T09:00:00Z",
+        from: ZERO_ADDRESS,
+        to: USER_ABS,
+        tokenId: 12_000_001,
+      },
+      // 2. Unlisted future Pass+ drop (2 members -> 2-Member Pass+ = $9.19, NOT in KNOWN_COSMO_TALK_PASS_COLLECTIONS!)
+      {
+        chain: "abstract",
+        txHash: "0xpass_nov",
+        logIndex: 0,
+        blockNumber: 92_000_000,
+        timestamp: "2026-12-15T08:00:00Z",
+        from: ZERO_ADDRESS,
+        to: USER_ABS,
+        tokenId: 35_000_001,
+      },
+      {
+        chain: "abstract",
+        txHash: "0xpass_nov",
+        logIndex: 1,
+        blockNumber: 92_000_000,
+        timestamp: "2026-12-15T08:00:00Z",
+        from: ZERO_ADDRESS,
+        to: USER_ABS,
+        tokenId: 35_000_002,
+      },
+    ];
+
+    const meta = new Map<number, WalletTokenMetadata>([
+      [
+        12_000_001,
+        mkMeta(12_000_001, {
+          season: "Atom02",
+          objektClass: "Double",
+          collectionNo: "320Z",
+          memberName: "Lynn",
+        }),
+      ],
+      [
+        35_000_001,
+        mkMeta(35_000_001, {
+          season: "Cream02",
+          objektClass: "Double",
+          collectionNo: "399Z",
+          memberName: "YooYeon",
+        }),
+      ],
+      [
+        35_000_002,
+        mkMeta(35_000_002, {
+          season: "Cream02",
+          objektClass: "Double",
+          collectionNo: "399Z",
+          memberName: "NaKyoung",
+        }),
+      ],
+    ]);
+
+    const apolloDrops = new Map([
+      [
+        "triples|atom02|320Z",
+        {
+          dropKey: "triples|atom02|320Z",
+          sampleApolloSlug: "atom02-lynn-320z",
+          artistId: "triples",
+          season: "Atom02",
+          collectionNo: "320Z",
+          description:
+            "Gifted on May 22, 2025 to everyone who participated in THE SHOW Pre-voting or Live Voting.",
+          eventSlug: "triples-are-you-alive-1st-win",
+          eventName: "Are You Alive 1st Win",
+          eventType: "promotional",
+          eventDescription: null,
+          twitterUrl: "https://x.com/triplescosmos/status/1924797263680835893",
+          eraSlug: "assemble25",
+          eraName: "<ASSEMBLE25>",
+          eraImageUrl: null,
+          provenanceClass: "free_reward" as const,
+          passBillingMonth: null,
+          passBillingLabel: null,
+          isFreeDistribution: true,
+        },
+      ],
+      [
+        "triples|cream02|399Z",
+        {
+          dropKey: "triples|cream02|399Z",
+          sampleApolloSlug: "cream02-yooyeon-399z",
+          artistId: "triples",
+          season: "Cream02",
+          collectionNo: "399Z",
+          description: "Gifted to tripleS Pass+ subscribers for November 2026.",
+          eventSlug: "triples-pass-november-2026",
+          eventName: "tripleS Pass+ November 2026",
+          eventType: "merch",
+          eventDescription: "Part of the tripleS Pass+ subscription",
+          twitterUrl: null,
+          eraSlug: "lovepop-pt2",
+          eraName: "<LOVE&POP> pt.2",
+          eraImageUrl: null,
+          provenanceClass: "pass_plus" as const,
+          passBillingMonth: "2026-11",
+          passBillingLabel: "Nov 2026 tripleS Pass+",
+          isFreeDistribution: false,
+        },
+      ],
+    ]);
+
+    const apolloCols = new Map([
+      [
+        "atom02-lynn-320z",
+        {
+          apolloSlug: "atom02-lynn-320z",
+          dropKey: "triples|atom02|320Z",
+          totalCopies: 527,
+          transferableCopies: 281,
+          transferablePct: 53.32,
+          unobtainable: false,
+          description: "Gifted on May 22, 2025...",
+          eventSlug: "triples-are-you-alive-1st-win",
+          eventName: "Are You Alive 1st Win",
+          eventType: "promotional",
+          eventDescription: null,
+          twitterUrl: null,
+          eraSlug: "assemble25",
+          eraName: "<ASSEMBLE25>",
+          eraImageUrl: null,
+          medianPriceUsd: 9.13,
+          minPriceUsd: 5.5,
+          maxPriceUsd: 12.76,
+          listingCount: 2,
+          priceUpdatedAt: "2026-11-23T16:00:00Z",
+        },
+      ],
+    ]);
+
+    const res = analyzeWalletCost({
+      userAddresses: [USER_ABS],
+      logs,
+      metadataByTokenId: meta,
+      polygonLoaded: true,
+      apolloDropByKey: apolloDrops,
+      apolloCollectionBySlug: apolloCols,
+    });
+
+    expect(res.summary.paidDigitalMints).toBe(0);
+    expect(res.summary.digitalShopUsd).toBe(0);
+    expect(res.summary.freeRewards).toBe(1);
+    expect(res.summary.apolloFreeRewardsCount).toBe(1);
+    expect(res.summary.subscriptionMonths).toBe(1);
+    expect(res.summary.subscriptionsUsd).toBe(9.19);
+    expect(res.subscriptions[0]?.billingLabel).toBe("Nov 2026 tripleS Pass+");
+    expect(res.subscriptions[0]?.isInferred).toBe(false);
+    expect(res.summary.estimatedMarketValueUsd).toBe(9.13);
+    expect(res.summary.marketPricedHeldCount).toBe(1);
+    expect(res.activities.find((a) => a.category === "free_reward")?.apolloEventName).toBe(
+      "Are You Alive 1st Win",
+    );
+  });
 });

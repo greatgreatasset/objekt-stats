@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { env } from "cloudflare:workers";
+import { toApolloSlug } from "@objekt-stats/stats";
 import {
   POLYGON_ERAS,
   createWalletDb,
@@ -10,6 +11,10 @@ import {
   readCachedTokenMetadata,
   resolveCosmoIdentity,
 } from "../../../lib/server/wallet-service";
+import {
+  loadAllApolloDrops,
+  readCachedApolloCollections,
+} from "../../../lib/server/apollo-service";
 
 export const Route = createFileRoute("/api/wallet/lookup")({
   server: {
@@ -38,9 +43,10 @@ export const Route = createFileRoute("/api/wallet/lookup")({
           const db = createWalletDb(env.DB);
           const abstractRpc = env.ABSTRACT_RPC_URL || "https://api.mainnet.abs.xyz";
 
-          const [abstractResult, refData] = await Promise.all([
+          const [abstractResult, refData, apolloDrops] = await Promise.all([
             fetchAbstractWalletLogs(identity.address, abstractRpc),
             loadWalletReferenceData(db),
+            loadAllApolloDrops(db),
           ]);
 
           // Auto-discover pre-migration Polygon legacy address via ownerOf(migratedTokenId)
@@ -76,6 +82,19 @@ export const Route = createFileRoute("/api/wallet/lookup")({
             Array.from(tokenIdSet),
           );
 
+          // Pre-read any already-cached per-collection Apollo supply & priceStats from D1 (0 external calls)
+          const knownApolloSlugs = Array.from(
+            new Set(
+              Object.values(metaCache.found).map((m) =>
+                toApolloSlug(m.season, m.memberName, m.collectionNo),
+              ),
+            ),
+          );
+          const apolloColsCache =
+            knownApolloSlugs.length > 0
+              ? await readCachedApolloCollections(db, knownApolloSlugs)
+              : { found: {}, staleOrMissingSlugs: [] };
+
           return Response.json({
             identity,
             abstract: {
@@ -98,6 +117,8 @@ export const Route = createFileRoute("/api/wallet/lookup")({
             unresolvedTokenIds: metaCache.uncachedIds,
             members: refData.members,
             curatedPrices: refData.curatedPrices,
+            apolloDrops,
+            apolloCollections: apolloColsCache.found,
           });
         } catch (err) {
           const message =

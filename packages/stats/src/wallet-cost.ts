@@ -1,3 +1,9 @@
+import {
+  makeApolloDropKey,
+  toApolloSlug,
+  type ApolloCollectionStats,
+  type ApolloDropProvenance,
+} from "./apollo.js";
 import { classifyGridRewardSco, type GridEditionId } from "./grids.js";
 import {
   COSMO_SPIN_ADDRESS,
@@ -190,6 +196,7 @@ export type ActivityCategory =
 export interface ActivityTokenItem {
   tokenId: number;
   slug: string | null;
+  apolloSlug: string | null;
   collectionId: string;
   artistId: string;
   memberName: string;
@@ -204,6 +211,14 @@ export interface ActivityTokenItem {
   highUsd: number;
   pricingBasis: string;
   isResolved: boolean;
+  apolloEventName?: string | null;
+  apolloEventType?: string | null;
+  apolloDescription?: string | null;
+  apolloTotalCopies?: number | null;
+  apolloTransferableCopies?: number | null;
+  apolloTransferablePct?: number | null;
+  apolloMedianPriceUsd?: number | null;
+  apolloListingCount?: number | null;
 }
 
 export interface WalletActivityItem {
@@ -233,6 +248,11 @@ export interface WalletActivityItem {
   isGridReward?: boolean;
   gridEditionLabel?: string;
   gridFcosLocked?: number;
+  // Apollo (apollo.cafe) provenance metadata
+  apolloEventName?: string | null;
+  apolloEventType?: string | null;
+  apolloDescription?: string | null;
+  apolloTwitterUrl?: string | null;
 }
 
 export interface MonthlySpendPoint {
@@ -369,6 +389,11 @@ export interface WalletCostSummary {
   abstractLogCount: number;
   firstActivityAt: string | null;
   lastActivityAt: string | null;
+  // Apollo-powered enrichment metrics
+  apolloFreeRewardsCount: number;
+  estimatedMarketValueUsd: number;
+  marketPricedHeldCount: number;
+  marketValuedCoveragePct: number;
 }
 
 export interface WalletCostAnalysis {
@@ -389,6 +414,8 @@ export interface AnalyzeWalletCostInput {
   polygonLoaded: boolean;
   config?: Partial<PricingConfig>;
   curatedPriceBySlug?: ReadonlyMap<string, number>;
+  apolloDropByKey?: ReadonlyMap<string, ApolloDropProvenance>;
+  apolloCollectionBySlug?: ReadonlyMap<string, ApolloCollectionStats>;
 }
 
 function round2(n: number): number {
@@ -446,12 +473,14 @@ export function estimateMintUnitPrice(
   txBatchSize: number,
   config: PricingConfig,
   curatedPrice?: number,
+  apolloDrop?: ApolloDropProvenance | null,
 ): {
   category: "shop_mint" | "physical_scan" | "free_reward";
   usd: number;
   lowUsd: number;
   highUsd: number;
   basis: string;
+  isApolloFree?: boolean;
 } {
   const { rates, preset } = config;
 
@@ -494,8 +523,9 @@ export function estimateMintUnitPrice(
         : cls === "double"
           ? rates.physicalDcoOma
           : rates.physicalOther;
-    const label =
-      cls === "first"
+    const label = apolloDrop?.eventName
+      ? `Physical QR · ${apolloDrop.eventName}`
+      : cls === "first"
         ? "Physical FCO QR pack est."
         : cls === "double"
           ? "Physical DCO / OMA album est."
@@ -512,6 +542,21 @@ export function estimateMintUnitPrice(
   // Online paid digital Objekt
   const cls = meta.objektClass.toLowerCase();
   const isPreWebShop = mintedAtIso < WEB_SHOP_LAUNCH_ISO;
+
+  // Apollo-verified free promotional / voting / completion-bonus / tour-perk digital drops
+  if (apolloDrop?.provenanceClass === "free_reward") {
+    const eventLabel = apolloDrop.eventName
+      ? `Free Event Reward · ${apolloDrop.eventName}`
+      : "Free Event Reward (Apollo)";
+    return {
+      category: "free_reward",
+      usd: 0,
+      lowUsd: 0,
+      highUsd: 0,
+      basis: eventLabel,
+      isApolloFree: true,
+    };
+  }
 
   // Curated exact round price override if explicitly set to 0 (known free event drop)
   if (curatedPrice === 0) {
@@ -593,12 +638,19 @@ export function estimateMintUnitPrice(
     }
   }
 
+  const basisWithEvent =
+    apolloDrop?.provenanceClass === "dual_distribution" && apolloDrop.eventName
+      ? `${basis} · ${apolloDrop.eventName} (Fanclub / Shop)`
+      : apolloDrop?.eventName && cls !== "first"
+        ? `${basis} · ${apolloDrop.eventName}`
+        : basis;
+
   return {
     category: "shop_mint",
     usd,
     lowUsd: low,
     highUsd: high,
-    basis,
+    basis: basisWithEvent,
   };
 }
 
@@ -626,10 +678,16 @@ function buildTokenItem(
   lowUsd: number,
   highUsd: number,
   pricingBasis: string,
+  apolloDrop?: ApolloDropProvenance | null,
+  apolloCol?: ApolloCollectionStats | null,
 ): ActivityTokenItem {
+  const apolloSlug = meta
+    ? toApolloSlug(meta.season, meta.memberName, meta.collectionNo)
+    : null;
   return {
     tokenId,
     slug: meta?.slug ?? null,
+    apolloSlug,
     collectionId: meta?.collectionId ?? `Objekt #${tokenId}`,
     artistId: meta?.artistId ?? "unknown",
     memberName: meta?.memberName ?? "Resolving...",
@@ -644,6 +702,16 @@ function buildTokenItem(
     highUsd: round2(highUsd),
     pricingBasis,
     isResolved: meta !== null,
+    apolloEventName: apolloCol?.eventName ?? apolloDrop?.eventName ?? null,
+    apolloEventType: apolloCol?.eventType ?? apolloDrop?.eventType ?? null,
+    apolloDescription: apolloCol?.description ?? apolloDrop?.description ?? null,
+    apolloTotalCopies: apolloCol && apolloCol.totalCopies > 0 ? apolloCol.totalCopies : null,
+    apolloTransferableCopies:
+      apolloCol && apolloCol.totalCopies > 0 ? apolloCol.transferableCopies : null,
+    apolloTransferablePct:
+      apolloCol && apolloCol.totalCopies > 0 ? apolloCol.transferablePct : null,
+    apolloMedianPriceUsd: apolloCol?.medianPriceUsd ?? null,
+    apolloListingCount: apolloCol?.listingCount ?? null,
   };
 }
 
@@ -818,6 +886,44 @@ export function analyzeWalletCost(
   const userSet = new Set(input.userAddresses.map((a) => a.toLowerCase()));
   const metaMap = input.metadataByTokenId;
   const curatedPrices = input.curatedPriceBySlug ?? new Map<string, number>();
+  const apolloDrops = input.apolloDropByKey ?? new Map<string, ApolloDropProvenance>();
+  const apolloCols = input.apolloCollectionBySlug ?? new Map<string, ApolloCollectionStats>();
+
+  const lookupApolloForMeta = (
+    meta: WalletTokenMetadata | null,
+  ): {
+    drop: ApolloDropProvenance | null;
+    col: ApolloCollectionStats | null;
+  } => {
+    if (!meta) return { drop: null, col: null };
+    const dropKey = makeApolloDropKey(meta.artistId, meta.season, meta.collectionNo);
+    const apolloSlug = toApolloSlug(meta.season, meta.memberName, meta.collectionNo);
+    return {
+      drop: apolloDrops.get(dropKey) ?? null,
+      col: apolloCols.get(apolloSlug) ?? null,
+    };
+  };
+
+  const makeItem = (
+    tokenId: number,
+    meta: WalletTokenMetadata | null,
+    estimatedUsd: number,
+    lowUsd: number,
+    highUsd: number,
+    pricingBasis: string,
+  ): ActivityTokenItem => {
+    const { drop, col } = lookupApolloForMeta(meta);
+    return buildTokenItem(
+      tokenId,
+      meta,
+      estimatedUsd,
+      lowUsd,
+      highUsd,
+      pricingBasis,
+      drop,
+      col,
+    );
+  };
 
   // 1. Deduplicate and sort chronologically (Polygon era before Abstract era)
   const dedupeKeys = new Set<string>();
@@ -1031,6 +1137,9 @@ export function analyzeWalletCost(
   let p2pSentCount = 0;
   let burnedCount = 0;
   let migratedCount = 0;
+  let apolloFreeRewardsCount = 0;
+  let estimatedMarketValueUsd = 0;
+  let marketPricedHeldCount = 0;
 
   const monthlyMap = new Map<string, MonthlySpendPoint>();
   const classMap = new Map<string, ClassBreakdownRow>();
@@ -1206,10 +1315,21 @@ export function analyzeWalletCost(
     }
   };
 
-  // Count currently held per member and artist (plus held digital SCOs for monthly COMO)
+  // Count currently held per member and artist (plus held digital SCOs & Apollo market valuation)
   for (const tid of heldTokens) {
     const meta = metaMap.get(tid);
     if (!meta) continue;
+    const { col: heldApollo } = lookupApolloForMeta(meta);
+    if (
+      heldApollo &&
+      heldApollo.medianPriceUsd !== null &&
+      heldApollo.medianPriceUsd > 0
+    ) {
+      estimatedMarketValueUsd = round2(
+        estimatedMarketValueUsd + heldApollo.medianPriceUsd,
+      );
+      marketPricedHeldCount++;
+    }
     if (
       meta.objektClass.toLowerCase() === "special" &&
       meta.onOffline === "online"
@@ -1278,7 +1398,7 @@ export function analyzeWalletCost(
       const meta = metaMap.get(leg.tokenId) ?? null;
       const refUsd = estimateRetailReferenceUsd(meta, config.rates);
       retailGave += refUsd;
-      return buildTokenItem(leg.tokenId, meta, 0, 0, 0, "Traded out");
+      return makeItem(leg.tokenId, meta, 0, 0, 0, "Traded out");
     });
 
     const receivedItems = recvLegs.map((leg) => {
@@ -1286,7 +1406,7 @@ export function analyzeWalletCost(
       const refUsd = estimateRetailReferenceUsd(meta, config.rates);
       retailRecv += refUsd;
       recordClassAndArtist(meta, "trade_in", 0, 0, 0);
-      return buildTokenItem(leg.tokenId, meta, 0, 0, 0, "Traded in");
+      return makeItem(leg.tokenId, meta, 0, 0, 0, "Traded in");
     });
 
     getMonth(tr.completedAt).tradeCount++;
@@ -1323,7 +1443,7 @@ export function analyzeWalletCost(
     const outKey = `${outLog.chain}:${outLog.txHash}:${outLog.logIndex}`;
     const pairedMint = spinOutKeyToMintLog.get(outKey) ?? null;
     const outMeta = metaMap.get(outLog.tokenId) ?? null;
-    const gaveItem = buildTokenItem(
+    const gaveItem = makeItem(
       outLog.tokenId,
       outMeta,
       0,
@@ -1338,7 +1458,7 @@ export function analyzeWalletCost(
       const inMeta = metaMap.get(pairedMint.tokenId) ?? null;
       recordClassAndArtist(inMeta, "free_or_spin", 0, 0, 0);
       receivedItems.push(
-        buildTokenItem(
+        makeItem(
           pairedMint.tokenId,
           inMeta,
           0,
@@ -1384,6 +1504,8 @@ export function analyzeWalletCost(
       logs: WalletTransferLog[];
       members: Set<string>;
       curated: CuratedTalkPassCollection | null;
+      apolloDrop: ApolloDropProvenance | null;
+      isApolloPassPlus: boolean;
     }
   >();
 
@@ -1400,9 +1522,11 @@ export function analyzeWalletCost(
 
     const colKey = `${meta.artistId.toLowerCase()}|${meta.season.toLowerCase()}|${meta.collectionNo.toUpperCase()}`;
     const curated = KNOWN_TALK_PASS_BY_KEY.get(colKey) ?? null;
+    const apolloDrop = apolloDrops.get(colKey) ?? null;
+    const isApolloPassPlus = apolloDrop?.provenanceClass === "pass_plus";
 
-    // Only track known Pass+ collections OR future post-Nov 2026 online DCOs for heuristic All-Member detection
-    if (!curated && l.timestamp < "2026-12-01T00:00:00Z") continue;
+    // Track known Pass+ collections, Apollo-verified Pass+ drops, OR future post-Nov 2026 online DCOs
+    if (!curated && !isApolloPassPlus && l.timestamp < "2026-12-01T00:00:00Z") continue;
 
     let grp = talkCandidateGroups.get(colKey);
     if (!grp) {
@@ -1413,6 +1537,8 @@ export function analyzeWalletCost(
         logs: [],
         members: new Set(),
         curated,
+        apolloDrop,
+        isApolloPassPlus,
       };
       talkCandidateGroups.set(colKey, grp);
     }
@@ -1426,8 +1552,8 @@ export function analyzeWalletCost(
     let isTalkPass = false;
     let isInferred = false;
 
-    if (grp.curated) {
-      // Verified Pass+ collection: matches 1, 2, 4, 8, and 24-member tiers
+    if (grp.curated || grp.isApolloPassPlus) {
+      // Verified Pass+ collection (curated or Apollo-confirmed): matches 1, 2, 4, 8, and 24-member tiers
       isTalkPass = grp.logs.length > 0;
     } else {
       // Future-proof heuristic for unseen post-Nov 2026 All-Member Pass+ distributions:
@@ -1471,6 +1597,8 @@ export function analyzeWalletCost(
     const firstLog = grp.logs[0]!;
     const billingLabel =
       grp.curated?.label ??
+      grp.apolloDrop?.passBillingLabel ??
+      grp.apolloDrop?.eventName ??
       `${firstLog.timestamp.slice(0, 7)} ${formatArtistLabel(grp.artistId)} Pass+ (Inferred)`;
     const perCardShare = grp.logs.length > 0 ? tier.usd / grp.logs.length : tier.usd;
     const perCardLow = grp.logs.length > 0 ? tier.lowUsd / grp.logs.length : tier.lowUsd;
@@ -1495,7 +1623,7 @@ export function analyzeWalletCost(
         perCardLow,
         perCardHigh,
       );
-      return buildTokenItem(
+      return makeItem(
         l.tokenId,
         meta,
         config.includeSubscriptions ? perCardShare : 0,
@@ -1535,8 +1663,12 @@ export function analyzeWalletCost(
       cashCostUsd: round2(effectiveSubUsd),
       lowUsd: config.includeSubscriptions ? tier.lowUsd : 0,
       highUsd: config.includeSubscriptions ? tier.highUsd : 0,
-      pricingBasis: `${tier.tierLabel} monthly subscription (${isInferred ? "inferred from 24-member drop" : "verified Pass+ drop"})`,
+      pricingBasis: `${tier.tierLabel} monthly subscription (${isInferred ? "inferred from 24-member drop" : grp.isApolloPassPlus && !grp.curated ? "Apollo-verified Pass+ drop" : "verified Pass+ drop"})`,
       items: passItems,
+      apolloEventName: grp.apolloDrop?.eventName ?? null,
+      apolloEventType: grp.apolloDrop?.eventType ?? null,
+      apolloDescription: grp.apolloDrop?.description ?? null,
+      apolloTwitterUrl: grp.apolloDrop?.twitterUrl ?? null,
     });
   }
 
@@ -1557,6 +1689,10 @@ export function analyzeWalletCost(
     isGridReward: boolean;
     gridEditionLabel: string | null;
     gridFcosLocked: number;
+    apolloEventName: string | null;
+    apolloEventType: string | null;
+    apolloDescription: string | null;
+    apolloTwitterUrl: string | null;
   }
 
   const mintBuckets = new Map<string, MintTxBucket>();
@@ -1583,15 +1719,17 @@ export function analyzeWalletCost(
       const meta = metaMap.get(l.tokenId) ?? null;
       const txBatchSize = mintCountByTx.get(`${l.chain}:${l.txHash}`) ?? 1;
       const curated = meta ? curatedPrices.get(meta.slug) : undefined;
+      const { drop: apolloDrop } = lookupApolloForMeta(meta);
       const est = estimateMintUnitPrice(
         meta,
         l.timestamp,
         txBatchSize,
         config,
         curated,
+        apolloDrop,
       );
 
-      const item = buildTokenItem(
+      const item = makeItem(
         l.tokenId,
         meta,
         est.usd,
@@ -1631,6 +1769,7 @@ export function analyzeWalletCost(
         recordClassAndArtist(meta, "physical", est.usd, est.lowUsd, est.highUsd);
       } else {
         freeRewards++;
+        if (est.isApolloFree) apolloFreeRewardsCount++;
         recordClassAndArtist(meta, "free_or_spin", 0, 0, 0);
 
         if (gridInfo && meta) {
@@ -1697,8 +1836,17 @@ export function analyzeWalletCost(
           isGridReward: gridInfo !== null,
           gridEditionLabel: gridInfo?.editionLabel ?? null,
           gridFcosLocked: 0,
+          apolloEventName: apolloDrop?.eventName ?? null,
+          apolloEventType: apolloDrop?.eventType ?? null,
+          apolloDescription: apolloDrop?.description ?? null,
+          apolloTwitterUrl: apolloDrop?.twitterUrl ?? null,
         };
         mintBuckets.set(bucketKey, bucket);
+      } else if (!bucket.apolloEventName && apolloDrop?.eventName) {
+        bucket.apolloEventName = apolloDrop.eventName;
+        bucket.apolloEventType = apolloDrop.eventType ?? null;
+        bucket.apolloDescription = apolloDrop.description ?? null;
+        bucket.apolloTwitterUrl = apolloDrop.twitterUrl ?? null;
       }
       bucket.items.push(item);
       bucket.totalUsd = round2(bucket.totalUsd + est.usd);
@@ -1717,7 +1865,7 @@ export function analyzeWalletCost(
     ) {
       burnedCount++;
       const meta = metaMap.get(l.tokenId) ?? null;
-      const item = buildTokenItem(l.tokenId, meta, 0, 0, 0, "Burned");
+      const item = makeItem(l.tokenId, meta, 0, 0, 0, "Burned");
       activities.push({
         id: `burn:${logKey}`,
         category: "burn",
@@ -1753,7 +1901,7 @@ export function analyzeWalletCost(
       }
       recordClassAndArtist(meta, "p2p_in", otcRate, otcLow, otcHigh);
 
-      const item = buildTokenItem(
+      const item = makeItem(
         l.tokenId,
         meta,
         otcRate,
@@ -1788,7 +1936,7 @@ export function analyzeWalletCost(
     if (userSet.has(l.from)) {
       p2pSentCount++;
       const meta = metaMap.get(l.tokenId) ?? null;
-      const item = buildTokenItem(
+      const item = makeItem(
         l.tokenId,
         meta,
         0,
@@ -1892,6 +2040,10 @@ export function analyzeWalletCost(
       isGridReward: bucket.isGridReward || undefined,
       gridEditionLabel: bucket.gridEditionLabel ?? undefined,
       gridFcosLocked: bucket.gridFcosLocked > 0 ? bucket.gridFcosLocked : undefined,
+      apolloEventName: bucket.apolloEventName,
+      apolloEventType: bucket.apolloEventType,
+      apolloDescription: bucket.apolloDescription,
+      apolloTwitterUrl: bucket.apolloTwitterUrl,
     });
   }
 
@@ -1925,11 +2077,14 @@ export function analyzeWalletCost(
         : "Migrated from Polygon (load Polygon history for exact origin)";
 
       if (!input.polygonLoaded && config.includeUnverifiedMigrations && !polygonSeenTokens.has(ml.tokenId)) {
+        const { drop: migApollo } = lookupApolloForMeta(meta);
         const est = estimateMintUnitPrice(
           meta,
           "2024-06-01T00:00:00Z", // Conservative Polygon-era date
           1,
           config,
+          undefined,
+          migApollo,
         );
         if (est.category === "shop_mint" || (est.category === "physical_scan" && config.includePhysicalScans)) {
           uUsd = est.usd;
@@ -1941,7 +2096,7 @@ export function analyzeWalletCost(
           basis = `Unverified pre-migration est. (${est.basis})`;
         }
       }
-      migItems.push(buildTokenItem(ml.tokenId, meta, uUsd, uLow, uHigh, basis));
+      migItems.push(makeItem(ml.tokenId, meta, uUsd, uLow, uHigh, basis));
     }
 
     unverifiedMigrationUsd = unverifiedSum;
@@ -2112,6 +2267,13 @@ export function analyzeWalletCost(
       abstractLogCount,
       firstActivityAt,
       lastActivityAt,
+      apolloFreeRewardsCount,
+      estimatedMarketValueUsd: round2(estimatedMarketValueUsd),
+      marketPricedHeldCount,
+      marketValuedCoveragePct:
+        heldTokens.size > 0
+          ? round2((marketPricedHeldCount / heldTokens.size) * 100)
+          : 0,
     },
     subscriptions,
     gridBreakdown,

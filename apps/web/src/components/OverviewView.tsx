@@ -125,6 +125,7 @@ export interface OverviewData {
     lastIndexedTimestamp: string | null;
     totalTokensIndexed: number;
   }>;
+  abstractLagMinutes?: number | null;
   totals: {
     roundCount: number;
     popularityRoundCount: number;
@@ -198,7 +199,22 @@ export function OverviewView({
                 {isArtms ? "ARTMS Secondary Tracker" : "tripleS Primary Tracker"}
               </span>
               <span className="text-zinc-600">•</span>
-              <span className="text-emerald-400">Live Cron Sync Active</span>
+              {data.abstractLagMinutes !== null &&
+              data.abstractLagMinutes !== undefined &&
+              data.abstractLagMinutes >= 30 ? (
+                <span
+                  className="text-amber-300"
+                  title="Live cron sync is catching up on a high-volume drop backlog"
+                >
+                  Catching up (
+                  {data.abstractLagMinutes >= 60
+                    ? `${(data.abstractLagMinutes / 60).toFixed(1)}h`
+                    : `${data.abstractLagMinutes}m`}{" "}
+                  behind)
+                </span>
+              ) : (
+                <span className="text-emerald-400">Live Cron Sync Active</span>
+              )}
               {data.syncState.length > 0 && (
                 <>
                   <span className="text-zinc-600">•</span>
@@ -284,27 +300,27 @@ export function OverviewView({
       {/* Live Popularity Leaderboard Preview + Recent Sale Rounds */}
       {rankedMembers.length > 0 ? (
         <section className="grid gap-6 lg:grid-cols-5">
-          <div className="lg:col-span-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h2 className="text-base font-semibold text-white flex items-center gap-2">
-                  <Trophy className="h-4 w-4 text-amber-400" />
+          <div className="lg:col-span-3 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 sm:p-6 space-y-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Trophy className="h-5 w-5 text-amber-400" />
                   Demand Index Leaderboard
                 </h2>
-                <p className="text-xs text-zinc-400">
+                <p className="text-sm text-zinc-300 leading-snug">
                   {boardMetric === "buyers"
-                    ? `Ranked by Unique Purchasers Relative Index across major paid rounds (≥${isArtms ? 50 : 150} unique buyers; 1.00× = average).`
-                    : `Ranked by Total Mints Relative Index across major paid rounds (≥${isArtms ? 50 : 150} unique buyers; 1.00× = average).`}
+                    ? `Ranked by Unique Buyers Index across major paid rounds (≥${isArtms ? 50 : 150} buyers · 1.00× = round average).`
+                    : `Ranked by Paid-Round Mints Index across major paid rounds (≥${isArtms ? 50 : 150} buyers · 1.00× = round average).`}
                 </p>
               </div>
-              <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-950 p-0.5 text-xs">
+              <div className="inline-flex rounded-xl border border-zinc-800 bg-zinc-950 p-1 text-xs sm:text-sm shrink-0">
                 <button
                   type="button"
                   onClick={() => setBoardMetric("buyers")}
-                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                  className={`rounded-lg px-3 py-1.5 font-medium transition ${
                     boardMetric === "buyers"
                       ? "bg-white text-zinc-950"
-                      : "text-zinc-400 hover:text-zinc-200"
+                      : "text-zinc-300 hover:text-white"
                   }`}
                 >
                   Unique Buyers
@@ -312,14 +328,35 @@ export function OverviewView({
                 <button
                   type="button"
                   onClick={() => setBoardMetric("mints")}
-                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                  className={`rounded-lg px-3 py-1.5 font-medium transition ${
                     boardMetric === "mints"
                       ? "bg-white text-zinc-950"
-                      : "text-zinc-400 hover:text-zinc-200"
+                      : "text-zinc-300 hover:text-white"
                   }`}
                 >
                   Total Mints
                 </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between border-b border-zinc-800/80 px-3.5 pb-2 text-xs font-medium text-zinc-400">
+              <span>Member</span>
+              <div className="flex items-center gap-3 sm:gap-5">
+                <span className="w-24 text-right">
+                  {boardMetric === "buyers" ? "Round Buyers" : "Paid Mints"}
+                </span>
+                <span
+                  className="hidden sm:inline-block w-24 text-right"
+                  title="Average number of Objekts minted per unique buyer in a paid round"
+                >
+                  Avg / Buyer
+                </span>
+                <span
+                  className="w-16 text-right"
+                  title="Relative demand vs. the round average (1.00× = exact average)"
+                >
+                  Index
+                </span>
               </div>
             </div>
 
@@ -330,46 +367,62 @@ export function OverviewView({
                     ? (m.stats?.avgBuyersRelativeIndex ?? 1)
                     : (m.stats?.avgRelativeIndex ?? 1);
                 const widthPct = Math.max(8, Math.min(100, (rel / maxRelIdx) * 100));
+                const avgTickPct = Math.min(100, (1 / maxRelIdx) * 100);
                 return (
                   <Link
                     key={m.id}
                     to="/members/$memberId"
                     params={{ memberId: m.id }}
-                    className="group block space-y-1 rounded-lg p-1.5 transition hover:bg-zinc-900/80"
+                    className="group block space-y-2 rounded-xl border border-zinc-800/60 bg-zinc-950/50 px-3.5 py-2.5 transition hover:border-zinc-700 hover:bg-zinc-900/80"
                   >
-                    <div className="flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="w-5 font-mono text-zinc-500">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className={`w-6 font-mono text-sm font-semibold shrink-0 ${
+                            i === 0
+                              ? "text-amber-400"
+                              : i < 3
+                                ? "text-zinc-200"
+                                : "text-zinc-400"
+                          }`}
+                        >
                           #{i + 1}
                         </span>
                         <span
-                          className="h-2.5 w-2.5 rounded-full"
+                          className="h-3 w-3 rounded-full shrink-0"
                           style={{ backgroundColor: m.hexColor }}
                         />
-                        <span className="font-semibold text-zinc-100 group-hover:text-white">
+                        <span className="text-sm sm:text-base font-semibold text-white group-hover:text-sky-200 truncate">
                           {m.name}
                         </span>
-                        <span className="font-mono text-[10px] text-zinc-500">
+                        <span className="rounded bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 font-mono text-xs text-zinc-300 shrink-0">
                           {m.code}
                         </span>
                       </div>
-                      <div className="flex items-center gap-3 font-mono tabular-nums">
-                        <span className="text-zinc-400">
+                      <div className="flex items-center gap-3 sm:gap-5 font-mono tabular-nums shrink-0">
+                        <span className="w-24 text-right text-xs sm:text-sm font-medium text-zinc-200">
                           {boardMetric === "buyers"
-                            ? `${(m.stats?.totalUniqueBuyers ?? 0).toLocaleString()} buyers`
-                            : `${(m.stats?.totalMints ?? 0).toLocaleString()} mints`}
+                            ? `${(m.stats?.totalUniqueBuyers ?? 0).toLocaleString()}`
+                            : `${(m.stats?.totalMints ?? 0).toLocaleString()}`}
                         </span>
-                        {m.stats?.avgMintsPerBuyer && (
-                          <span className="hidden sm:inline text-[11px] text-zinc-500">
-                            {m.stats.avgMintsPerBuyer.toFixed(1)}/w
+                        {m.stats?.avgMintsPerBuyer ? (
+                          <span
+                            title={`Buyers mint an average of ${m.stats.avgMintsPerBuyer.toFixed(2)} ${m.name} Objekts per paid round`}
+                            className="hidden sm:inline-block w-24 text-right text-xs text-zinc-300"
+                          >
+                            {m.stats.avgMintsPerBuyer.toFixed(1)} / buyer
+                          </span>
+                        ) : (
+                          <span className="hidden sm:inline-block w-24 text-right text-xs text-zinc-600">
+                            —
                           </span>
                         )}
-                        <span className="w-12 text-right font-semibold text-white">
+                        <span className="w-16 text-right text-sm sm:text-base font-bold text-white">
                           {rel.toFixed(2)}×
                         </span>
                       </div>
                     </div>
-                    <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-950">
+                    <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-zinc-900">
                       <div
                         className="h-full rounded-full transition-all"
                         style={{
@@ -377,33 +430,44 @@ export function OverviewView({
                           backgroundColor: m.hexColor,
                         }}
                       />
+                      <div
+                        className="pointer-events-none absolute inset-y-0 w-px bg-zinc-400/40"
+                        style={{ left: `${avgTickPct}%` }}
+                        title="1.00× round average"
+                      />
                     </div>
                   </Link>
                 );
               })}
             </div>
+
+            <p className="text-xs leading-relaxed text-zinc-400">
+              {boardMetric === "buyers"
+                ? "Round Buyers sums distinct purchasing wallets across major paid digital rounds (a fan buying in multiple rounds counts once per round). Avg / Buyer shows average Objekts minted per wallet in a round."
+                : "Paid Mints sums on-chain mints across major paid digital drops (excludes physical QR scans, Welcome 100Z, and Special grid rewards, and includes cards later burned via COSMO Spin)."}
+            </p>
           </div>
 
-          <div className="lg:col-span-2 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-4">
-            <div className="flex items-end justify-between">
-              <div>
-                <h2 className="text-base font-semibold text-white">
+          <div className="lg:col-span-2 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 sm:p-6 space-y-4">
+            <div className="flex items-end justify-between gap-2">
+              <div className="space-y-0.5">
+                <h2 className="text-lg font-semibold text-white">
                   Paid Sale Rounds
                 </h2>
-                <p className="text-xs text-zinc-400">
+                <p className="text-sm text-zinc-300">
                   Click any round to compare Unique Buyers vs. Total Mints.
                 </p>
               </div>
               <Link
                 to="/rounds"
                 search={searchParam}
-                className="text-xs font-medium text-zinc-400 hover:text-white"
+                className="text-xs font-medium text-sky-300 hover:text-sky-200 shrink-0"
               >
                 All rounds →
               </Link>
             </div>
 
-            <div className="space-y-2.5">
+            <div className="space-y-3">
               {displayRounds.map((r) => {
                 const topBuyerMember = r.topSellerByBuyers
                   ? memberById.get(r.topSellerByBuyers.memberId)
@@ -415,44 +479,71 @@ export function OverviewView({
                   boardMetric === "buyers"
                     ? topBuyerMember ?? topMintMember
                     : topMintMember;
+                const leaderBuyerPct =
+                  r.topSellerByBuyers &&
+                  r.uniqueBuyers > 0 &&
+                  r.uniqueBuyers >= r.topSellerByBuyers.uniqueBuyers
+                    ? (r.topSellerByBuyers.uniqueBuyers / r.uniqueBuyers) * 100
+                    : null;
                 return (
                   <Link
                     key={r.slug}
                     to="/rounds/$slug"
                     params={{ slug: r.slug }}
-                    className="block rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3.5 transition hover:border-zinc-600 hover:bg-zinc-900/70"
+                    className="block rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-4 transition hover:border-zinc-600 hover:bg-zinc-900/70"
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold text-white">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm sm:text-base font-semibold text-white truncate">
                           {r.title}
                         </p>
-                        <p className="font-mono text-[11px] text-zinc-500">
-                          {r.startAt.slice(0, 10)} •{" "}
-                          {r.uniqueBuyers.toLocaleString()} buyers •{" "}
-                          {r.totalMints.toLocaleString()} mints
+                        <p className="mt-1 font-mono text-xs text-zinc-400 tabular-nums">
+                          {r.startAt.slice(0, 10)} • {r.participatingMembers}{" "}
+                          members • {r.totalMints.toLocaleString()} mints
+                        </p>
+                      </div>
+                      <div
+                        className="shrink-0 rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 text-right"
+                        title={`${r.uniqueBuyers.toLocaleString()} total unique buyers across all ${r.participatingMembers} members in this round`}
+                      >
+                        <p className="font-mono text-sm font-bold leading-tight text-white tabular-nums">
+                          {r.uniqueBuyers.toLocaleString()}
+                        </p>
+                        <p className="font-mono text-[11px] leading-tight text-sky-300">
+                          unique buyers
                         </p>
                       </div>
                     </div>
                     {leader && (
-                      <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-400">
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="text-amber-400 font-mono">
-                            #1 {boardMetric === "buyers" ? "Buyers" : "Mints"}
+                      <div className="mt-3 flex items-center justify-between gap-2 border-t border-zinc-800/70 pt-2.5 text-xs text-zinc-300">
+                        <span className="inline-flex items-center gap-1.5 min-w-0">
+                          <span className="text-amber-400 font-mono font-medium shrink-0">
+                            #1 {boardMetric === "buyers" ? "Member" : "Mints"}
                           </span>
                           <span
-                            className="h-2 w-2 rounded-full"
+                            className="h-2.5 w-2.5 rounded-full shrink-0"
                             style={{ backgroundColor: leader.hexColor }}
                           />
-                          <span className="text-zinc-200 font-medium">
+                          <span className="text-white font-medium truncate">
                             {leader.name}
                           </span>
                         </span>
-                        <span className="font-mono tabular-nums">
+                        <span
+                          className="font-mono tabular-nums text-zinc-200 shrink-0"
+                          title={
+                            boardMetric === "buyers" && r.topSellerByBuyers
+                              ? `${leader.name} was bought by ${r.topSellerByBuyers.uniqueBuyers.toLocaleString()} of ${r.uniqueBuyers.toLocaleString()} total unique buyers in this round`
+                              : undefined
+                          }
+                        >
                           {boardMetric === "buyers" && r.topSellerByBuyers
-                            ? `${r.topSellerByBuyers.uniqueBuyers.toLocaleString()} wallets`
+                            ? `${r.topSellerByBuyers.uniqueBuyers.toLocaleString()} buyers${
+                                leaderBuyerPct !== null
+                                  ? ` (${leaderBuyerPct.toFixed(1)}%)`
+                                  : ""
+                              }`
                             : r.topSeller
-                              ? `${r.topSeller.mintCount.toLocaleString()} (${r.topSeller.sharePct.toFixed(1)}%)`
+                              ? `${r.topSeller.mintCount.toLocaleString()} mints (${r.topSeller.sharePct.toFixed(1)}%)`
                               : ""}
                         </span>
                       </div>

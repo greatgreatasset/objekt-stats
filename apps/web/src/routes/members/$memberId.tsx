@@ -1,6 +1,13 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { AlertTriangle, ArrowLeft, LayoutGrid } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowUpRight,
+  CircleDollarSign,
+  LayoutGrid,
+} from "lucide-react";
 import { useState } from "react";
+import { apolloCollectionUrl } from "@objekt-stats/stats";
 import { getMemberDetail } from "../../lib/server/queries";
 
 export const Route = createFileRoute("/members/$memberId")({
@@ -57,6 +64,7 @@ function MemberDetailPage() {
     collections,
     events,
     gridSummary,
+    memberEarnings,
   } = data;
   const minBuyers = member.artistId === "artms" ? 50 : 150;
   const popHistory = [...roundHistory]
@@ -162,6 +170,125 @@ function MemberDetailPage() {
         </section>
       </div>
 
+      {/* Estimated Objekt Earnings Snapshot */}
+      {memberEarnings && (
+        <section className="rounded-2xl border border-emerald-500/25 bg-gradient-to-br from-emerald-500/[0.06] via-zinc-900/50 to-zinc-900/40 p-5 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <CircleDollarSign className="h-4 w-4 text-emerald-400" />
+                Estimated Digital Objekt Earnings (
+                {memberEarnings.selectedSeasons.join(" + ")})
+              </h2>
+              <p className="text-xs text-zinc-400">
+                100%-indexed on-chain seasons
+                {memberEarnings.spanDays
+                  ? ` (${memberEarnings.spanDays}d window)`
+                  : ""}{" "}
+                · Ranked{" "}
+                <strong className="text-zinc-200">
+                  #{memberEarnings.rankInGroup}/{memberEarnings.groupMemberCount}
+                </strong>{" "}
+                ({memberEarnings.shareOfGroupPct.toFixed(1)}% of group ·{" "}
+                {memberEarnings.relativeToAvg.toFixed(2)}× avg). Modhaus&apos;s
+                exact contract split is private — shown across 20% / 30% / 50%
+                of post-fee net revenue.
+              </p>
+            </div>
+            <Link
+              to="/earnings"
+              search={member.artistId === "artms" ? { artist: "artms" } : {}}
+              className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/20"
+            >
+              Customize Split
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3.5 space-y-1">
+              <div className="text-[11px] text-zinc-400">Est. Gross Sales</div>
+              <div className="font-mono text-lg font-bold text-white tabular-nums">
+                ${Math.round(memberEarnings.totalGrossUsd).toLocaleString()}
+              </div>
+              <div className="font-mono text-[10px] text-zinc-500">
+                Net after ~{memberEarnings.effectiveFeePct.toFixed(1)}% fees: $
+                {Math.round(memberEarnings.netRevenueUsd).toLocaleString()}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3.5 space-y-1">
+              <div className="text-[11px] text-zinc-400">At 20% Net Split</div>
+              <div className="font-mono text-lg font-bold text-zinc-100 tabular-nums">
+                ${memberEarnings.earningsAt20Usd.toLocaleString()}
+              </div>
+              <div className="font-mono text-[10px] text-zinc-500">
+                Conservative (80/20)
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-emerald-500/35 bg-emerald-500/10 p-3.5 space-y-1">
+              <div className="text-[11px] text-emerald-200/90">
+                At 30% Net Split
+              </div>
+              <div className="font-mono text-lg font-bold text-emerald-300 tabular-nums">
+                ${memberEarnings.earningsAt30Usd.toLocaleString()}
+              </div>
+              <div className="font-mono text-[10px] text-emerald-300/75">
+                Mid Estimate (70/30)
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3.5 space-y-1">
+              <div className="text-[11px] text-zinc-400">At 50% Net Split</div>
+              <div className="font-mono text-lg font-bold text-zinc-100 tabular-nums">
+                ${memberEarnings.earningsAt50Usd.toLocaleString()}
+              </div>
+              <div className="font-mono text-[10px] text-zinc-500">
+                Artist-Forward (50/50)
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-zinc-400 tabular-nums">
+            <span>
+              Paid FCO:{" "}
+              <strong className="text-zinc-200">
+                {memberEarnings.paidFcoMints.toLocaleString()}
+              </strong>{" "}
+              <span className="text-zinc-500">
+                ({memberEarnings.rawFcoMints.toLocaleString()} raw −{" "}
+                {memberEarnings.estSpinFcoMints.toLocaleString()} spin)
+              </span>
+            </span>
+            <span>
+              Paid DCO:{" "}
+              <strong className="text-zinc-200">
+                {memberEarnings.paidDcoMints.toLocaleString()}
+              </strong>
+            </span>
+            <span>
+              Motion MCO:{" "}
+              <strong className="text-zinc-200">
+                {memberEarnings.paidMcoMints.toLocaleString()}
+              </strong>
+            </span>
+            {memberEarnings.passPlusMints > 0 && (
+              <span>
+                Pass+:{" "}
+                <strong className="text-zinc-200">
+                  {memberEarnings.passPlusMints.toLocaleString()}
+                </strong>
+              </span>
+            )}
+            <span className="text-zinc-500">
+              ({memberEarnings.freeExcludedMints.toLocaleString()} free rewards
+              excluded)
+            </span>
+          </div>
+        </section>
+      )}
+
       {/* Career Rank Trajectory Chart */}
       {popHistory.length >= 2 && (
         <section className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-5 space-y-3">
@@ -263,7 +390,7 @@ function MemberDetailPage() {
                     stroke={r.isAnomaly ? "#ffffff" : "#09090b"}
                     strokeWidth={2}
                   >
-                    <title>{`${r.title} (${r.startAt.slice(0, 10)}): Buyers #${r.uniqueBuyersRank} (${r.uniqueBuyers} buyers) · Mints #${r.rank} (${r.mintCount} mints, ${r.mintsPerBuyer.toFixed(1)}/w)`}</title>
+                    <title>{`${r.title} (${r.startAt.slice(0, 10)}): Buyers #${r.uniqueBuyersRank} (${r.uniqueBuyers} buyers) · Mints #${r.rank} (${r.mintCount} mints, ${r.mintsPerBuyer.toFixed(1)}/buyer)`}</title>
                   </circle>
                 );
               })}
@@ -524,38 +651,129 @@ function MemberDetailPage() {
       )}
 
       {/* Top Indexed Collections */}
-      {collections.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold text-white">
-            Top Indexed Collections
-          </h2>
-          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6">
-            {collections.map((c) => (
-              <div
-                key={c.slug}
-                className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50"
-              >
-                {c.frontImageUrl && (
-                  <img
-                    src={c.frontImageUrl}
-                    alt={c.collectionId}
-                    loading="lazy"
-                    className="aspect-[2/3] w-full object-cover"
-                  />
-                )}
-                <div className="p-2">
-                  <p className="truncate text-[11px] font-medium text-zinc-200">
-                    {c.collectionId}
-                  </p>
-                  <p className="font-mono text-[10px] text-zinc-500">
-                    {c.totalMints.toLocaleString()} mints
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {collections.length > 0 && (() => {
+        const pricedCount = collections.filter(
+          (c) => c.apolloMedianPriceUsd !== null && c.apolloMedianPriceUsd > 0,
+        ).length;
+        const apolloMatchedCount = collections.filter(
+          (c) => c.apolloTotalCopies !== null && c.apolloTotalCopies > 0,
+        ).length;
+        return (
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-lg font-semibold text-white">
+                Top Indexed Collections
+              </h2>
+              {apolloMatchedCount > 0 && (
+                <p className="font-mono text-[11px] text-zinc-400 tabular-nums">
+                  Apollo market:{" "}
+                  <span className="text-amber-300/90">
+                    {pricedCount}/{collections.length}
+                  </span>{" "}
+                  with active listings
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6">
+              {collections.map((c) => {
+                const hasPrice =
+                  c.apolloMedianPriceUsd !== null && c.apolloMedianPriceUsd > 0;
+                const hasRange =
+                  hasPrice &&
+                  c.apolloMinPriceUsd !== null &&
+                  c.apolloMaxPriceUsd !== null &&
+                  c.apolloMaxPriceUsd - c.apolloMinPriceUsd >= 0.05;
+                const priceTitle = hasPrice
+                  ? `Apollo secondary market: median $${c.apolloMedianPriceUsd!.toFixed(2)}${
+                      c.apolloMinPriceUsd !== null
+                        ? `, floor $${c.apolloMinPriceUsd.toFixed(2)}`
+                        : ""
+                    }${
+                      c.apolloMaxPriceUsd !== null
+                        ? `, high $${c.apolloMaxPriceUsd.toFixed(2)}`
+                        : ""
+                    }${
+                      c.apolloListingCount
+                        ? ` across ${c.apolloListingCount} listing${
+                            c.apolloListingCount === 1 ? "" : "s"
+                          }`
+                        : ""
+                    }`
+                  : "No active secondary market listings on Apollo";
+                return (
+                  <a
+                    key={c.slug}
+                    href={apolloCollectionUrl(
+                      c.season,
+                      c.rawMemberName,
+                      c.collectionNo,
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 transition hover:border-sky-500/50"
+                  >
+                    {c.frontImageUrl && (
+                      <img
+                        src={c.frontImageUrl}
+                        alt={c.collectionId}
+                        loading="lazy"
+                        className="aspect-[2/3] w-full object-cover"
+                      />
+                    )}
+                    <div className="p-2 space-y-0.5">
+                      <p className="truncate text-[11px] font-medium text-zinc-200 group-hover:text-sky-300">
+                        {c.collectionId}
+                      </p>
+                      {c.apolloTotalCopies !== null && c.apolloTotalCopies > 0 ? (
+                        <p className="font-mono text-[10px] text-zinc-400 tabular-nums">
+                          {c.apolloTotalCopies.toLocaleString()} copies ·{" "}
+                          <span className="text-emerald-300/90">
+                            {c.apolloTransferablePct?.toFixed(0)}%
+                          </span>
+                        </p>
+                      ) : (
+                        <p className="font-mono text-[10px] text-zinc-500">
+                          {c.totalMints.toLocaleString()} mints
+                        </p>
+                      )}
+                      {hasPrice ? (
+                        <>
+                          <p
+                            title={priceTitle}
+                            className="font-mono text-[10px] font-medium text-amber-300 tabular-nums"
+                          >
+                            Med ${c.apolloMedianPriceUsd!.toFixed(2)}
+                            {c.apolloListingCount
+                              ? ` (${c.apolloListingCount})`
+                              : ""}
+                          </p>
+                          {hasRange && (
+                            <p
+                              title={priceTitle}
+                              className="font-mono text-[10px] text-zinc-400 tabular-nums"
+                            >
+                              ${c.apolloMinPriceUsd!.toFixed(2)}–$
+                              {c.apolloMaxPriceUsd!.toFixed(2)}
+                            </p>
+                          )}
+                        </>
+                      ) : c.apolloTotalCopies !== null &&
+                        c.apolloTotalCopies > 0 ? (
+                        <p
+                          title={priceTitle}
+                          className="font-mono text-[10px] text-zinc-600"
+                        >
+                          No active listings
+                        </p>
+                      ) : null}
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })()}
     </div>
   );
 }

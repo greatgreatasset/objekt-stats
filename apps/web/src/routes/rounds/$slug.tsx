@@ -5,12 +5,15 @@ import {
   Calendar,
   Check,
   Copy,
+  ExternalLink,
   Info,
+  Sparkles,
   TrendingDown,
   TrendingUp,
   Users,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { apolloCollectionUrl, apolloEventUrl } from "@objekt-stats/stats";
 import { getRoundDetail } from "../../lib/server/queries";
 
 export const Route = createFileRoute("/rounds/$slug")({
@@ -63,7 +66,30 @@ function RoundDetailPage() {
     );
   }
 
-  const { round, leaderboard, collections, dailyCurve, correlatedEvents } = data;
+  const {
+    round,
+    abstractSync,
+    apolloSupply,
+    leaderboard,
+    collections,
+    dailyCurve,
+    correlatedEvents,
+  } = data;
+
+  const isSyncCatchingUpForRound = (() => {
+    if (
+      !abstractSync?.lastIndexedTimestamp ||
+      abstractSync.lagMinutes === null ||
+      abstractSync.lagMinutes < 30
+    ) {
+      return false;
+    }
+    const syncMs = Date.parse(abstractSync.lastIndexedTimestamp);
+    const roundEndMs = Date.parse(round.endAt ?? round.startAt);
+    if (Number.isNaN(syncMs) || Number.isNaN(roundEndMs)) return false;
+    // Flag when the round is still active near the Abstract sync cursor (within 6h of cursor)
+    return syncMs - roundEndMs <= 6 * 60 * 60 * 1000;
+  })();
   const sortedLeaderboard = useMemo(() => {
     const copy = [...leaderboard];
     if (metric === "buyers") {
@@ -98,20 +124,22 @@ function RoundDetailPage() {
       : null;
 
   const nonPopularityReason =
-    round.saleMechanic === "reward"
-      ? "Special Class (SCO) grid completion reward or free event drop — not a paid public shop sale."
-      : round.saleMechanic === "physical_scan"
-        ? "Physical Objekt QR scan (A-series) — reflects album/merch code scans rather than digital shop sales."
-        : round.saleMechanic === "random_pack"
-          ? "Random pack draw — uniform odds pull every member toward equal share."
-          : "Excluded from member popularity trend averages.";
+    round.saleMechanic === "subscription"
+      ? "COSMO Talk Pass+ monthly subscriber drop — reflects recurring talk subscriptions rather than a one-off public shop drop."
+      : round.saleMechanic === "reward"
+        ? "Free event reward, set-completion bonus, promotional/tour drop, or Special Class (SCO) grid completion — not a paid public shop sale."
+        : round.saleMechanic === "physical_scan"
+          ? "Physical Objekt QR scan (A-series) — reflects album/merch code scans rather than digital shop sales."
+          : round.saleMechanic === "random_pack"
+            ? "Random pack draw — uniform odds pull every member toward equal share."
+            : "Excluded from member popularity trend averages.";
 
   const copyRecap = async () => {
     const artistLabel = round.artistId === "artms" ? "ARTMS" : "tripleS";
     const modeLabel = metric === "buyers" ? "Unique Buyers" : "Total Mints";
     const topLines = sortedLeaderboard.slice(0, 10).map((r) => {
       if (metric === "buyers") {
-        return `#${r.uniqueBuyersRank} ${r.memberName} — ${r.uniqueBuyers.toLocaleString()} buyers (${r.mintCount.toLocaleString()} mints, ${r.mintsPerBuyer.toFixed(1)}/w | ${r.uniqueBuyersRelativeIndex.toFixed(2)}×)`;
+        return `#${r.uniqueBuyersRank} ${r.memberName} — ${r.uniqueBuyers.toLocaleString()} buyers (${r.mintCount.toLocaleString()} mints, ${r.mintsPerBuyer.toFixed(1)}/buyer | ${r.uniqueBuyersRelativeIndex.toFixed(2)}×)`;
       }
       return `#${r.rank} ${r.memberName} — ${r.mintCount.toLocaleString()} mints (${r.uniqueBuyers.toLocaleString()} buyers, ${r.sharePct.toFixed(1)}% | ${r.relativeIndex.toFixed(2)}×)`;
     });
@@ -218,6 +246,149 @@ function RoundDetailPage() {
             />
           </div>
         </div>
+
+        {isSyncCatchingUpForRound && abstractSync?.lastIndexedTimestamp && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-sky-500/35 bg-sky-500/10 px-4 py-3 text-xs text-sky-100">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
+            <div className="space-y-0.5">
+              <p className="font-semibold text-sky-200">
+                Live Sync Catching Up on Active Drop
+              </p>
+              <p className="text-sky-100/85">
+                On-chain Abstract indexing is currently caught up through{" "}
+                <span className="font-mono text-white">
+                  {abstractSync.lastIndexedTimestamp
+                    .slice(0, 16)
+                    .replace("T", " ")}{" "}
+                  UTC
+                </span>{" "}
+                (block{" "}
+                <span className="font-mono">
+                  #{abstractSync.lastIndexedBlock.toLocaleString()}
+                </span>
+                , ~
+                {abstractSync.lagMinutes !== null && abstractSync.lagMinutes >= 60
+                  ? `${(abstractSync.lagMinutes / 60).toFixed(1)}h`
+                  : `${abstractSync.lagMinutes}m`}{" "}
+                behind chain head). Additional members and mints minted after
+                that timestamp will appear as the sync catches up.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {(round.apolloDescription ||
+          round.apolloEventName ||
+          apolloSupply.totalCopies > 0) && (
+          <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-4 sm:p-5 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1.5 min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+                  <span className="inline-flex items-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-sky-300">
+                    <Sparkles className="h-3 w-3" />
+                    Release Provenance
+                  </span>
+                  {round.apolloEventType && (
+                    <span className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-0.5 uppercase text-zinc-300">
+                      {round.apolloEventType}
+                    </span>
+                  )}
+                  {round.apolloEraName && (
+                    <span className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-0.5 text-zinc-300">
+                      Era: {round.apolloEraName}
+                    </span>
+                  )}
+                </div>
+                {round.apolloDescription && (
+                  <p className="text-sm text-zinc-200 leading-relaxed">
+                    {round.apolloDescription}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0 text-xs">
+                {round.apolloTwitterUrl && (
+                  <a
+                    href={round.apolloTwitterUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-950 px-2.5 py-1.5 font-mono text-[11px] text-zinc-300 transition hover:border-zinc-600 hover:text-white"
+                  >
+                    Official Announcement
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+                {round.apolloEventSlug && (
+                  <a
+                    href={apolloEventUrl(round.apolloEventSlug)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-1.5 font-mono text-[11px] text-sky-300 transition hover:bg-sky-500/20"
+                  >
+                    Apollo Event
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+            </div>
+
+            {apolloSupply.totalCopies > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800/70 pt-3 text-xs font-mono">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-zinc-300 tabular-nums">
+                  <span>
+                    <span className="text-zinc-500">All-Time Supply:</span>{" "}
+                    <strong className="text-white">
+                      {apolloSupply.totalCopies.toLocaleString()}
+                    </strong>
+                    {apolloSupply.matchedCollections <
+                      apolloSupply.totalCollections && (
+                      <span className="text-zinc-500">
+                        {" "}
+                        ({apolloSupply.matchedCollections}/
+                        {apolloSupply.totalCollections} cards cached)
+                      </span>
+                    )}
+                  </span>
+                  <span>
+                    <span className="text-zinc-500">Tradeable:</span>{" "}
+                    <strong className="text-emerald-300">
+                      {apolloSupply.transferableCopies.toLocaleString()}
+                    </strong>
+                    {apolloSupply.transferablePct !== null && (
+                      <span className="text-emerald-300/80">
+                        {" "}
+                        ({apolloSupply.transferablePct.toFixed(1)}%)
+                      </span>
+                    )}
+                  </span>
+                  {apolloSupply.medianMarketPriceUsd !== null && (
+                    <span>
+                      <span className="text-zinc-500">Median Market:</span>{" "}
+                      <strong className="text-amber-300">
+                        ${apolloSupply.medianMarketPriceUsd.toFixed(2)}
+                      </strong>
+                      {apolloSupply.totalListings > 0 && (
+                        <span className="text-zinc-500">
+                          {" "}
+                          ({apolloSupply.totalListings} listing
+                          {apolloSupply.totalListings === 1 ? "" : "s"})
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
+                <a
+                  href="https://apollo.cafe"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[11px] text-zinc-500 hover:text-zinc-300"
+                >
+                  Provenance &amp; tradeable counts via apollo.cafe
+                </a>
+              </div>
+            )}
+          </div>
+        )}
 
         {!round.includeInPopularity && (
           <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-200/90">
@@ -397,11 +568,25 @@ function RoundDetailPage() {
                         ? `${row.uniqueBuyers.toLocaleString()} buyers`
                         : `${row.mintCount.toLocaleString()} mints`}
                     </span>
-                    <span className="hidden sm:inline text-[11px] text-zinc-400">
+                    <span
+                      className="hidden sm:inline text-xs text-zinc-400"
+                      title={`Average ${row.mintsPerBuyer.toFixed(2)} Objekts minted per unique buyer`}
+                    >
                       {metric === "buyers"
-                        ? `${row.mintCount.toLocaleString()} mints · ${row.mintsPerBuyer.toFixed(1)}/w`
-                        : `${row.uniqueBuyers.toLocaleString()} buyers · ${row.mintsPerBuyer.toFixed(1)}/w`}
+                        ? `${row.mintCount.toLocaleString()} mints · ${row.mintsPerBuyer.toFixed(1)}/buyer`
+                        : `${row.uniqueBuyers.toLocaleString()} buyers · ${row.mintsPerBuyer.toFixed(1)}/buyer`}
                     </span>
+                    {row.apollo && row.apollo.totalCopies > 0 && (
+                      <span
+                        title={`Apollo all-time supply: ${row.apollo.totalCopies.toLocaleString()} total, ${row.apollo.transferableCopies.toLocaleString()} tradeable (${row.apollo.transferablePct.toFixed(1)}%)${row.apollo.medianPriceUsd ? ` · Median listing $${row.apollo.medianPriceUsd.toFixed(2)}` : ""}`}
+                        className="hidden md:inline rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[10px] text-emerald-300/90"
+                      >
+                        {row.apollo.transferablePct.toFixed(0)}% tradeable
+                        {row.apollo.medianPriceUsd
+                          ? ` · $${row.apollo.medianPriceUsd.toFixed(2)}`
+                          : ""}
+                      </span>
+                    )}
                     <span className="w-12 text-right text-zinc-400">
                       {activeShare.toFixed(1)}%
                     </span>
@@ -506,39 +691,139 @@ function RoundDetailPage() {
       </div>
 
       {/* Indexed Objekt Card Previews */}
-      {collections.some((c) => c.frontImageUrl) && (
-        <section className="space-y-3">
-          <h2 className="text-base font-semibold text-white">
-            Objekt Previews ({collections.length} collections)
-          </h2>
-          <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
-            {collections
-              .filter((c) => c.frontImageUrl)
-              .slice(0, 24)
-              .map((c) => (
-                <div
-                  key={c.slug}
-                  className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50"
-                >
-                  <img
-                    src={c.frontImageUrl!}
-                    alt={c.collectionId}
-                    loading="lazy"
-                    className="aspect-[2/3] w-full object-cover"
-                  />
-                  <div className="p-2">
-                    <p className="truncate text-[11px] font-medium text-zinc-200">
-                      {c.collectionId}
-                    </p>
-                    <p className="font-mono text-[10px] text-zinc-500">
-                      {c.totalMints.toLocaleString()} mints
-                    </p>
-                  </div>
-                </div>
-              ))}
-          </div>
-        </section>
-      )}
+      {(() => {
+        const previewCols = collections
+          .filter((c) => c.frontImageUrl)
+          .slice(0, 24);
+        if (previewCols.length === 0) return null;
+        const pricedCount = previewCols.filter(
+          (c) => c.apolloMedianPriceUsd !== null && c.apolloMedianPriceUsd > 0,
+        ).length;
+        const apolloMatchedCount = previewCols.filter(
+          (c) => c.apolloTotalCopies !== null && c.apolloTotalCopies > 0,
+        ).length;
+        return (
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-base font-semibold text-white">
+                Objekt Previews ({collections.length} collections)
+              </h2>
+              <p className="font-mono text-[11px] text-zinc-400 tabular-nums">
+                {round.unitPriceUsd !== null && round.unitPriceUsd > 0 && (
+                  <span>
+                    COSMO retail ~${round.unitPriceUsd.toFixed(2)}
+                    {apolloMatchedCount > 0 ? " · " : ""}
+                  </span>
+                )}
+                {apolloMatchedCount > 0 && (
+                  <span>
+                    Apollo market:{" "}
+                    <span className="text-amber-300/90">
+                      {pricedCount}/{previewCols.length}
+                    </span>{" "}
+                    with active listings
+                  </span>
+                )}
+              </p>
+            </div>
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+              {previewCols.map((c) => {
+                const hasPrice =
+                  c.apolloMedianPriceUsd !== null && c.apolloMedianPriceUsd > 0;
+                const hasRange =
+                  hasPrice &&
+                  c.apolloMinPriceUsd !== null &&
+                  c.apolloMaxPriceUsd !== null &&
+                  c.apolloMaxPriceUsd - c.apolloMinPriceUsd >= 0.05;
+                const priceTitle = hasPrice
+                  ? `Apollo secondary market: median $${c.apolloMedianPriceUsd!.toFixed(2)}${
+                      c.apolloMinPriceUsd !== null
+                        ? `, floor $${c.apolloMinPriceUsd.toFixed(2)}`
+                        : ""
+                    }${
+                      c.apolloMaxPriceUsd !== null
+                        ? `, high $${c.apolloMaxPriceUsd.toFixed(2)}`
+                        : ""
+                    }${
+                      c.apolloListingCount
+                        ? ` across ${c.apolloListingCount} listing${
+                            c.apolloListingCount === 1 ? "" : "s"
+                          }`
+                        : ""
+                    }`
+                  : "No active secondary market listings on Apollo";
+                return (
+                  <a
+                    key={c.slug}
+                    href={apolloCollectionUrl(
+                      c.season,
+                      c.rawMemberName,
+                      c.collectionNo,
+                    )}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/50 transition hover:border-sky-500/50"
+                  >
+                    <img
+                      src={c.frontImageUrl!}
+                      alt={c.collectionId}
+                      loading="lazy"
+                      className="aspect-[2/3] w-full object-cover"
+                    />
+                    <div className="p-2 space-y-0.5">
+                      <p className="truncate text-[11px] font-medium text-zinc-200 group-hover:text-sky-300">
+                        {c.collectionId}
+                      </p>
+                      {c.apolloTotalCopies !== null && c.apolloTotalCopies > 0 ? (
+                        <p className="font-mono text-[10px] text-zinc-400 tabular-nums">
+                          {c.apolloTotalCopies.toLocaleString()} copies ·{" "}
+                          <span className="text-emerald-300/90">
+                            {c.apolloTransferablePct?.toFixed(0)}%
+                          </span>
+                        </p>
+                      ) : (
+                        <p className="font-mono text-[10px] text-zinc-500">
+                          {c.totalMints.toLocaleString()} mints
+                        </p>
+                      )}
+                      {hasPrice ? (
+                        <>
+                          <p
+                            title={priceTitle}
+                            className="font-mono text-[10px] font-medium text-amber-300 tabular-nums"
+                          >
+                            Med ${c.apolloMedianPriceUsd!.toFixed(2)}
+                            {c.apolloListingCount
+                              ? ` (${c.apolloListingCount})`
+                              : ""}
+                          </p>
+                          {hasRange && (
+                            <p
+                              title={priceTitle}
+                              className="font-mono text-[10px] text-zinc-400 tabular-nums"
+                            >
+                              ${c.apolloMinPriceUsd!.toFixed(2)}–$
+                              {c.apolloMaxPriceUsd!.toFixed(2)}
+                            </p>
+                          )}
+                        </>
+                      ) : c.apolloTotalCopies !== null &&
+                        c.apolloTotalCopies > 0 ? (
+                        <p
+                          title={priceTitle}
+                          className="font-mono text-[10px] text-zinc-600"
+                        >
+                          No active listings
+                        </p>
+                      ) : null}
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })()}
     </div>
   );
 }

@@ -16,7 +16,7 @@ function RoundsPage() {
   const data = Route.useLoaderData();
   const { artist } = Route.useSearch();
   const [filter, setFilter] = useState<
-    "popularity" | "all" | "First" | "Double" | "physical" | "reward"
+    "popularity" | "all" | "First" | "Double" | "physical" | "reward" | "subscription"
   >("popularity");
   const [seasonFilter, setSeasonFilter] = useState<string>("all");
   const [query, setQuery] = useState("");
@@ -40,12 +40,16 @@ function RoundsPage() {
         if (filter === "Double" && r.objektClass !== "Double") return false;
         if (filter === "physical" && r.saleMechanic !== "physical_scan") return false;
         if (filter === "reward" && r.saleMechanic !== "reward") return false;
+        if (filter === "subscription" && r.saleMechanic !== "subscription") return false;
         if (seasonFilter !== "all" && r.season !== seasonFilter) return false;
         if (
           q &&
           !r.title.toLowerCase().includes(q) &&
           !r.season.toLowerCase().includes(q) &&
-          !r.slug.toLowerCase().includes(q)
+          !r.slug.toLowerCase().includes(q) &&
+          !(r.apolloEventName ?? "").toLowerCase().includes(q) &&
+          !(r.apolloEraName ?? "").toLowerCase().includes(q) &&
+          !(r.apolloDescription ?? "").toLowerCase().includes(q)
         ) {
           return false;
         }
@@ -128,7 +132,8 @@ function RoundsPage() {
               ["First", "First (FCO)"],
               ["Double", "Double (DCO)"],
               ["physical", "Physical (A)"],
-              ["reward", "Rewards / SCO / Welcome"],
+              ["reward", "Rewards / Events / SCO"],
+              ["subscription", "Pass+ Subscriptions"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -197,8 +202,18 @@ function RoundsPage() {
                       >
                         {r.title}
                       </Link>
-                      <div className="font-mono text-[11px] text-zinc-500">
-                        {r.season}
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-zinc-500">
+                        <span>{r.season}</span>
+                        {r.apolloEraName && (
+                          <span className="rounded bg-zinc-900 px-1.5 py-0.2 text-[10px] text-zinc-400">
+                            {r.apolloEraName}
+                          </span>
+                        )}
+                        {r.apolloEventType && (
+                          <span className="rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.2 text-[10px] uppercase text-zinc-500">
+                            {r.apolloEventType}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-xs text-zinc-300">
