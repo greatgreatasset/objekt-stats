@@ -17,6 +17,7 @@ export interface RoundLinkCandidate {
   title: string;
   objektClass: string;
   onOffline: string;
+  saleMechanic?: string;
   startAt: string;
   totalMints: number;
   uniqueBuyers: number;
@@ -165,46 +166,64 @@ export async function refreshDropScheduleIfStale(
   }
 }
 
+function isPaidShopRound(r: RoundLinkCandidate): boolean {
+  return r.includeInPopularity && r.saleMechanic !== "reward";
+}
+
+function sortRoundMatches(a: RoundLinkCandidate, b: RoundLinkCandidate): number {
+  return (
+    Number(isPaidShopRound(b)) - Number(isPaidShopRound(a)) ||
+    Number(b.includeInPopularity) - Number(a.includeInPopularity) ||
+    b.uniqueBuyers - a.uniqueBuyers ||
+    b.totalMints - a.totalMints
+  );
+}
+
 function linkDropToRound(
   drop: ParsedDropScheduleItem,
   rounds: RoundLinkCandidate[],
 ): RoundLinkCandidate | null {
+  const isShopDrop = drop.eventType === "shop";
+
   // 1. Exact Apollo event slug match
-  const slugMatches = rounds.filter((r) => r.apolloEventSlug === drop.slug);
+  const slugMatches = rounds
+    .filter((r) => r.apolloEventSlug === drop.slug)
+    .sort(sortRoundMatches);
   if (slugMatches.length > 0) {
-    slugMatches.sort(
-      (a, b) =>
-        Number(b.includeInPopularity) - Number(a.includeInPopularity) ||
-        b.totalMints - a.totalMints,
-    );
-    return slugMatches[0] ?? null;
+    // For paid shop drops, if slug only matched a set-completion bonus reward (e.g. 375Z),
+    // keep checking nearby paid shop rounds before falling back to the bonus round.
+    if (!isShopDrop || isPaidShopRound(slugMatches[0]!)) {
+      return slugMatches[0] ?? null;
+    }
   }
 
   // 2. Normalized event name / title match
   const normName = normalizeMatchText(drop.name);
-  if (normName.length >= 4) {
-    const nameMatches = rounds.filter((r) => {
-      const rEv = r.apolloEventName ? normalizeMatchText(r.apolloEventName) : "";
-      const rTitle = normalizeMatchText(r.title);
-      return rEv === normName || rTitle.includes(normName);
-    });
-    if (nameMatches.length > 0) {
-      nameMatches.sort(
-        (a, b) =>
-          Number(b.includeInPopularity) - Number(a.includeInPopularity) ||
-          b.totalMints - a.totalMints,
-      );
+  const nameMatches =
+    normName.length >= 4
+      ? rounds
+          .filter((r) => {
+            const rEv = r.apolloEventName
+              ? normalizeMatchText(r.apolloEventName)
+              : "";
+            const rTitle = normalizeMatchText(r.title);
+            return rEv === normName || rTitle.includes(normName);
+          })
+          .sort(sortRoundMatches)
+      : [];
+  if (nameMatches.length > 0) {
+    if (!isShopDrop || isPaidShopRound(nameMatches[0]!)) {
       return nameMatches[0] ?? null;
     }
   }
 
-  // 3. Brand-new active shop drops not yet tagged by Apollo metadata: match online DCO/MCO/PCO round starting within ±18h
-  if (drop.eventType === "shop" && drop.startAt) {
+  // 3. Shop drops whose main paid round isn't tagged yet: match online paid DCO/MCO/PCO round starting within ±18h
+  if (isShopDrop && drop.startAt) {
     const dropStartMs = Date.parse(drop.startAt);
     if (!Number.isNaN(dropStartMs)) {
       const nearby = rounds
         .filter((r) => {
-          if (r.onOffline !== "online" || !r.includeInPopularity) return false;
+          if (r.onOffline !== "online" || !isPaidShopRound(r)) return false;
           if (
             r.objektClass !== "Double" &&
             r.objektClass !== "Motion" &&
@@ -219,13 +238,18 @@ function linkDropToRound(
         .sort((a, b) => {
           const da = Math.abs(Date.parse(a.startAt) - dropStartMs);
           const db = Math.abs(Date.parse(b.startAt) - dropStartMs);
-          return da - db || b.totalMints - a.totalMints;
+          return (
+            da - db ||
+            b.uniqueBuyers - a.uniqueBuyers ||
+            b.totalMints - a.totalMints
+          );
         });
       if (nearby.length > 0) return nearby[0] ?? null;
     }
   }
 
-  return null;
+  // 4. Fall back to reward/bonus match if no paid shop round was found
+  return slugMatches[0] ?? nameMatches[0] ?? null;
 }
 
 /**
