@@ -323,20 +323,35 @@ export function classifyApolloProvenance(
     /^(?:gifted|dropped|awarded|rewarded|given|distributed|airdropped)\b/i.test(
       desc,
     ) ||
+    /\bgifted\s+to\b/i.test(desc) ||
     /\b(?:set\s+owners?|set\s+completion|completion\s+(?:bonus|reward)|for\s+completing|grid\s+reward|full\s+set\s+bonus|participat(?:ed|ing)\s+in|pre-?voting|live\s+voting|1st\s+win|music\s+show|attend(?:ing|ed|ees|ance)|check-?in|lucky\s+draw\s+winner|giveaway|raffle|discord\s+event|mission\s+reward|free\s+(?:objekt|drop|gift|reward)|ranking\s+top\s+\d+)\b/i.test(
       desc,
     );
+
+  // Mass follower airdrops (e.g. Abstract migration: "sold on the COSMO app shop. Gifted to everyone who followed...")
+  const isMassFollowerAirdrop =
+    /\bgifted\s+to\s+everyone\s+who\s+followed\b/i.test(desc);
 
   // Dual distribution: initially dropped to fanclub/event holders AND later sold in COSMO shop
   // (e.g., Divine01 338Z: "WAV 1st fanclub, dropped on October 31st 2024 and later sold in the COSMO app shop.")
   const isDualFanclubOrEventAndShop =
     /(?:later|also)\s+sold\s+(?:on|in)\s+(?:the\s+)?cosmo/i.test(desc) ||
-    (/\bfanclub\b/i.test(desc) && hasExplicitCosmoSale);
+    (/\bfanclub\b/i.test(desc) && hasExplicitCosmoSale) ||
+    (isMassFollowerAirdrop && hasExplicitCosmoSale);
 
   if (isDualFanclubOrEventAndShop) {
     return {
       provenanceClass: "dual_distribution",
       isFreeDistribution: false,
+      passBillingMonth: null,
+      passBillingLabel: null,
+    };
+  }
+
+  if (isMassFollowerAirdrop) {
+    return {
+      provenanceClass: "free_reward",
+      isFreeDistribution: true,
       passBillingMonth: null,
       passBillingLabel: null,
     };
@@ -514,9 +529,75 @@ export function buildEnrichedRoundTitle(params: {
 }
 
 /**
+ * On-chain verified COSMO shop drops sold as blind random packs (`random_pack`)
+ * or subunit random packs (`unit_random`) where buyers cannot pick an individual
+ * member. They still count toward paid purchases & unique buyers, but are excluded
+ * from Demand Index popularity averages so RNG doesn't distort member demand.
+ */
+export const KNOWN_RANDOM_PACK_DROPS: Readonly<
+  Record<string, "unit_random" | "random_pack" | "dual_distribution">
+> = {
+  // Unit-random 4x6-member subunit packs
+  "triples|cream02|354Z": "unit_random", // msnz 1st Anniversary
+  "triples|cream02|334Z": "unit_random", // msnz Digital Single
+  "triples|cream02|335Z": "unit_random",
+  "triples|cream02|336Z": "unit_random",
+  "triples|cream02|337Z": "unit_random",
+  "triples|binary02|321Z": "unit_random", // The univerS (4x6 unit packs)
+
+  // Abstract migration mass follower airdrop + shop (dual distribution so free airdrops don't inflate paid buyers)
+  "triples|atom02|341Z": "dual_distribution",
+  "artms|divine01|347Z": "dual_distribution",
+
+  // Verified blind 1-of-N random pack shop drops (99.5-100% multi-member tx + uniform RNG)
+  "triples|binary01|310Z": "random_pack", // April Fools' 2023
+  "triples|binary01|355Z": "random_pack", // Asian Games 2023
+  "triples|binary01|356Z": "random_pack",
+  "triples|binary01|357Z": "random_pack",
+  "triples|cream01|304Z": "random_pack", // EVOLution Promotions
+  "triples|cream01|305Z": "random_pack",
+  "triples|cream01|331Z": "random_pack", // Children's Day 2024
+  "triples|divine01|309Z": "random_pack", // Official Light Stick
+  "triples|divine01|329Z": "random_pack", // We Never Die
+  "triples|divine01|340Z": "random_pack", // tripleS VV x Sihyunhada
+  "triples|divine01|341Z": "random_pack",
+  "triples|ever01|332Z": "random_pack", // tripleS Awards 2024
+  "triples|ever01|333Z": "random_pack",
+  "triples|ever01|339Z": "random_pack", // Valentine's Day 2025
+  "triples|ever01|340Z": "random_pack",
+  "triples|ever01|341Z": "random_pack",
+  "triples|ever01|353Z": "random_pack", // Black Soul Dress Performance Video
+  "triples|ever01|354Z": "random_pack",
+  "triples|atom02|310Z": "random_pack", // <ASSEMBLE24> 1st Anniversary
+  "triples|atom02|315Z": "random_pack", // Badge War 3
+  "triples|atom02|317Z": "random_pack",
+  "triples|atom02|319Z": "random_pack", // School Uniform
+  "triples|atom02|325Z": "random_pack", // Green Haus
+  "triples|atom02|327Z": "random_pack", // Over The Pitch
+  "triples|atom02|328Z": "random_pack",
+  "triples|atom02|342Z": "random_pack", // Water Festival
+  "triples|atom02|367Z": "random_pack", // Visionary Vision 1st Anniversary
+  "triples|binary02|313Z": "random_pack", // 2025 tripleS Awards
+  "triples|binary02|314Z": "random_pack",
+  "triples|binary02|343Z": "random_pack", // Cherry Blossom 2026
+  "triples|binary02|344Z": "random_pack",
+  "triples|binary02|345Z": "random_pack",
+  "triples|binary02|347Z": "random_pack", // April Fools' Day 2026
+  "triples|binary02|348Z": "random_pack",
+  "triples|binary02|361Z": "random_pack", // Children's Day 2026
+  "triples|cream02|313Z": "random_pack", // tripleS x HAPPYBEAN
+  "triples|cream02|323Z": "random_pack", // Daily Fashion
+  "triples|cream02|324Z": "random_pack",
+  "triples|cream02|344Z": "random_pack", // Badge War 4 random cards (346Z stays selectable)
+  "triples|cream02|345Z": "random_pack",
+  "triples|cream02|366Z": "random_pack", // Visionary Vision 2nd Anniversary
+};
+
+/**
  * Maps Apollo provenance onto Sale Round classification (`saleMechanic`,
  * `includeInPopularity`, `unitPriceUsd`) so free promotional drops, set bonuses,
- * tour perks, and monthly Pass+ subscriptions never pollute paid popularity rankings.
+ * tour perks, random/unit packs, dual fanclub drops, and monthly Pass+
+ * subscriptions never pollute paid member-select popularity rankings.
  */
 export function applyApolloToRoundMeta(params: {
   objektClass: string;
@@ -574,6 +655,23 @@ export function applyApolloToRoundMeta(params: {
       saleMechanic: "reward",
       includeInPopularity: false,
       unitPriceUsd: 0,
+    };
+  }
+
+  const knownRandomKind = KNOWN_RANDOM_PACK_DROPS[provenance.dropKey];
+  if (knownRandomKind) {
+    return {
+      saleMechanic: knownRandomKind,
+      includeInPopularity: false,
+      unitPriceUsd: baseUnitPriceUsd,
+    };
+  }
+
+  if (provenance.provenanceClass === "dual_distribution") {
+    return {
+      saleMechanic: "dual_distribution",
+      includeInPopularity: false,
+      unitPriceUsd: baseUnitPriceUsd,
     };
   }
 

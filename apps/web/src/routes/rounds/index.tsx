@@ -16,7 +16,7 @@ function RoundsPage() {
   const data = Route.useLoaderData();
   const { artist } = Route.useSearch();
   const [filter, setFilter] = useState<
-    "popularity" | "all" | "First" | "Double" | "physical" | "reward" | "subscription"
+    "popularity" | "all" | "First" | "Double" | "random" | "physical" | "reward" | "subscription"
   >("popularity");
   const [seasonFilter, setSeasonFilter] = useState<string>("all");
   const [query, setQuery] = useState("");
@@ -38,6 +38,14 @@ function RoundsPage() {
         if (filter === "popularity" && !r.includeInPopularity) return false;
         if (filter === "First" && r.objektClass !== "First") return false;
         if (filter === "Double" && r.objektClass !== "Double") return false;
+        if (
+          filter === "random" &&
+          r.saleMechanic !== "random_pack" &&
+          r.saleMechanic !== "unit_random" &&
+          r.saleMechanic !== "dual_distribution"
+        ) {
+          return false;
+        }
         if (filter === "physical" && r.saleMechanic !== "physical_scan") return false;
         if (filter === "reward" && r.saleMechanic !== "reward") return false;
         if (filter === "subscription" && r.saleMechanic !== "subscription") return false;
@@ -125,11 +133,12 @@ function RoundsPage() {
             [
               [
                 "popularity",
-                `Paid Public Sales (${data.rounds.filter((r) => r.includeInPopularity).length})`,
+                `Member-Select Paid (${data.rounds.filter((r) => r.includeInPopularity).length})`,
               ],
-              ["all", `All Indexed (${data.rounds.length})`],
+              ["all", `All Releases (${data.rounds.length})`],
               ["First", "First (FCO)"],
               ["Double", "Double (DCO)"],
+              ["random", "Random / Unit Packs"],
               ["physical", "Physical (A)"],
               ["reward", "Rewards / Events / SCO"],
               ["subscription", "Pass+ Subscriptions"],
@@ -141,7 +150,7 @@ function RoundsPage() {
               onClick={() => setFilter(key)}
               className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                 filter === key
-                  ? "bg-zinc-200 text-zinc-950"
+                  ? "bg-zinc-800 text-white border border-zinc-700"
                   : "border border-zinc-800 bg-[#0c0c0e] text-zinc-400 hover:text-zinc-100"
               }`}
             >

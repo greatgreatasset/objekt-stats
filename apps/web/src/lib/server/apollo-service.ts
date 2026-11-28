@@ -25,6 +25,7 @@ export interface ApolloEnrichTarget {
   collectionNo: string;
   objektClass?: string;
   onOffline?: "online" | "offline";
+  minExpectedCopies?: number;
 }
 
 function rowToDropProvenance(
@@ -192,10 +193,24 @@ export async function enrichApolloCollectionsWithCache(
     return { collections: {}, newDrops: {}, remainingSlugs: [] };
   }
 
-  const { found, staleOrMissingSlugs } = await readCachedApolloCollections(
-    db,
-    allSlugs,
-  );
+  const { found, staleOrMissingSlugs: baseStaleOrMissing } =
+    await readCachedApolloCollections(db, allSlugs);
+
+  // Also treat a cached Apollo row as stale if our live on-chain mint count already
+  // exceeds its cached `totalCopies` (happens when Apollo was cached mid-drop).
+  const staleSet = new Set(baseStaleOrMissing);
+  for (const [slug, t] of targetBySlug.entries()) {
+    const cached = found[slug];
+    if (
+      cached &&
+      t.minExpectedCopies !== undefined &&
+      t.minExpectedCopies > 0 &&
+      cached.totalCopies < t.minExpectedCopies
+    ) {
+      staleSet.add(slug);
+    }
+  }
+  const staleOrMissingSlugs = allSlugs.filter((slug) => staleSet.has(slug));
 
   const safeCap = Math.min(Math.max(0, maxFetch), 20);
   const toFetch = staleOrMissingSlugs.slice(0, safeCap);
@@ -405,6 +420,7 @@ export async function getRoundApolloSupply(
     objektClass: string;
     collectionNo: string;
     onOffline: string;
+    totalMints?: number;
   }>,
   maxLiveFetch = 12,
 ): Promise<RoundApolloSupplySummary> {
@@ -421,6 +437,7 @@ export async function getRoundApolloSupply(
           collectionNo: c.collectionNo,
           objektClass: c.objektClass,
           onOffline: c.onOffline === "offline" ? "offline" : "online",
+          minExpectedCopies: c.totalMints,
         },
       };
     });

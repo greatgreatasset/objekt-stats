@@ -767,6 +767,45 @@ export const liveRoundBuyers = sqliteTable(
   ],
 );
 
+/**
+ * Exact all-time distinct purchasing wallets & minters per artist, deduplicated
+ * across the complete Polygon + Abstract primary mint history. Live mint/spin
+ * volumes are summed directly from `collections` at query time.
+ */
+export const artistAllTimeStats = sqliteTable("artist_all_time_stats", {
+  artistId: text("artist_id")
+    .primaryKey()
+    .references(() => artists.id, { onDelete: "cascade" }),
+  uniquePaidBuyers: integer("unique_paid_buyers").notNull().default(0),
+  uniqueAllMinters: integer("unique_all_minters").notNull().default(0),
+  snapshotBlock: integer("snapshot_block").notNull().default(0),
+  snapshotAt: text("snapshot_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/**
+ * Exact all-time distinct purchasing wallets & minters per member, deduplicated
+ * across the complete Polygon + Abstract primary mint history so the front-page
+ * overview can show true cross-round unique buyers alongside live purchased & spun counts.
+ */
+export const memberAllTimeStats = sqliteTable(
+  "member_all_time_stats",
+  {
+    memberId: text("member_id")
+      .primaryKey()
+      .references(() => members.id, { onDelete: "cascade" }),
+    artistId: text("artist_id")
+      .notNull()
+      .references(() => artists.id, { onDelete: "cascade" }),
+    uniquePaidBuyers: integer("unique_paid_buyers").notNull().default(0),
+    uniqueAllMinters: integer("unique_all_minters").notNull().default(0),
+    snapshotBlock: integer("snapshot_block").notNull().default(0),
+    snapshotAt: text("snapshot_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [index("idx_mats_artist").on(t.artistId)],
+);
+
 export type ArtistRow = typeof artists.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
@@ -789,3 +828,5 @@ export type SeasonalLeaderboardCutoffRow = typeof seasonalLeaderboardCutoffs.$in
 export type SeasonalWalletLeaderboardRow = typeof seasonalWalletLeaderboard.$inferSelect;
 export type ProcessedLiveSpinRow = typeof processedLiveSpins.$inferSelect;
 export type LiveRoundBuyerRow = typeof liveRoundBuyers.$inferSelect;
+export type ArtistAllTimeStatRow = typeof artistAllTimeStats.$inferSelect;
+export type MemberAllTimeStatRow = typeof memberAllTimeStats.$inferSelect;

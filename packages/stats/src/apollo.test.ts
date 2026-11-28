@@ -220,4 +220,98 @@ describe("Apollo slug and provenance helpers", () => {
       }),
     ).toBe("Autumn Breeze Bonus (Atom02 371Z)");
   });
+
+  it("classifies mid-sentence gifted holders, Abstract follower airdrop, dual fanclub, and unit-random packs", () => {
+    const midGift = classifyApolloProvenance({
+      artistId: "artms",
+      season: "Cream01",
+      collectionNo: "354Z",
+      objektClass: "Double",
+      onOffline: "online",
+      description: "2025 April Fools' Day Event, gifted to 355Z holders.",
+      eventSlug: "artms-april-fools-2025",
+      eventName: "April Fools' Day 2025",
+      eventType: "shop",
+      eventDescription: null,
+    });
+    expect(midGift.provenanceClass).toBe("free_reward");
+    expect(midGift.isFreeDistribution).toBe(true);
+
+    const abstractDrop = classifyApolloProvenance({
+      artistId: "triples",
+      season: "Atom02",
+      collectionNo: "341Z",
+      objektClass: "Double",
+      onOffline: "online",
+      description:
+        "Abstract Event, sold on the COSMO app shop. Gifted to everyone who followed tripleS on the COSMO app before April 18, 2025.",
+      eventSlug: "triples-abstract",
+      eventName: "Abstract",
+      eventType: "shop",
+      eventDescription: null,
+    });
+    expect(abstractDrop.provenanceClass).toBe("dual_distribution");
+
+    const msnzAnniv = applyApolloToRoundMeta({
+      objektClass: "Double",
+      onOffline: "online",
+      baseSaleMechanic: "member_select",
+      baseIncludeInPopularity: true,
+      baseUnitPriceUsd: 3.29,
+      provenance: {
+        dropKey: "triples|cream02|354Z",
+        sampleApolloSlug: "cream02-seoyeon-354z",
+        artistId: "triples",
+        season: "Cream02",
+        collectionNo: "354Z",
+        description: "msnz 1st Anniversary Event, sold on the COSMO app shop.",
+        eventSlug: "triples-msnz-1st-anniversary",
+        eventName: "msnz 1st Anniversary",
+        eventType: "shop",
+        eventDescription: null,
+        twitterUrl: null,
+        eraSlug: null,
+        eraName: null,
+        eraImageUrl: null,
+        provenanceClass: "shop_paid",
+        passBillingMonth: null,
+        passBillingLabel: null,
+        isFreeDistribution: false,
+      },
+    });
+    expect(msnzAnniv.saleMechanic).toBe("unit_random");
+    expect(msnzAnniv.includeInPopularity).toBe(false);
+    expect(msnzAnniv.unitPriceUsd).toBe(3.29);
+
+    const fanclubRound = applyApolloToRoundMeta({
+      objektClass: "Double",
+      onOffline: "online",
+      baseSaleMechanic: "member_select",
+      baseIncludeInPopularity: true,
+      baseUnitPriceUsd: 3.29,
+      provenance: {
+        dropKey: "triples|divine01|338Z",
+        sampleApolloSlug: "divine01-nakyoung-338z",
+        artistId: "triples",
+        season: "Divine01",
+        collectionNo: "338Z",
+        description:
+          "WAV 1st fanclub, dropped on October 31st 2024 and later sold in the COSMO app shop.",
+        eventSlug: "wav-1st-fanclub",
+        eventName: "WAV 1st Fanclub",
+        eventType: "shop",
+        eventDescription: null,
+        twitterUrl: null,
+        eraSlug: null,
+        eraName: null,
+        eraImageUrl: null,
+        provenanceClass: "dual_distribution",
+        passBillingMonth: null,
+        passBillingLabel: null,
+        isFreeDistribution: false,
+      },
+    });
+    expect(fanclubRound.saleMechanic).toBe("dual_distribution");
+    expect(fanclubRound.includeInPopularity).toBe(false);
+  });
 });

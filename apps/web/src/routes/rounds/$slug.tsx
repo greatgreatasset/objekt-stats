@@ -38,6 +38,7 @@ function RoundDetailPage() {
   const data = Route.useLoaderData();
   const [copied, setCopied] = useState(false);
   const [metric, setMetric] = useState<"buyers" | "mints">("buyers");
+  const [previewSort, setPreviewSort] = useState<"sales" | "member">("sales");
 
   if (!data) {
     return (
@@ -118,9 +119,13 @@ function RoundDetailPage() {
         ? "Free event reward, set-completion bonus, promotional/tour drop, or Special Class (SCO) grid completion — not a paid public shop sale."
         : round.saleMechanic === "physical_scan"
           ? "Physical Objekt QR scan (A-series) — reflects album/merch code scans rather than digital shop sales."
-          : round.saleMechanic === "random_pack"
-            ? "Random pack draw — uniform odds pull every member toward equal share."
-            : "Excluded from member popularity trend averages.";
+          : round.saleMechanic === "unit_random"
+            ? "Random unit-pack draw — fans buy a unit pack and receive a random member from that unit."
+            : round.saleMechanic === "random_pack"
+              ? "Random pack draw — uniform odds pull every member toward equal share."
+              : round.saleMechanic === "dual_distribution"
+                ? "Dual fanclub/follower airdrop + shop release — initial mass drop pulls member totals toward equal share."
+                : "Excluded from member popularity trend averages.";
 
   const copyRecap = async () => {
     const artistLabel = round.artistId === "artms" ? "ARTMS" : "tripleS";
@@ -412,7 +417,7 @@ function RoundDetailPage() {
                 onClick={() => setMetric("buyers")}
                 className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
                   metric === "buyers"
-                    ? "bg-zinc-200 text-zinc-950"
+                    ? "bg-zinc-800 text-white"
                     : "text-zinc-400 hover:text-zinc-100"
                 }`}
               >
@@ -423,7 +428,7 @@ function RoundDetailPage() {
                 onClick={() => setMetric("mints")}
                 className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
                   metric === "mints"
-                    ? "bg-zinc-200 text-zinc-950"
+                    ? "bg-zinc-800 text-white"
                     : "text-zinc-400 hover:text-zinc-100"
                 }`}
               >
@@ -664,42 +669,101 @@ function RoundDetailPage() {
 
       {/* Indexed Objekt Card Previews */}
       {(() => {
-        const previewCols = collections
+        const basePreviewCols = collections
           .filter((c) => c.frontImageUrl)
           .slice(0, 24);
-        if (previewCols.length === 0) return null;
+        if (basePreviewCols.length === 0) return null;
+
+        const salesRankBySlug = new Map<string, number>();
+        [...basePreviewCols]
+          .sort(
+            (a, b) =>
+              b.totalMints - a.totalMints || a.memberOrder - b.memberOrder,
+          )
+          .forEach((c, idx) => {
+            salesRankBySlug.set(c.slug, idx + 1);
+          });
+
+        const previewCols = [...basePreviewCols].sort((a, b) =>
+          previewSort === "sales"
+            ? b.totalMints - a.totalMints || a.memberOrder - b.memberOrder
+            : a.memberOrder - b.memberOrder ||
+              a.collectionNo.localeCompare(b.collectionNo),
+        );
+
+        const distinctCollectionNos = new Set(
+          previewCols.map((c) => c.collectionNo),
+        ).size;
+        const isArtmsRound = round.artistId === "artms";
+        const memberSortLabel = isArtmsRound ? "A1–A5" : "S1–S24";
         const pricedCount = previewCols.filter(
           (c) => c.apolloMedianPriceUsd !== null && c.apolloMedianPriceUsd > 0,
         ).length;
         const apolloMatchedCount = previewCols.filter(
           (c) => c.apolloTotalCopies !== null && c.apolloTotalCopies > 0,
         ).length;
+
         return (
-          <section className="space-y-3">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h2 className="text-base font-semibold text-white">
-                Objekt Previews ({collections.length} collections)
-              </h2>
-              <p className="font-mono text-[11px] text-zinc-400 tabular-nums">
-                {round.unitPriceUsd !== null && round.unitPriceUsd > 0 && (
-                  <span>
-                    COSMO retail ~${round.unitPriceUsd.toFixed(2)}
-                    {apolloMatchedCount > 0 ? " · " : ""}
-                  </span>
-                )}
-                {apolloMatchedCount > 0 && (
-                  <span>
-                    Apollo market:{" "}
-                    <span className="text-amber-300">
-                      {pricedCount}/{previewCols.length}
-                    </span>{" "}
-                    with active listings
-                  </span>
-                )}
-              </p>
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <h2 className="text-base font-semibold text-white">
+                  Objekt Previews ({collections.length} collections)
+                </h2>
+                <p className="font-mono text-xs text-zinc-400 tabular-nums">
+                  {round.unitPriceUsd !== null && round.unitPriceUsd > 0 && (
+                    <span>
+                      COSMO retail ~${round.unitPriceUsd.toFixed(2)}
+                      {apolloMatchedCount > 0 ? " · " : ""}
+                    </span>
+                  )}
+                  {apolloMatchedCount > 0 && (
+                    <span>
+                      Apollo market:{" "}
+                      <span className="text-amber-300">
+                        {pricedCount}/{previewCols.length}
+                      </span>{" "}
+                      with active listings
+                    </span>
+                  )}
+                </p>
+              </div>
+
+              <div className="inline-flex rounded-md border border-zinc-800 bg-[#0c0c0e] p-0.5 text-xs shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setPreviewSort("sales")}
+                  className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
+                    previewSort === "sales"
+                      ? "bg-zinc-800 text-white"
+                      : "text-zinc-400 hover:text-zinc-100"
+                  }`}
+                >
+                  Most Sales
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewSort("member")}
+                  className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors ${
+                    previewSort === "member"
+                      ? "bg-zinc-800 text-white"
+                      : "text-zinc-400 hover:text-zinc-100"
+                  }`}
+                >
+                  {memberSortLabel}
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
+
+            <div
+              className={
+                isArtmsRound && previewCols.length <= 5
+                  ? "grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:grid-cols-5"
+                  : "grid grid-cols-2 gap-3.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6"
+              }
+            >
               {previewCols.map((c) => {
+                const salesRank = salesRankBySlug.get(c.slug) ?? 1;
                 const hasPrice =
                   c.apolloMedianPriceUsd !== null && c.apolloMedianPriceUsd > 0;
                 const hasRange =
@@ -734,7 +798,8 @@ function RoundDetailPage() {
                     )}
                     target="_blank"
                     rel="noreferrer"
-                    className="group overflow-hidden rounded-md border border-zinc-800/90 bg-[#121215] transition-colors hover:border-zinc-500"
+                    title={`${c.collectionId} · ${c.totalMints.toLocaleString()} on-chain sales${c.apolloTransferablePct !== null ? ` · ${c.apolloTransferablePct.toFixed(1)}% tradeable` : ""} · ${priceTitle}`}
+                    className="group overflow-hidden rounded-lg border border-zinc-800/90 bg-[#121215] transition-colors hover:border-zinc-500"
                   >
                     <img
                       src={c.frontImageUrl!}
@@ -742,50 +807,52 @@ function RoundDetailPage() {
                       loading="lazy"
                       className="aspect-[2/3] w-full object-cover"
                     />
-                    <div className="p-2 space-y-0.5">
-                      <p className="truncate text-[11px] font-medium text-zinc-200 group-hover:text-white">
-                        {c.collectionId}
-                      </p>
-                      {c.apolloTotalCopies !== null && c.apolloTotalCopies > 0 ? (
-                        <p className="font-mono text-[10px] text-zinc-400 tabular-nums">
-                          {c.apolloTotalCopies.toLocaleString()} copies ·{" "}
-                          <span className="text-emerald-400">
-                            {c.apolloTransferablePct?.toFixed(0)}%
+                    <div className="p-2.5 space-y-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-sm font-semibold text-white">
+                          {c.memberName}
+                        </span>
+                        <span className="font-mono text-xs text-zinc-400 shrink-0">
+                          {distinctCollectionNos > 1
+                            ? c.collectionNo
+                            : c.memberCode || c.collectionNo}
+                        </span>
+                      </div>
+
+                      <div className="flex items-baseline justify-between gap-2 font-mono tabular-nums">
+                        <span className="text-sm font-bold text-zinc-100">
+                          {c.totalMints.toLocaleString()}
+                          <span className="ml-1 font-sans text-xs font-normal text-zinc-400">
+                            sales
                           </span>
-                        </p>
-                      ) : (
-                        <p className="font-mono text-[10px] text-zinc-500">
-                          {c.totalMints.toLocaleString()} mints
-                        </p>
-                      )}
+                        </span>
+                        <span className="text-xs text-zinc-400">
+                          #{salesRank}
+                        </span>
+                      </div>
+
                       {hasPrice ? (
-                        <>
-                          <p
-                            title={priceTitle}
-                            className="font-mono text-[10px] font-medium text-amber-300 tabular-nums"
-                          >
-                            Med ${c.apolloMedianPriceUsd!.toFixed(2)}
+                        <div className="flex items-baseline justify-between gap-2 font-mono text-xs tabular-nums pt-0.5">
+                          <span className="font-medium text-amber-300">
+                            ${c.apolloMedianPriceUsd!.toFixed(2)}
                             {c.apolloListingCount
                               ? ` (${c.apolloListingCount})`
                               : ""}
-                          </p>
-                          {hasRange && (
-                            <p
-                              title={priceTitle}
-                              className="font-mono text-[10px] text-zinc-400 tabular-nums"
-                            >
+                          </span>
+                          {hasRange ? (
+                            <span className="text-zinc-400 text-[11px]">
                               ${c.apolloMinPriceUsd!.toFixed(2)}–$
                               {c.apolloMaxPriceUsd!.toFixed(2)}
-                            </p>
-                          )}
-                        </>
-                      ) : c.apolloTotalCopies !== null &&
-                        c.apolloTotalCopies > 0 ? (
-                        <p
-                          title={priceTitle}
-                          className="font-mono text-[10px] text-zinc-600"
-                        >
-                          No active listings
+                            </span>
+                          ) : c.apolloTransferablePct !== null ? (
+                            <span className="text-emerald-400/90">
+                              {c.apolloTransferablePct.toFixed(0)}% trade
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : c.apolloTransferablePct !== null ? (
+                        <p className="font-mono text-xs text-emerald-400/90 tabular-nums pt-0.5">
+                          {c.apolloTransferablePct.toFixed(0)}% tradeable
                         </p>
                       ) : null}
                     </div>

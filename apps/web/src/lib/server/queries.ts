@@ -2,12 +2,14 @@ import { createServerFn } from "@tanstack/react-start";
 import { asc, desc, eq, sql } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import {
+  artistAllTimeStats,
   artists,
   collectionDailyMints,
   collections,
   createDb,
   eventMembers,
   events,
+  memberAllTimeStats,
   members,
   recentNotableSpins,
   roundDailyMints,
@@ -395,6 +397,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .select({
         roundCount: sql<number>`count(*)`,
         popularityRoundCount: sql<number>`sum(case when ${saleRounds.includeInPopularity} = 1 then 1 else 0 end)`,
+        randomPackRoundCount: sql<number>`sum(case when ${saleRounds.saleMechanic} in ('random_pack', 'unit_random') then 1 else 0 end)`,
         qualifyingPopularityRoundCount: sql<number>`sum(case when ${saleRounds.includeInPopularity} = 1 and ${saleRounds.uniqueBuyers} >= ${minBuyers} then 1 else 0 end)`,
         estGrossUsd: sql<number>`coalesce(sum(case when ${saleRounds.unitPriceUsd} > 0 and ${saleRounds.saleMechanic} != 'reward' and ${saleRounds.objektClass} NOT IN ('Welcome', 'Special', 'Zero', 'Premier') then ${saleRounds.totalMints} * ${saleRounds.unitPriceUsd} else 0 end), 0)`,
       })
@@ -409,6 +412,126 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       })
       .from(collections)
       .where(eq(collections.artistId, artistId));
+
+    // Live per-member all-time purchased (paid digital) & Spin totals directly from collections
+    const memberAllTimeColMap = new Map<
+      string,
+      {
+        allTimeMints: number;
+        allTimeSpun: number;
+        paidMints: number;
+        paidSpun: number;
+      }
+    >();
+    let paidDigitalMintsTotal = 0;
+    try {
+      const colAggRes = await env.DB.prepare(
+        `SELECT
+           c.member_id AS member_id,
+           COALESCE(SUM(c.total_mints), 0) AS all_time_mints,
+           COALESCE(SUM(c.spun_count), 0) AS all_time_spun,
+           COALESCE(SUM(CASE
+             WHEN c.on_offline = 'online'
+               AND c.objekt_class IN ('First', 'Double', 'Motion')
+               AND COALESCE(
+                 r.sale_mechanic,
+                 CASE
+                   WHEN c.objekt_class IN ('First', 'Motion') THEN 'member_select'
+                   WHEN adm.provenance_class = 'shop_paid' THEN 'member_select'
+                   ELSE 'reward'
+                 END
+               ) IN ('member_select', 'unit_select', 'unit_random', 'random_pack')
+             THEN c.total_mints ELSE 0 END), 0) AS paid_mints,
+           COALESCE(SUM(CASE
+             WHEN c.on_offline = 'online'
+               AND c.objekt_class IN ('First', 'Double', 'Motion')
+               AND COALESCE(
+                 r.sale_mechanic,
+                 CASE
+                   WHEN c.objekt_class IN ('First', 'Motion') THEN 'member_select'
+                   WHEN adm.provenance_class = 'shop_paid' THEN 'member_select'
+                   ELSE 'reward'
+                 END
+               ) IN ('member_select', 'unit_select', 'unit_random', 'random_pack')
+             THEN c.spun_count ELSE 0 END), 0) AS paid_spun
+         FROM collections c
+         LEFT JOIN sale_round_collections src ON src.collection_slug = c.slug
+         LEFT JOIN sale_rounds r ON r.slug = src.round_slug
+         LEFT JOIN apollo_drop_metadata adm
+           ON adm.drop_key = lower(c.artist_id) || '|' || lower(c.season) || '|' || upper(c.collection_no)
+         WHERE c.artist_id = ?
+         GROUP BY c.member_id`,
+      )
+        .bind(artistId)
+        .all<{
+          member_id: string | null;
+          all_time_mints: number;
+          all_time_spun: number;
+          paid_mints: number;
+          paid_spun: number;
+        }>();
+
+      for (const row of colAggRes.results ?? []) {
+        const paidMints = Number(row.paid_mints ?? 0);
+        paidDigitalMintsTotal += paidMints;
+        if (row.member_id) {
+          memberAllTimeColMap.set(row.member_id, {
+            allTimeMints: Number(row.all_time_mints ?? 0),
+            allTimeSpun: Number(row.all_time_spun ?? 0),
+            paidMints,
+            paidSpun: Number(row.paid_spun ?? 0),
+          });
+        }
+      }
+    } catch {
+      // Graceful fallback
+    }
+
+    // Exact all-time deduplicated distinct purchasing wallets (Polygon + Abstract)
+    let artistBuyersRow: {
+      uniquePaidBuyers: number;
+      uniqueAllMinters: number;
+      snapshotBlock: number;
+      snapshotAt: string;
+    } | null = null;
+    const memberBuyersMap = new Map<
+      string,
+      {
+        uniquePaidBuyers: number;
+        uniqueAllMinters: number;
+        snapshotBlock: number;
+        snapshotAt: string;
+      }
+    >();
+    try {
+      const [aRow] = await db
+        .select()
+        .from(artistAllTimeStats)
+        .where(eq(artistAllTimeStats.artistId, artistId))
+        .limit(1);
+      if (aRow) {
+        artistBuyersRow = {
+          uniquePaidBuyers: aRow.uniquePaidBuyers,
+          uniqueAllMinters: aRow.uniqueAllMinters,
+          snapshotBlock: aRow.snapshotBlock,
+          snapshotAt: aRow.snapshotAt,
+        };
+      }
+      const mRows = await db
+        .select()
+        .from(memberAllTimeStats)
+        .where(eq(memberAllTimeStats.artistId, artistId));
+      for (const mr of mRows) {
+        memberBuyersMap.set(mr.memberId, {
+          uniquePaidBuyers: mr.uniquePaidBuyers,
+          uniqueAllMinters: mr.uniqueAllMinters,
+          snapshotBlock: mr.snapshotBlock,
+          snapshotAt: mr.snapshotAt,
+        });
+      }
+    } catch {
+      // Graceful before migration 0015 is populated
+    }
 
     const enrichedRounds = roundList.map((r) => {
       const topSeller = roundTopByMints.get(r.slug) ?? null;
@@ -436,10 +559,34 @@ export const getArtistOverview = createServerFn({ method: "GET" })
 
     return {
       artist: artist ?? null,
-      members: memberList.map((m) => ({
-        ...m,
-        stats: memberStatsMap.get(m.id) ?? null,
-      })),
+      members: memberList.map((m) => {
+        const colAgg = memberAllTimeColMap.get(m.id);
+        const buyerAgg = memberBuyersMap.get(m.id);
+        const allTimeMints = colAgg?.allTimeMints ?? 0;
+        const paidMints = colAgg?.paidMints ?? 0;
+        const spunCount = colAgg?.allTimeSpun ?? 0;
+        const paidSpunCount = colAgg?.paidSpun ?? 0;
+        return {
+          ...m,
+          stats: memberStatsMap.get(m.id) ?? null,
+          allTime: {
+            uniquePaidBuyers: buyerAgg?.uniquePaidBuyers ?? null,
+            uniqueAllMinters: buyerAgg?.uniqueAllMinters ?? null,
+            paidMints,
+            allTimeMints,
+            spunCount,
+            paidSpunCount,
+            spinRatePct:
+              allTimeMints > 0
+                ? Number(((spunCount / allTimeMints) * 100).toFixed(2))
+                : 0,
+            paidSpinRatePct:
+              paidMints > 0
+                ? Number(((paidSpunCount / paidMints) * 100).toFixed(2))
+                : 0,
+          },
+        };
+      }),
       rounds: enrichedRounds,
       anomalies,
       movers: {
@@ -469,10 +616,16 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       totals: {
         roundCount: Number(roundTotals?.roundCount ?? 0),
         popularityRoundCount: Number(roundTotals?.popularityRoundCount ?? 0),
+        randomPackRoundCount: Number(roundTotals?.randomPackRoundCount ?? 0),
         collectionCount: Number(collectionTotals?.collectionCount ?? 0),
         totalMints: Number(collectionTotals?.totalMints ?? 0),
+        paidDigitalMints: paidDigitalMintsTotal,
         totalSpins: Number(collectionTotals?.totalSpins ?? 0),
         estGrossUsd: Number(roundTotals?.estGrossUsd ?? 0),
+        uniquePaidBuyers: artistBuyersRow?.uniquePaidBuyers ?? null,
+        uniqueAllMinters: artistBuyersRow?.uniqueAllMinters ?? null,
+        buyersSnapshotBlock: artistBuyersRow?.snapshotBlock ?? null,
+        buyersSnapshotAt: artistBuyersRow?.snapshotAt ?? null,
       },
     };
   });
@@ -695,9 +848,14 @@ export const getRoundDetail = createServerFn({ method: "GET" })
         };
       }),
       collections: linkedCols.slice(0, 48).map((c) => {
+        const m = c.memberId ? memberById.get(c.memberId) : undefined;
         const apollo = apolloSupply.byCollectionSlug[c.slug] ?? null;
         return {
           ...c,
+          memberCode: m?.code ?? "",
+          memberName: m?.name ?? c.rawMemberName,
+          memberOrder: m?.memberOrder ?? 999,
+          hexColor: m?.hexColor ?? "#22AEFF",
           apolloSlug:
             apollo?.apolloSlug ??
             toApolloSlug(c.season, c.rawMemberName, c.collectionNo),

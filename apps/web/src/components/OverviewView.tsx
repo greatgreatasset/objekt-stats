@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   DropSchedulePanel,
   type DropSchedulePanelData,
@@ -31,6 +31,16 @@ export interface OverviewData {
       avgMintsPerBuyer: number | null;
       bestRank: number | null;
     } | null;
+    allTime?: {
+      uniquePaidBuyers: number | null;
+      uniqueAllMinters: number | null;
+      paidMints: number;
+      allTimeMints: number;
+      spunCount: number;
+      paidSpunCount: number;
+      spinRatePct: number;
+      paidSpinRatePct: number;
+    };
   }>;
   rounds: Array<{
     slug: string;
@@ -149,14 +159,21 @@ export interface OverviewData {
   totals: {
     roundCount: number;
     popularityRoundCount: number;
+    randomPackRoundCount?: number;
     collectionCount: number;
     totalMints: number;
+    paidDigitalMints?: number;
     totalSpins?: number;
     estGrossUsd: number;
+    uniquePaidBuyers?: number | null;
+    uniqueAllMinters?: number | null;
+    buyersSnapshotBlock?: number | null;
+    buyersSnapshotAt?: string | null;
   };
 }
 
 type RoundItem = OverviewData["rounds"][number];
+type MemberSortKey = "index" | "buyers" | "purchased" | "spun" | "order";
 
 interface GroupedOverviewRound {
   key: string;
@@ -194,10 +211,16 @@ function formatCardRangeTag(cards: RoundItem[]): string | null {
   return `${cards.length} cards`;
 }
 
+function formatCompactCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${(n / 1_000).toFixed(0)}k`;
+  return n.toLocaleString();
+}
+
 /**
  * Collapses same-event multi-card sets (e.g. Autumn Breeze 368Z/369Z/370Z) into
- * single clean Overview rail entries while preserving exact component breakdowns
- * in the calculation proof tooltip.
+ * single clean Overview entries while preserving exact component breakdowns
+ * in the hover proof tooltip.
  */
 function groupOverviewRounds(
   rounds: RoundItem[],
@@ -301,14 +324,12 @@ export function OverviewView({
   data: OverviewData;
   artistSlug: "triples" | "artms";
 }) {
-  const [boardMetric, setBoardMetric] = useState<"buyers" | "mints">("buyers");
-  const [showAllMembers, setShowAllMembers] = useState(false);
+  const [sortKey, setSortKey] = useState<MemberSortKey>("index");
   const [showHeroMath, setShowHeroMath] = useState(false);
   const [showDemandMath, setShowDemandMath] = useState(false);
   const [showRoundsMath, setShowRoundsMath] = useState(false);
   const [showMoversMath, setShowMoversMath] = useState(false);
   const [showShiftsMath, setShowShiftsMath] = useState(false);
-  const [showRosterMath, setShowRosterMath] = useState(false);
 
   const isArtms = artistSlug === "artms";
   const artistName = data.artist?.name ?? (isArtms ? "ARTMS" : "tripleS");
@@ -316,48 +337,89 @@ export function OverviewView({
   const searchParam = isArtms ? { artist: "artms" as const } : {};
   const minBuyers = data.calcMeta?.minLeaderboardBuyers ?? (isArtms ? 50 : 150);
   const qualifyingRounds = data.calcMeta?.qualifyingPopularityRoundCount ?? 0;
-  const excludedRounds =
-    data.calcMeta?.excludedRoundCount ??
-    Math.max(0, data.totals.roundCount - data.totals.popularityRoundCount);
+  const randomPackRounds = data.totals.randomPackRoundCount ?? 0;
+  const otherNonRankedRounds = Math.max(
+    0,
+    data.totals.roundCount - data.totals.popularityRoundCount - randomPackRounds,
+  );
 
-  const rankedMembers = [...data.members]
-    .filter((m) => m.stats && m.stats.totalMints > 0)
-    .sort((a, b) =>
-      boardMetric === "buyers"
-        ? (b.stats?.avgBuyersRelativeIndex ?? 0) -
-          (a.stats?.avgBuyersRelativeIndex ?? 0)
-        : (b.stats?.avgRelativeIndex ?? 0) - (a.stats?.avgRelativeIndex ?? 0),
+  // Compute canonical Demand Index rank (1..N) once so it stays visible even when sorted by S1–S24
+  const demandRankById = useMemo(() => {
+    const byIdx = [...data.members]
+      .filter((m) => (m.allTime?.allTimeMints ?? m.stats?.totalMints ?? 0) > 0)
+      .sort(
+        (a, b) =>
+          (b.stats?.avgBuyersRelativeIndex ?? 0) -
+            (a.stats?.avgBuyersRelativeIndex ?? 0) ||
+          (b.allTime?.uniquePaidBuyers ?? 0) - (a.allTime?.uniquePaidBuyers ?? 0),
+      );
+    const map = new Map<string, number>();
+    byIdx.forEach((m, idx) => map.set(m.id, idx + 1));
+    return map;
+  }, [data.members]);
+
+  const sortedMembers = useMemo(() => {
+    const active = data.members.filter(
+      (m) => (m.allTime?.allTimeMints ?? m.stats?.totalMints ?? 0) > 0,
     );
-  const visibleRankedMembers = showAllMembers
-    ? rankedMembers
-    : rankedMembers.slice(0, 10);
+    return [...active].sort((a, b) => {
+      if (sortKey === "order") {
+        return a.memberOrder - b.memberOrder;
+      }
+      if (sortKey === "buyers") {
+        return (
+          (b.allTime?.uniquePaidBuyers ?? 0) - (a.allTime?.uniquePaidBuyers ?? 0) ||
+          (b.allTime?.paidMints ?? 0) - (a.allTime?.paidMints ?? 0)
+        );
+      }
+      if (sortKey === "purchased") {
+        return (
+          (b.allTime?.paidMints ?? 0) - (a.allTime?.paidMints ?? 0) ||
+          (b.allTime?.uniquePaidBuyers ?? 0) - (a.allTime?.uniquePaidBuyers ?? 0)
+        );
+      }
+      if (sortKey === "spun") {
+        return (
+          (b.allTime?.spunCount ?? 0) - (a.allTime?.spunCount ?? 0) ||
+          (b.allTime?.spinRatePct ?? 0) - (a.allTime?.spinRatePct ?? 0)
+        );
+      }
+      return (
+        (b.stats?.avgBuyersRelativeIndex ?? 0) -
+          (a.stats?.avgBuyersRelativeIndex ?? 0) ||
+        (b.allTime?.uniquePaidBuyers ?? 0) - (a.allTime?.uniquePaidBuyers ?? 0)
+      );
+    });
+  }, [data.members, sortKey]);
+
   const maxRelIdx = Math.max(
     1.35,
-    ...rankedMembers.map((m) =>
-      boardMetric === "buyers"
-        ? (m.stats?.avgBuyersRelativeIndex ?? 1)
-        : (m.stats?.avgRelativeIndex ?? 1),
-    ),
+    ...sortedMembers.map((m) => m.stats?.avgBuyersRelativeIndex ?? 1),
   );
-  const topMember = rankedMembers[0] ?? null;
+  const topByDemand =
+    sortedMembers.find((m) => demandRankById.get(m.id) === 1) ??
+    sortedMembers[0] ??
+    null;
 
-  // Match ARTMS's 5-row Demand Index height (5 distinct drops); tripleS gets 10 to align with top-10 Demand Index
-  const displayRounds = groupOverviewRounds(data.rounds, isArtms ? 5 : 10);
+  const displayRounds = groupOverviewRounds(data.rounds, isArtms ? 6 : 8);
 
   const totalSpins = data.totals.totalSpins ?? 0;
   const spinRatePct =
     data.totals.totalMints > 0
       ? (totalSpins / data.totals.totalMints) * 100
       : 0;
+  const paidDigitalMints = data.totals.paidDigitalMints ?? 0;
   const abstractChain = data.syncState.find((s) => s.chain === "abstract");
   const isCatchingUp =
     data.abstractLagMinutes !== null &&
     data.abstractLagMinutes !== undefined &&
     data.abstractLagMinutes >= 30;
 
+  const memberOrderLabel = isArtms ? "A1–A5" : "S1–S24";
+
   return (
     <div className="space-y-8">
-      {/* Compact Editorial Header + Inline Stats */}
+      {/* Compact Editorial Header + Fan-Readable Hero Stats */}
       <header className="border-b border-zinc-800/90 pb-6 space-y-5">
         <div className="flex flex-col gap-2.5 sm:flex-row sm:items-baseline sm:justify-between">
           <div className="space-y-1">
@@ -366,8 +428,8 @@ export function OverviewView({
               <span className="font-normal text-zinc-400">Objekt Stats</span>
             </h1>
             <p className="text-sm text-zinc-400">
-              On-chain COSMO primary mints, unique buyer counts, and member
-              demand rankings across Polygon and Abstract.
+              All-time unique COSMO buyers, paid primary mints, Spin burns, and
+              member demand across Polygon and Abstract.
             </p>
           </div>
 
@@ -392,32 +454,28 @@ export function OverviewView({
 
         <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4 pt-1">
           <div className="flex flex-wrap items-baseline gap-x-8 gap-y-3">
-            <Link
-              to="/rounds"
-              search={searchParam}
-              className="group block"
-              title={`${data.totals.popularityRoundCount.toLocaleString()} paid digital rounds + ${excludedRounds.toLocaleString()} excluded (Welcome, Special, Premier rewards, offline QR) = ${data.totals.roundCount.toLocaleString()} total`}
-            >
-              <div className="text-xs text-zinc-500 group-hover:text-zinc-300 transition-colors">
-                Paid Sale Rounds{" "}
-                <span className="text-zinc-600 group-hover:text-zinc-400">
-                  →
-                </span>
-              </div>
-              <div className="mt-0.5 flex items-baseline gap-2">
-                <span className="font-mono text-xl font-semibold text-white tabular-nums">
-                  {data.totals.popularityRoundCount.toLocaleString()}
-                </span>
-                <span className="text-xs text-zinc-500 tabular-nums">
-                  of {data.totals.roundCount.toLocaleString()} total
-                </span>
-              </div>
-            </Link>
-
-            <div className="hidden sm:block h-8 w-px bg-zinc-800/90 self-center" />
+            {data.totals.uniquePaidBuyers !== null &&
+              data.totals.uniquePaidBuyers !== undefined && (
+                <>
+                  <div
+                    title={`Exact distinct COSMO wallets with ≥1 paid digital ${artistName} mint (${(data.totals.uniqueAllMinters ?? 0).toLocaleString()} total wallets incl. free/physical · through Abstract block #${(data.totals.buyersSnapshotBlock ?? 0).toLocaleString()})`}
+                  >
+                    <div className="text-xs text-zinc-500">Unique Buyers</div>
+                    <div className="mt-0.5 flex items-baseline gap-2">
+                      <span className="font-mono text-xl font-semibold text-white tabular-nums">
+                        {data.totals.uniquePaidBuyers.toLocaleString()}
+                      </span>
+                      <span className="text-xs text-zinc-500 tabular-nums">
+                        paid wallets
+                      </span>
+                    </div>
+                  </div>
+                  <div className="hidden sm:block h-8 w-px bg-zinc-800/90 self-center" />
+                </>
+              )}
 
             <div
-              title={`Sum of collections.total_mints across ${data.totals.collectionCount.toLocaleString()} indexed collections on Polygon + Abstract`}
+              title={`SUM(collections.total_mints) across ${data.totals.collectionCount.toLocaleString()} collections on Polygon + Abstract (${paidDigitalMints.toLocaleString()} paid digital)`}
             >
               <div className="text-xs text-zinc-500">On-Chain Mints</div>
               <div className="mt-0.5 flex items-baseline gap-2">
@@ -425,7 +483,9 @@ export function OverviewView({
                   {data.totals.totalMints.toLocaleString()}
                 </span>
                 <span className="text-xs text-zinc-500 tabular-nums">
-                  {data.totals.collectionCount.toLocaleString()} collections
+                  {paidDigitalMints > 0
+                    ? `${formatCompactCount(paidDigitalMints)} paid`
+                    : `${data.totals.collectionCount.toLocaleString()} sets`}
                 </span>
               </div>
             </div>
@@ -456,6 +516,30 @@ export function OverviewView({
                 </Link>
               </>
             )}
+
+            <div className="hidden sm:block h-8 w-px bg-zinc-800/90 self-center" />
+
+            <Link
+              to="/rounds"
+              search={searchParam}
+              className="group block"
+              title={`${data.totals.roundCount.toLocaleString()} total indexed releases: ${data.totals.popularityRoundCount.toLocaleString()} member-select paid drops + ${randomPackRounds.toLocaleString()} paid random/unit packs + ${otherNonRankedRounds.toLocaleString()} free rewards, Pass+ & physical QR scans`}
+            >
+              <div className="text-xs text-zinc-500 group-hover:text-zinc-300 transition-colors">
+                Indexed Releases{" "}
+                <span className="text-zinc-600 group-hover:text-zinc-400">
+                  →
+                </span>
+              </div>
+              <div className="mt-0.5 flex items-baseline gap-2">
+                <span className="font-mono text-xl font-semibold text-white tabular-nums">
+                  {data.totals.roundCount.toLocaleString()}
+                </span>
+                <span className="text-xs text-zinc-500 tabular-nums">
+                  {data.totals.popularityRoundCount.toLocaleString()} ranked
+                </span>
+              </div>
+            </Link>
           </div>
 
           <MathToggle
@@ -467,22 +551,28 @@ export function OverviewView({
 
         {showHeroMath && (
           <div className="rounded-md border border-zinc-800/80 bg-[#0f0f12] px-4 py-3 font-mono text-[11px] leading-relaxed text-zinc-400 space-y-1">
-            <div>
-              <span className="text-zinc-200">Paid Sale Rounds:</span>{" "}
-              <span className="text-zinc-300">
-                {data.totals.popularityRoundCount.toLocaleString()}
-              </span>{" "}
-              paid digital +{" "}
-              <span className="text-zinc-300">
-                {excludedRounds.toLocaleString()}
-              </span>{" "}
-              excluded (Welcome 100Z, Special grid rewards, Premier 401Z/402Z,
-              leaderboard rewards, Pass+, offline scans) ={" "}
-              <span className="text-zinc-200">
-                {data.totals.roundCount.toLocaleString()}
-              </span>{" "}
-              total rounds.
-            </div>
+            {data.totals.uniquePaidBuyers !== null &&
+              data.totals.uniquePaidBuyers !== undefined && (
+                <div>
+                  <span className="text-zinc-200">Unique Buyers:</span>{" "}
+                  <span className="text-zinc-300">
+                    {data.totals.uniquePaidBuyers.toLocaleString()}
+                  </span>{" "}
+                  distinct COSMO wallets with ≥1 paid digital mint (
+                  <span className="text-zinc-300">
+                    {(data.totals.uniqueAllMinters ?? 0).toLocaleString()}
+                  </span>{" "}
+                  distinct wallets incl. free Welcome, SCO, promos &amp; physical
+                  scans), deduplicated across Polygon + Abstract through block{" "}
+                  <span className="text-zinc-300">
+                    #{(data.totals.buyersSnapshotBlock ?? 0).toLocaleString()}
+                  </span>
+                  {data.totals.buyersSnapshotAt
+                    ? ` (${data.totals.buyersSnapshotAt.slice(0, 10)})`
+                    : ""}
+                  .
+                </div>
+              )}
             <div>
               <span className="text-zinc-200">On-Chain Mints:</span>{" "}
               SUM(collections.total_mints) across{" "}
@@ -493,7 +583,8 @@ export function OverviewView({
               <span className="text-zinc-200">
                 {data.totals.totalMints.toLocaleString()}
               </span>{" "}
-              primary Transfer(0x0 → wallet) mints on Polygon + Abstract.
+              total ({paidDigitalMints.toLocaleString()} paid digital primary
+              mints).
             </div>
             {totalSpins > 0 && (
               <div>
@@ -507,6 +598,25 @@ export function OverviewView({
                 transferred to COSMO Spin contract (0xd3d5…345f).
               </div>
             )}
+            <div>
+              <span className="text-zinc-200">Indexed Releases:</span>{" "}
+              <span className="text-zinc-300">
+                {data.totals.popularityRoundCount.toLocaleString()}
+              </span>{" "}
+              member-select paid drops (feed Demand Index) +{" "}
+              <span className="text-zinc-300">
+                {randomPackRounds.toLocaleString()}
+              </span>{" "}
+              paid random/unit packs +{" "}
+              <span className="text-zinc-300">
+                {otherNonRankedRounds.toLocaleString()}
+              </span>{" "}
+              free rewards, Pass+, fanclub/airdrops &amp; physical scans ={" "}
+              <span className="text-zinc-200">
+                {data.totals.roundCount.toLocaleString()}
+              </span>{" "}
+              total (100% indexed).
+            </div>
             {abstractChain && (
               <div>
                 <span className="text-zinc-200">Indexer Cursor:</span> Abstract
@@ -534,190 +644,342 @@ export function OverviewView({
         />
       )}
 
-      {/* Main Split: Demand Index Leaderboard (wide) + Paid Sale Rounds (360px rail) */}
-      {rankedMembers.length > 0 ? (
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px] items-start">
-          {/* Demand Index Leaderboard */}
-          <div className="rounded-lg border border-zinc-800/90 bg-[#121215]">
-            <div className="flex flex-col gap-3 border-b border-zinc-800/90 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-              <div className="min-w-0 space-y-0.5">
-                <div className="flex items-baseline gap-3">
-                  <h2 className="text-base font-semibold text-white">
-                    Demand Index
-                  </h2>
-                  <MathToggle
-                    open={showDemandMath}
-                    onToggle={() => setShowDemandMath((v) => !v)}
-                  />
-                </div>
-                <p className="text-xs text-zinc-400">
-                  {boardMetric === "buyers"
-                    ? `Unique buyers vs. mean across paid drops (≥${minBuyers} buyers · 1.00× = avg).`
-                    : `Paid mints vs. mean across paid drops (≥${minBuyers} buyers · 1.00× = avg).`}
-                </p>
-              </div>
-              <div className="inline-flex self-start sm:self-auto rounded-md border border-zinc-800 bg-[#0c0c0e] p-0.5 text-xs shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setBoardMetric("buyers")}
-                  className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors whitespace-nowrap ${
-                    boardMetric === "buyers"
-                      ? "bg-zinc-800 text-white"
-                      : "text-zinc-400 hover:text-zinc-100"
-                  }`}
+      {/* Full-Width All-Members Overview (Every Member Visible at a Glance) */}
+      {sortedMembers.length > 0 ? (
+        <section className="rounded-lg border border-zinc-800/90 bg-[#121215]">
+          <div className="flex flex-col gap-3 border-b border-zinc-800/90 px-4 py-4 lg:flex-row lg:items-center lg:justify-between sm:px-5">
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h2 className="text-base font-semibold text-white">
+                  {isArtms ? "ARTMS Member Overview" : "Member Overview (All 24)"}
+                </h2>
+                <MathToggle
+                  open={showDemandMath}
+                  onToggle={() => setShowDemandMath((v) => !v)}
+                />
+                <Link
+                  to="/members"
+                  search={searchParam}
+                  className="text-xs text-zinc-400 hover:text-white transition-colors"
                 >
-                  Unique Buyers
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBoardMetric("mints")}
-                  className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors whitespace-nowrap ${
-                    boardMetric === "mints"
-                      ? "bg-zinc-800 text-white"
-                      : "text-zinc-400 hover:text-zinc-100"
-                  }`}
-                >
-                  Total Mints
-                </button>
+                  Full matrix →
+                </Link>
               </div>
+              <p className="text-xs text-zinc-400">
+                All-time unique COSMO buyers, paid Objekts purchased, Spin burns,
+                and equal-footing Demand Index across member-select drops.
+              </p>
             </div>
 
-            {showDemandMath && (
-              <div className="border-b border-zinc-800/70 bg-[#0d0d10] px-4 py-3 font-mono text-[11px] leading-relaxed text-zinc-400 space-y-1 sm:px-5">
+            <div className="inline-flex flex-wrap self-start lg:self-auto rounded-md border border-zinc-800 bg-[#0c0c0e] p-0.5 text-xs shrink-0">
+              {(
+                [
+                  ["index", "Demand Index"],
+                  ["buyers", "Unique Buyers"],
+                  ["purchased", "Purchased"],
+                  ["spun", "Spun"],
+                  ["order", memberOrderLabel],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSortKey(key)}
+                  className={`rounded-[4px] px-2.5 py-1 font-medium transition-colors whitespace-nowrap ${
+                    sortKey === key
+                      ? "bg-zinc-800 text-white"
+                      : "text-zinc-400 hover:text-zinc-100"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {showDemandMath && (
+            <div className="border-b border-zinc-800/70 bg-[#0d0d10] px-4 py-3 font-mono text-[11px] leading-relaxed text-zinc-400 space-y-1 sm:px-5">
+              <div>
+                <span className="text-zinc-200">Unique Buyers:</span> Exact
+                all-time COUNT(DISTINCT minter) across all paid digital FCO,
+                Motion, selectable DCO &amp; paid random/unit packs on Polygon +
+                Abstract (deduplicated through block #
+                {(data.totals.buyersSnapshotBlock ?? 0).toLocaleString()}).
+                Excludes Welcome, SCO, promos, Pass+, free airdrops &amp;
+                physical scans.
+              </div>
+              <div>
+                <span className="text-zinc-200">Purchased:</span> Live
+                SUM(collections.total_mints) across paid digital collections for
+                each member.
+              </div>
+              <div>
+                <span className="text-zinc-200">Spun:</span> Live
+                SUM(collections.spun_count) transferred to COSMO Spin ·{" "}
+                <span className="text-zinc-300">%</span> = Spun ÷ All-Time Member
+                Mints (hover any row for paid-only spin rate).
+              </div>
+              <div>
+                <span className="text-zinc-200">Demand Index:</span> Equal-footing
+                AVG(member_buyers ÷ round_mean_buyers) across{" "}
+                <span className="text-zinc-300">
+                  {qualifyingRounds.toLocaleString()}
+                </span>{" "}
+                member-select paid drops (≥{minBuyers} buyers · 1.00× = exact
+                round average; excludes random &amp; unit-random packs so every
+                member is judged fairly regardless of reveal date).
+              </div>
+              {topByDemand && topByDemand.allTime && topByDemand.stats && (
                 <div>
-                  <span className="text-zinc-200">Qualifying pool:</span>{" "}
-                  <span className="text-zinc-300">
-                    {qualifyingRounds.toLocaleString()}
+                  <span className="text-zinc-200">
+                    Worked check (#1 {topByDemand.name}):
                   </span>{" "}
-                  paid digital rounds with ≥{minBuyers} unique buyers (excludes
-                  Welcome, Special, Premier rewards, Pass+, and offline scans).
+                  <span className="text-zinc-300">
+                    {(topByDemand.allTime.uniquePaidBuyers ?? 0).toLocaleString()}
+                  </span>{" "}
+                  unique buyers ·{" "}
+                  <span className="text-zinc-300">
+                    {topByDemand.allTime.paidMints.toLocaleString()}
+                  </span>{" "}
+                  purchased ·{" "}
+                  <span className="text-zinc-300">
+                    {topByDemand.allTime.spunCount.toLocaleString()} ÷{" "}
+                    {topByDemand.allTime.allTimeMints.toLocaleString()}
+                  </span>{" "}
+                  ={" "}
+                  <span className="text-zinc-200">
+                    {topByDemand.allTime.spinRatePct.toFixed(1)}%
+                  </span>{" "}
+                  spun · index{" "}
+                  <span className="text-zinc-200">
+                    {(topByDemand.stats.avgBuyersRelativeIndex ?? 1).toFixed(3)}×
+                  </span>{" "}
+                  across {topByDemand.stats.roundsCount} ranked drops.
                 </div>
-                <div>
-                  <span className="text-zinc-200">Formula:</span>{" "}
-                  {boardMetric === "buyers"
-                    ? "Index = AVG(member_buyers ÷ round_mean_buyers) · Round Buyers = SUM(distinct buyers per round) · Avg/Buyer = SUM(mints) ÷ SUM(buyers)."
-                    : "Index = AVG(member_mints ÷ round_mean_mints) · Paid Mints = SUM(primary mints per round) · Avg/Buyer = SUM(mints) ÷ SUM(buyers)."}
-                </div>
-                {topMember?.stats && (
-                  <div>
-                    <span className="text-zinc-200">
-                      Worked check (#1 {topMember.name}):
-                    </span>{" "}
-                    <span className="text-zinc-300">
-                      {topMember.stats.totalMints.toLocaleString()} ÷{" "}
-                      {topMember.stats.totalUniqueBuyers.toLocaleString()}
-                    </span>{" "}
-                    ={" "}
-                    <span className="text-zinc-200">
-                      {topMember.stats.avgMintsPerBuyer?.toFixed(2) ?? "—"}
-                    </span>{" "}
-                    mints/buyer across{" "}
-                    <span className="text-zinc-300">
-                      {topMember.stats.roundsCount}
-                    </span>{" "}
-                    rounds · index{" "}
-                    <span className="text-zinc-200">
-                      {(boardMetric === "buyers"
-                        ? (topMember.stats.avgBuyersRelativeIndex ?? 1)
-                        : (topMember.stats.avgRelativeIndex ?? 1)
-                      ).toFixed(3)}
-                      ×
-                    </span>
-                    .
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="flex items-center justify-between border-b border-zinc-800/70 bg-[#0f0f12] px-4 py-2 text-[11px] font-mono uppercase tracking-wide text-zinc-500 sm:px-5">
-              <span>Member</span>
-              <div className="flex items-center gap-4 sm:gap-6">
-                <span className="w-24 text-right">
-                  {boardMetric === "buyers" ? "Round Buyers" : "Paid Mints"}
-                </span>
-                <span
-                  className="hidden sm:inline-block w-20 text-right"
-                  title="Average Objekts minted per unique buyer in a qualifying paid round"
-                >
-                  Avg / Buyer
-                </span>
-                <span
-                  className="w-14 text-right"
-                  title="Relative demand vs. round average (1.00× = exact average)"
-                >
-                  Index
-                </span>
-              </div>
+              )}
             </div>
+          )}
 
-            <div className="divide-y divide-zinc-800/60">
-              {visibleRankedMembers.map((m, i) => {
-                const rel =
-                  boardMetric === "buyers"
-                    ? (m.stats?.avgBuyersRelativeIndex ?? 1)
-                    : (m.stats?.avgRelativeIndex ?? 1);
-                const widthPct = Math.max(
-                  6,
-                  Math.min(100, (rel / maxRelIdx) * 100),
-                );
-                const avgTickPct = Math.min(100, (1 / maxRelIdx) * 100);
-                const rowProof = m.stats
-                  ? `${m.name}: ${m.stats.totalUniqueBuyers.toLocaleString()} round-buyers & ${m.stats.totalMints.toLocaleString()} paid mints across ${m.stats.roundsCount} rounds · avg ${m.stats.avgMintsPerBuyer?.toFixed(2) ?? "—"} mints/buyer · index ${rel.toFixed(3)}× (avg rank #${m.stats.avgBuyersRank?.toFixed(1) ?? "—"})`
-                  : m.name;
+          {/* Desktop Column Headers */}
+          <div className="hidden md:grid md:grid-cols-[2.25rem_minmax(150px,1.25fr)_minmax(105px,0.85fr)_minmax(105px,0.85fr)_minmax(135px,1fr)_minmax(190px,1.5fr)] items-center gap-3 border-b border-zinc-800/70 bg-[#0f0f12] px-5 py-2 font-mono text-[11px] uppercase tracking-wide text-zinc-500">
+            <span>#</span>
+            <button
+              type="button"
+              onClick={() => setSortKey("order")}
+              className={`text-left transition-colors hover:text-zinc-200 ${
+                sortKey === "order" ? "text-zinc-200" : ""
+              }`}
+            >
+              Member {sortKey === "order" ? "↑" : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortKey("buyers")}
+              className={`text-right transition-colors hover:text-zinc-200 ${
+                sortKey === "buyers" ? "text-zinc-200" : ""
+              }`}
+              title="All-time distinct COSMO wallets that purchased this member"
+            >
+              Unique Buyers {sortKey === "buyers" ? "↓" : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortKey("purchased")}
+              className={`text-right transition-colors hover:text-zinc-200 ${
+                sortKey === "purchased" ? "text-zinc-200" : ""
+              }`}
+              title="All-time paid digital Objekts minted for this member"
+            >
+              Purchased {sortKey === "purchased" ? "↓" : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortKey("spun")}
+              className={`text-right transition-colors hover:text-zinc-200 ${
+                sortKey === "spun" ? "text-zinc-200" : ""
+              }`}
+              title="Total Objekts sent to COSMO Spin (% of all member mints)"
+            >
+              Spun {sortKey === "spun" ? "↓" : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSortKey("index")}
+              className={`text-right transition-colors hover:text-zinc-200 ${
+                sortKey === "index" ? "text-zinc-200" : ""
+              }`}
+              title="Equal-footing demand vs. round average across member-select drops (1.00× = avg)"
+            >
+              Demand Index {sortKey === "index" ? "↓" : ""}
+            </button>
+          </div>
 
-                return (
-                  <Link
-                    key={m.id}
-                    to="/members/$memberId"
-                    params={{ memberId: m.id }}
-                    title={rowProof}
-                    className="group block px-4 py-3 transition-colors hover:bg-zinc-900/70 sm:px-5"
-                  >
+          <div className="divide-y divide-zinc-800/60">
+            {sortedMembers.map((m, i) => {
+              const rel = m.stats?.avgBuyersRelativeIndex ?? 1;
+              const widthPct = Math.max(
+                6,
+                Math.min(100, (rel / maxRelIdx) * 100),
+              );
+              const avgTickPct = Math.min(100, (1 / maxRelIdx) * 100);
+              const at = m.allTime;
+              const displayRank =
+                sortKey === "order"
+                  ? (demandRankById.get(m.id) ?? i + 1)
+                  : i + 1;
+
+              const rowProof = [
+                `${m.name} (${m.code}) · Demand #${demandRankById.get(m.id) ?? i + 1}`,
+                at?.uniquePaidBuyers != null
+                  ? `Unique Buyers: ${at.uniquePaidBuyers.toLocaleString()} paid (${(at.uniqueAllMinters ?? 0).toLocaleString()} incl. free/phys)`
+                  : null,
+                at
+                  ? `Purchased: ${at.paidMints.toLocaleString()} paid digital (${at.allTimeMints.toLocaleString()} total mints)`
+                  : null,
+                at
+                  ? `Spun: ${at.spunCount.toLocaleString()} (${at.spinRatePct.toFixed(1)}% of all · ${at.paidSpinRatePct.toFixed(1)}% of paid)`
+                  : null,
+                m.stats
+                  ? `Demand Index: ${rel.toFixed(3)}× across ${m.stats.roundsCount} member-select drops (avg rank #${m.stats.avgBuyersRank?.toFixed(1) ?? "—"})`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ");
+
+              return (
+                <Link
+                  key={m.id}
+                  to="/members/$memberId"
+                  params={{ memberId: m.id }}
+                  title={rowProof}
+                  className="group block px-4 py-2.5 transition-colors hover:bg-zinc-900/70 sm:px-5"
+                >
+                  {/* Desktop Row */}
+                  <div className="hidden md:grid md:grid-cols-[2.25rem_minmax(150px,1.25fr)_minmax(105px,0.85fr)_minmax(105px,0.85fr)_minmax(135px,1fr)_minmax(190px,1.5fr)] items-center gap-3">
+                    <span
+                      className={`font-mono text-xs tabular-nums ${
+                        displayRank === 1
+                          ? "font-semibold text-white"
+                          : "text-zinc-500"
+                      }`}
+                    >
+                      {sortKey === "order" ? `#${displayRank}` : displayRank}
+                    </span>
+
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        className="h-2.5 w-2.5 rounded-[2px] shrink-0 ring-1 ring-inset ring-white/15"
+                        style={{ backgroundColor: m.hexColor }}
+                      />
+                      <span className="text-sm font-medium text-zinc-100 group-hover:text-white truncate">
+                        {m.name}
+                      </span>
+                      <span className="font-mono text-[11px] text-zinc-500 shrink-0">
+                        {m.code}
+                      </span>
+                    </div>
+
+                    <div
+                      className={`text-right font-mono text-sm tabular-nums ${
+                        sortKey === "buyers"
+                          ? "font-semibold text-white"
+                          : "text-zinc-100"
+                      }`}
+                    >
+                      {at?.uniquePaidBuyers != null
+                        ? at.uniquePaidBuyers.toLocaleString()
+                        : "—"}
+                    </div>
+
+                    <div
+                      className={`text-right font-mono text-sm tabular-nums ${
+                        sortKey === "purchased"
+                          ? "font-semibold text-white"
+                          : "text-zinc-300"
+                      }`}
+                    >
+                      {at ? at.paidMints.toLocaleString() : "—"}
+                    </div>
+
+                    <div className="text-right font-mono text-sm tabular-nums whitespace-nowrap">
+                      <span
+                        className={
+                          sortKey === "spun"
+                            ? "font-semibold text-white"
+                            : "text-zinc-300"
+                        }
+                      >
+                        {at ? at.spunCount.toLocaleString() : "—"}
+                      </span>
+                      {at && at.allTimeMints > 0 && (
+                        <span className="ml-1.5 text-xs text-zinc-500">
+                          {at.spinRatePct.toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="relative h-1.5 flex-1 overflow-hidden rounded-[2px] bg-zinc-800/90">
+                        <div
+                          className="h-full transition-all"
+                          style={{
+                            width: `${widthPct}%`,
+                            backgroundColor: m.hexColor,
+                            boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.14)",
+                          }}
+                        />
+                        <div
+                          className="pointer-events-none absolute inset-y-0 w-[1.5px] bg-zinc-200/75"
+                          style={{ left: `${avgTickPct}%` }}
+                        />
+                      </div>
+                      <span
+                        className={`w-12 text-right font-mono text-sm tabular-nums shrink-0 ${
+                          sortKey === "index"
+                            ? "font-semibold text-white"
+                            : "text-zinc-200"
+                        }`}
+                      >
+                        {rel.toFixed(2)}×
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Mobile Card Row */}
+                  <div className="md:hidden space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
                         <span
                           className={`w-6 font-mono text-xs tabular-nums shrink-0 ${
-                            i === 0
+                            displayRank === 1
                               ? "font-semibold text-white"
                               : "text-zinc-500"
                           }`}
                         >
-                          {i + 1}
+                          {sortKey === "order" ? `#${displayRank}` : displayRank}
                         </span>
                         <span
                           className="h-2.5 w-2.5 rounded-[2px] shrink-0 ring-1 ring-inset ring-white/15"
                           style={{ backgroundColor: m.hexColor }}
                         />
-                        <span className="text-sm font-medium text-zinc-100 group-hover:text-white truncate">
+                        <span className="text-sm font-medium text-zinc-100 truncate">
                           {m.name}
                         </span>
                         <span className="font-mono text-[11px] text-zinc-500 shrink-0">
                           {m.code}
                         </span>
                       </div>
-                      <div className="flex items-center gap-4 sm:gap-6 font-mono tabular-nums shrink-0">
-                        <span className="w-24 text-right text-xs sm:text-sm text-zinc-300">
-                          {boardMetric === "buyers"
-                            ? (m.stats?.totalUniqueBuyers ?? 0).toLocaleString()
-                            : (m.stats?.totalMints ?? 0).toLocaleString()}
-                        </span>
-                        <span className="hidden sm:inline-block w-20 text-right text-xs text-zinc-400">
-                          {m.stats?.avgMintsPerBuyer
-                            ? m.stats.avgMintsPerBuyer.toFixed(1)
-                            : "—"}
-                        </span>
-                        <span className="w-14 text-right text-sm font-semibold text-white">
-                          {rel.toFixed(2)}×
-                        </span>
-                      </div>
+                      <span className="font-mono text-sm font-semibold text-white tabular-nums shrink-0">
+                        {rel.toFixed(2)}×
+                      </span>
                     </div>
-                    <div className="relative mt-2 ml-8 h-1.5 overflow-hidden rounded-[2px] bg-zinc-800/90">
+
+                    <div className="relative ml-8 h-1.5 overflow-hidden rounded-[2px] bg-zinc-800/90">
                       <div
-                        className="h-full transition-all"
+                        className="h-full"
                         style={{
                           width: `${widthPct}%`,
                           backgroundColor: m.hexColor,
-                          boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.14)",
                         }}
                       />
                       <div
@@ -725,154 +987,39 @@ export function OverviewView({
                         style={{ left: `${avgTickPct}%` }}
                       />
                     </div>
-                  </Link>
-                );
-              })}
-            </div>
 
-            {rankedMembers.length > 10 && (
-              <div className="flex items-center justify-between border-t border-zinc-800/80 px-4 py-2.5 sm:px-5">
-                <span className="font-mono text-[11px] text-zinc-500">
-                  Showing {visibleRankedMembers.length} of {rankedMembers.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowAllMembers((v) => !v)}
-                  className="text-xs font-medium text-zinc-300 hover:text-white transition-colors"
-                >
-                  {showAllMembers
-                    ? "Show top 10"
-                    : `Show all ${rankedMembers.length} →`}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Narrow Paid Sale Rounds Rail (grouped by event) */}
-          <aside className="rounded-lg border border-zinc-800/90 bg-[#121215]">
-            <div className="flex items-baseline justify-between gap-2 border-b border-zinc-800/90 px-4 py-4">
-              <div>
-                <div className="flex items-baseline gap-3">
-                  <h2 className="text-base font-semibold text-white">
-                    Paid Sale Rounds
-                  </h2>
-                  <MathToggle
-                    open={showRoundsMath}
-                    onToggle={() => setShowRoundsMath((v) => !v)}
-                  />
-                </div>
-                <p className="mt-0.5 text-xs text-zinc-400">
-                  Most recent primary drops
-                </p>
-              </div>
-              <Link
-                to="/rounds"
-                search={searchParam}
-                className="text-xs text-zinc-400 hover:text-white shrink-0 transition-colors"
-              >
-                All →
-              </Link>
-            </div>
-
-            {showRoundsMath && (
-              <div className="border-b border-zinc-800/70 bg-[#0d0d10] px-4 py-3 font-mono text-[11px] leading-relaxed text-zinc-400 space-y-1">
-                <div>
-                  <span className="text-zinc-200">Filter:</span> Paid digital
-                  drops only (excludes Welcome, Special grid rewards, Premier
-                  401Z/402Z, leaderboard rewards, Pass+, offline scans).
-                </div>
-                <div>
-                  <span className="text-zinc-200">Grouping:</span> Multi-card
-                  sets (e.g. 368–370Z) sum mints across cards and show peak
-                  lead-card buyers.
-                </div>
-                <div>
-                  <span className="text-zinc-200">+ suffix:</span> Indicates
-                  either multi-card peak buyers or a single-member live lower
-                  bound before full wallet deduplication.
-                </div>
-              </div>
-            )}
-
-            <div className="divide-y divide-zinc-800/60">
-              {displayRounds.map((g) => {
-                const r = g.lead;
-                const topBuyerMember = r.topSellerByBuyers
-                  ? memberById.get(r.topSellerByBuyers.memberId)
-                  : null;
-                const topMintMember = r.topSeller
-                  ? memberById.get(r.topSeller.memberId)
-                  : null;
-                const leader =
-                  boardMetric === "buyers"
-                    ? topBuyerMember ?? topMintMember
-                    : topMintMember;
-
-                const groupProof =
-                  g.cards.length > 1
-                    ? `${g.cards.length} cards grouped: ${g.cards
-                        .map(
-                          (c) =>
-                            `${extractColNo(c.title, c.slug) ?? c.slug} (${c.totalMints.toLocaleString()})`,
-                        )
-                        .join(" + ")} = ${g.totalMints.toLocaleString()} mints · lead card peak ${g.displayBuyers.toLocaleString()} buyers`
-                    : `${r.slug}: ${r.totalMints.toLocaleString()} mints across ${r.participatingMembers} members · ${g.displayBuyers.toLocaleString()}${g.buyersHasPlus ? "+ (single-member lower bound)" : " distinct"} buyers`;
-
-                return (
-                  <Link
-                    key={g.key}
-                    to="/rounds/$slug"
-                    params={{ slug: r.slug }}
-                    title={groupProof}
-                    className="group block px-4 py-3 transition-colors hover:bg-zinc-900/70"
-                  >
-                    <div className="flex items-baseline justify-between gap-3">
-                      <p className="text-[13px] font-medium text-zinc-100 group-hover:text-white truncate">
-                        {g.displayTitle}
-                        {g.cardTag && (
-                          <span className="ml-1.5 font-mono text-[11px] font-normal text-zinc-500">
-                            {g.cardTag}
-                          </span>
-                        )}
-                      </p>
-                      <span className="font-mono text-xs font-semibold text-zinc-100 tabular-nums shrink-0">
-                        {g.displayBuyers.toLocaleString()}
-                        {g.buyersHasPlus ? "+" : ""}
-                        <span className="ml-1 font-normal text-zinc-500">
-                          buyers
-                        </span>
-                      </span>
-                    </div>
-
-                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-zinc-500">
-                      <span className="font-mono tabular-nums truncate">
-                        {g.startAt.slice(0, 10)} · {g.totalMints.toLocaleString()}{" "}
-                        mints
-                      </span>
-                      {leader && (
-                        <span className="inline-flex items-center gap-1.5 text-zinc-400 shrink-0">
-                          <span
-                            className="h-2 w-2 rounded-[2px] ring-1 ring-inset ring-white/15"
-                            style={{ backgroundColor: leader.hexColor }}
-                          />
-                          <span>{leader.name}</span>
-                          {boardMetric === "buyers" && r.topSellerByBuyers ? (
-                            <span className="font-mono tabular-nums text-zinc-500">
-                              ({r.topSellerByBuyers.uniqueBuyers.toLocaleString()})
-                            </span>
-                          ) : r.topSeller ? (
-                            <span className="font-mono tabular-nums text-zinc-500">
-                              ({r.topSeller.mintCount.toLocaleString()})
+                    <div className="ml-8 grid grid-cols-3 gap-2 font-mono tabular-nums text-xs">
+                      <div>
+                        <div className="text-[10px] text-zinc-500">Buyers</div>
+                        <div className="text-zinc-100 font-medium">
+                          {at?.uniquePaidBuyers != null
+                            ? at.uniquePaidBuyers.toLocaleString()
+                            : "—"}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-zinc-500">Purchased</div>
+                        <div className="text-zinc-200">
+                          {at ? at.paidMints.toLocaleString() : "—"}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-zinc-500">Spun</div>
+                        <div className="text-zinc-200">
+                          {at ? at.spunCount.toLocaleString() : "—"}
+                          {at && at.allTimeMints > 0 ? (
+                            <span className="ml-1 text-zinc-500">
+                              {at.spinRatePct.toFixed(0)}%
                             </span>
                           ) : null}
-                        </span>
-                      )}
+                        </div>
+                      </div>
                     </div>
-                  </Link>
-                );
-              })}
-            </div>
-          </aside>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
         </section>
       ) : (
         <section className="rounded-lg border border-zinc-800 bg-[#121215] p-5">
@@ -886,11 +1033,133 @@ export function OverviewView({
         </section>
       )}
 
-      {/* Rank Movers & Notable Shifts — items-start eliminates empty stretched voids */}
-      {(data.anomalies.length > 0 ||
-        data.movers.risers.length > 0 ||
-        data.movers.fallers.length > 0) && (
-        <section className="grid gap-6 lg:grid-cols-2 items-start">
+      {/* Editorial 2-Column Split: Recent Paid Drops + Movers & Notable Shifts */}
+      <section className="grid gap-6 lg:grid-cols-2 items-start">
+        {/* Recent Member-Select Paid Drops */}
+        <div className="rounded-lg border border-zinc-800/90 bg-[#121215]">
+          <div className="flex items-baseline justify-between gap-2 border-b border-zinc-800/90 px-4 py-3.5 sm:px-5">
+            <div>
+              <div className="flex items-baseline gap-3">
+                <h2 className="text-sm font-semibold text-white">
+                  Recent Paid Drops
+                </h2>
+                <MathToggle
+                  open={showRoundsMath}
+                  onToggle={() => setShowRoundsMath((v) => !v)}
+                />
+              </div>
+              <p className="mt-0.5 text-xs text-zinc-400">
+                Latest member-select COSMO shop releases
+              </p>
+            </div>
+            <Link
+              to="/rounds"
+              search={searchParam}
+              className="text-xs text-zinc-400 hover:text-white shrink-0 transition-colors"
+            >
+              All {data.totals.roundCount} →
+            </Link>
+          </div>
+
+          {showRoundsMath && (
+            <div className="border-b border-zinc-800/70 bg-[#0d0d10] px-4 py-3 font-mono text-[11px] leading-relaxed text-zinc-400 space-y-1 sm:px-5">
+              <div>
+                <span className="text-zinc-200">Filter:</span> Member-select paid
+                digital drops only (excludes random/unit packs, Welcome, Special
+                grid rewards, Premier 401Z/402Z, promos, Pass+, offline scans).
+              </div>
+              <div>
+                <span className="text-zinc-200">Grouping:</span> Multi-card sets
+                (e.g. 368–370Z) sum mints across cards and show peak lead-card
+                buyers.
+              </div>
+              <div>
+                <span className="text-zinc-200">+ suffix:</span> Multi-card peak
+                buyers or a single-member live lower bound before full wallet
+                deduplication.
+              </div>
+            </div>
+          )}
+
+          <div className="divide-y divide-zinc-800/60">
+            {displayRounds.map((g) => {
+              const r = g.lead;
+              const topBuyerMember = r.topSellerByBuyers
+                ? memberById.get(r.topSellerByBuyers.memberId)
+                : null;
+              const topMintMember = r.topSeller
+                ? memberById.get(r.topSeller.memberId)
+                : null;
+              const leader = topBuyerMember ?? topMintMember;
+
+              const groupProof =
+                g.cards.length > 1
+                  ? `${g.cards.length} cards grouped: ${g.cards
+                      .map(
+                        (c) =>
+                          `${extractColNo(c.title, c.slug) ?? c.slug} (${c.totalMints.toLocaleString()})`,
+                      )
+                      .join(" + ")} = ${g.totalMints.toLocaleString()} mints · lead card peak ${g.displayBuyers.toLocaleString()} buyers`
+                  : `${r.slug}: ${r.totalMints.toLocaleString()} mints across ${r.participatingMembers} members · ${g.displayBuyers.toLocaleString()}${g.buyersHasPlus ? "+ (single-member lower bound)" : " distinct"} buyers`;
+
+              return (
+                <Link
+                  key={g.key}
+                  to="/rounds/$slug"
+                  params={{ slug: r.slug }}
+                  title={groupProof}
+                  className="group block px-4 py-3 transition-colors hover:bg-zinc-900/70 sm:px-5"
+                >
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="text-[13px] font-medium text-zinc-100 group-hover:text-white truncate">
+                      {g.displayTitle}
+                      {g.cardTag && (
+                        <span className="ml-1.5 font-mono text-[11px] font-normal text-zinc-500">
+                          {g.cardTag}
+                        </span>
+                      )}
+                    </p>
+                    <span className="font-mono text-xs font-semibold text-zinc-100 tabular-nums shrink-0">
+                      {g.displayBuyers.toLocaleString()}
+                      {g.buyersHasPlus ? "+" : ""}
+                      <span className="ml-1 font-normal text-zinc-500">
+                        buyers
+                      </span>
+                    </span>
+                  </div>
+
+                  <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-zinc-500">
+                    <span className="font-mono tabular-nums truncate">
+                      {g.startAt.slice(0, 10)} · {g.totalMints.toLocaleString()}{" "}
+                      mints
+                    </span>
+                    {leader && (
+                      <span className="inline-flex items-center gap-1.5 text-zinc-400 shrink-0">
+                        <span
+                          className="h-2 w-2 rounded-[2px] ring-1 ring-inset ring-white/15"
+                          style={{ backgroundColor: leader.hexColor }}
+                        />
+                        <span>{leader.name}</span>
+                        {r.topSellerByBuyers ? (
+                          <span className="font-mono tabular-nums text-zinc-500">
+                            ({r.topSellerByBuyers.uniqueBuyers.toLocaleString()})
+                          </span>
+                        ) : r.topSeller ? (
+                          <span className="font-mono tabular-nums text-zinc-500">
+                            ({r.topSeller.mintCount.toLocaleString()})
+                          </span>
+                        ) : null}
+                      </span>
+                    )}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Right Stack: Latest Round Movers + Notable Demand Shifts */}
+        <div className="space-y-6">
           {(data.movers.risers.length > 0 || data.movers.fallers.length > 0) && (
             <div className="rounded-lg border border-zinc-800/90 bg-[#121215]">
               <div className="border-b border-zinc-800/90 px-4 py-3.5 sm:px-5">
@@ -924,7 +1193,7 @@ export function OverviewView({
                   <div>
                     <span className="text-zinc-200">Formula:</span> Δ =
                     prev_buyers_rank − curr_buyers_rank vs. prior comparable
-                    roster-size paid round (positive = climbed).
+                    roster-size member-select drop (positive = climbed).
                   </div>
                   <div>
                     <span className="text-zinc-200">Round:</span>{" "}
@@ -1052,15 +1321,15 @@ export function OverviewView({
                     <span className="text-zinc-200">Trigger rule:</span> Flags
                     outliers where buyer-share index shifts ≥
                     {isArtms ? "22%" : "25%"} vs. trailing 5 comparable-roster
-                    paid rounds AND |ΔZ| ≥ {isArtms ? "1.4σ" : "1.5σ"} (or
+                    member-select drops AND |ΔZ| ≥ {isArtms ? "1.4σ" : "1.5σ"} (or
                     strong rank-percentile + Z agreement).
                   </div>
                   <div>
                     <span className="text-zinc-200">Metric:</span> Ranked by
                     unique buyers per member (not raw mints) so single-wallet
-                    whales cannot trigger false surges. Active drops still in
-                    staggered rollout (&lt;72h seasonal / &lt;24h shop) wait
-                    until rollout finishes.
+                    whales cannot trigger false surges. Random packs and drops
+                    still in staggered rollout (&lt;72h seasonal / &lt;24h shop)
+                    are excluded.
                   </div>
                 </div>
               )}
@@ -1128,88 +1397,6 @@ export function OverviewView({
               </div>
             </div>
           )}
-        </section>
-      )}
-
-      {/* Member Roster */}
-      <section className="space-y-3">
-        <div className="flex items-baseline justify-between gap-3">
-          <div className="flex items-baseline gap-3">
-            <h2 className="text-base font-semibold text-white">
-              {isArtms ? "ARTMS Roster" : "tripleS S1–S24"}
-            </h2>
-            <MathToggle
-              open={showRosterMath}
-              onToggle={() => setShowRosterMath((v) => !v)}
-            />
-          </div>
-          <Link
-            to="/members"
-            search={searchParam}
-            className="text-xs text-zinc-400 hover:text-white transition-colors"
-          >
-            Full matrix →
-          </Link>
-        </div>
-
-        {showRosterMath && (
-          <div className="rounded-md border border-zinc-800/80 bg-[#0f0f12] px-4 py-2.5 font-mono text-[11px] text-zinc-400">
-            <span className="text-zinc-200">avg #X.X:</span> Mean unique-buyers
-            rank across each member&apos;s qualifying paid digital rounds (≥
-            {minBuyers} buyers · {qualifyingRounds.toLocaleString()} rounds
-            total).
-          </div>
-        )}
-
-        <div
-          className={
-            isArtms
-              ? "grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5"
-              : "grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6"
-          }
-        >
-          {data.members.map((m) => {
-            const hasDistinctFullName =
-              m.fullName.trim().toLowerCase() !== m.name.trim().toLowerCase();
-            return (
-              <Link
-                key={m.id}
-                to="/members/$memberId"
-                params={{ memberId: m.id }}
-                title={
-                  m.stats?.avgBuyersRank != null
-                    ? `${m.name} (${m.code}): mean unique-buyers rank #${m.stats.avgBuyersRank.toFixed(2)} across ${m.stats.roundsCount} qualifying paid rounds`
-                    : `${m.name} (${m.code})`
-                }
-                className="group relative overflow-hidden rounded-md border border-zinc-800/90 bg-[#121215] px-3 py-2.5 pl-3.5 transition-colors hover:border-zinc-600 hover:bg-zinc-900"
-              >
-                <span
-                  className="absolute inset-y-0 left-0 w-[3px]"
-                  style={{ backgroundColor: m.hexColor }}
-                />
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-medium text-sm text-zinc-100 group-hover:text-white truncate">
-                    {m.name}
-                  </span>
-                  <span className="font-mono text-[11px] text-zinc-500 shrink-0">
-                    {m.code}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-baseline justify-between gap-2 font-mono text-[11px] text-zinc-500">
-                  <span className="truncate font-sans text-zinc-500">
-                    {hasDistinctFullName ? m.fullName : ""}
-                  </span>
-                  {m.stats?.avgBuyersRank !== null &&
-                    m.stats?.avgBuyersRank !== undefined && (
-                      <span className="text-zinc-300 tabular-nums shrink-0">
-                        <span className="text-zinc-500">avg </span>#
-                        {m.stats.avgBuyersRank.toFixed(1)}
-                      </span>
-                    )}
-                </div>
-              </Link>
-            );
-          })}
         </div>
       </section>
     </div>
