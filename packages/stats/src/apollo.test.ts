@@ -81,6 +81,38 @@ describe("Apollo slug and provenance helpers", () => {
     });
     expect(setBonus.provenanceClass).toBe("free_reward");
     expect(setBonus.isFreeDistribution).toBe(true);
+
+    const seasonalRankingDco = classifyApolloProvenance({
+      artistId: "triples",
+      season: "Divine02",
+      collectionNo: "305Z",
+      objektClass: "Double",
+      onOffline: "online",
+      description:
+        "Gifted during the Cream02 season for ranking top 100 in Objekts for a member.",
+      eventSlug: "triples-divine02-seasonal",
+      eventName: "Divine02 Seasonal",
+      eventType: "seasonal",
+      eventDescription: "Welcome & Premier class objekts available throughout the season.",
+    });
+    expect(seasonalRankingDco.provenanceClass).toBe("free_reward");
+    expect(seasonalRankingDco.isFreeDistribution).toBe(true);
+
+    const seasonalPremier = classifyApolloProvenance({
+      artistId: "triples",
+      season: "Divine02",
+      collectionNo: "402Z",
+      objektClass: "Premier",
+      onOffline: "online",
+      description:
+        "Gifted during the Cream02 season for ranking top 10 in Objekts, Gravity, or Grid; or ranking top 50 in Offline Badges. Randomly obtained from Divine02 FCO packs in the COSMO shop or from Spin.",
+      eventSlug: "triples-divine02-seasonal",
+      eventName: "Divine02 Seasonal",
+      eventType: "seasonal",
+      eventDescription: "Welcome & Premier class objekts available throughout the season.",
+    });
+    expect(seasonalPremier.provenanceClass).toBe("free_reward");
+    expect(seasonalPremier.isFreeDistribution).toBe(true);
   });
 
   it("preserves paid seasonal FCOs, paid shop DCOs, physical scans, and dual fanclub/shop drops", () => {

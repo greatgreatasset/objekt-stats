@@ -20,7 +20,10 @@ export const Route = createRootRoute({
           "Track every Modhaus COSMO Objekt sale round on Polygon & Abstract, compare tripleS S1–S24 and ARTMS member popularity trajectories, and correlate trends with real-world events.",
       },
     ],
-    links: [{ rel: "stylesheet", href: appCss }],
+    links: [
+      { rel: "stylesheet", href: appCss },
+      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
+    ],
   }),
   component: RootComponent,
 });

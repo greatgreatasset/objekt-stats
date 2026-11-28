@@ -174,7 +174,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         avgBuyersRank: sql<number>`avg(${saleRoundMemberStats.uniqueBuyersRank})`,
         avgRelativeIndex: sql<number>`avg(${saleRoundMemberStats.relativeIndex})`,
         avgBuyersRelativeIndex: sql<number>`avg(${saleRoundMemberStats.uniqueBuyersRelativeIndex})`,
-        avgMintsPerBuyer: sql<number>`avg(${saleRoundMemberStats.mintsPerBuyer})`,
+        avgMintsPerBuyer: sql<number>`case when sum(${saleRoundMemberStats.uniqueBuyers}) > 0 then cast(sum(${saleRoundMemberStats.mintCount}) as real) / sum(${saleRoundMemberStats.uniqueBuyers}) else null end`,
         bestRank: sql<number>`min(${saleRoundMemberStats.rank})`,
       })
       .from(saleRoundMemberStats)
@@ -220,6 +220,13 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       members: e.memberIds,
     }));
 
+    const shopMaturityCutoffIso = new Date(
+      Date.now() - 24 * 3_600_000,
+    ).toISOString();
+    const seasonalMaturityCutoffIso = new Date(
+      Date.now() - 72 * 3_600_000,
+    ).toISOString();
+
     const anomalyRows = await db
       .select({
         roundSlug: saleRoundMemberStats.roundSlug,
@@ -227,10 +234,18 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         startAt: saleRounds.startAt,
         memberId: saleRoundMemberStats.memberId,
         rank: saleRoundMemberStats.rank,
+        uniqueBuyersRank: saleRoundMemberStats.uniqueBuyersRank,
         rankDeltaPrev: saleRoundMemberStats.rankDeltaPrev,
         relativeIndex: saleRoundMemberStats.relativeIndex,
+        uniqueBuyersRelativeIndex:
+          saleRoundMemberStats.uniqueBuyersRelativeIndex,
+        rolling5RelativeIndex: saleRoundMemberStats.rolling5RelativeIndex,
+        rolling5Rank: saleRoundMemberStats.rolling5Rank,
+        zScore: saleRoundMemberStats.zScore,
         mintCount: saleRoundMemberStats.mintCount,
         uniqueBuyers: saleRoundMemberStats.uniqueBuyers,
+        roundUniqueBuyers: saleRounds.uniqueBuyers,
+        participatingMembers: saleRounds.participatingMembers,
         anomalyDirection: saleRoundMemberStats.anomalyDirection,
         anomalyReason: saleRoundMemberStats.anomalyReason,
       })
@@ -240,9 +255,9 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         eq(saleRounds.slug, saleRoundMemberStats.roundSlug),
       )
       .where(
-        sql`${saleRounds.artistId} = ${artistId} AND ${saleRoundMemberStats.isAnomaly} = 1`,
+        sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1 AND ${saleRoundMemberStats.isAnomaly} = 1 AND (CASE WHEN ${saleRounds.objektClass} IN ('First', 'Motion') THEN ${saleRounds.startAt} <= ${seasonalMaturityCutoffIso} ELSE ${saleRounds.startAt} <= ${shopMaturityCutoffIso} END)`,
       )
-      .orderBy(desc(saleRounds.startAt), desc(saleRoundMemberStats.mintCount))
+      .orderBy(desc(saleRounds.startAt), desc(saleRoundMemberStats.uniqueBuyers))
       .limit(8);
 
     const anomalies = anomalyRows.map((a) => {
@@ -277,11 +292,17 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         roundSlug: saleRoundMemberStats.roundSlug,
         roundTitle: saleRounds.title,
         startAt: saleRounds.startAt,
+        participatingMembers: saleRounds.participatingMembers,
+        roundUniqueBuyers: saleRounds.uniqueBuyers,
         memberId: saleRoundMemberStats.memberId,
         rank: saleRoundMemberStats.rank,
+        uniqueBuyersRank: saleRoundMemberStats.uniqueBuyersRank,
         rankDeltaPrev: saleRoundMemberStats.rankDeltaPrev,
         relativeIndex: saleRoundMemberStats.relativeIndex,
+        uniqueBuyersRelativeIndex:
+          saleRoundMemberStats.uniqueBuyersRelativeIndex,
         mintCount: saleRoundMemberStats.mintCount,
+        uniqueBuyers: saleRoundMemberStats.uniqueBuyers,
       })
       .from(saleRoundMemberStats)
       .innerJoin(
@@ -289,14 +310,46 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         eq(saleRounds.slug, saleRoundMemberStats.roundSlug),
       )
       .where(
-        sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1 AND ${saleRoundMemberStats.rankDeltaPrev} IS NOT NULL AND ${saleRoundMemberStats.rankDeltaPrev} != 0`,
+        sql`${saleRounds.artistId} = ${artistId} AND ${saleRounds.includeInPopularity} = 1 AND ${saleRoundMemberStats.rankDeltaPrev} IS NOT NULL AND ${saleRoundMemberStats.rankDeltaPrev} != 0 AND (CASE WHEN ${saleRounds.objektClass} IN ('First', 'Motion') THEN ${saleRounds.startAt} <= ${seasonalMaturityCutoffIso} ELSE ${saleRounds.startAt} <= ${shopMaturityCutoffIso} END)`,
       )
       .orderBy(desc(saleRounds.startAt))
-      .limit(48);
+      .limit(180);
 
-    const latestMoverRoundSlug = recentMoversRows[0]?.roundSlug ?? null;
+    // Pick the latest qualifying round that has BOTH risers and fallers so the card never
+    // renders a blank half-box when an 8-member drop had a single 1-spot swap.
+    const moversByRound = new Map<string, typeof recentMoversRows>();
+    const moverRoundOrder: string[] = [];
+    for (const row of recentMoversRows) {
+      let arr = moversByRound.get(row.roundSlug);
+      if (!arr) {
+        arr = [];
+        moversByRound.set(row.roundSlug, arr);
+        moverRoundOrder.push(row.roundSlug);
+      }
+      arr.push(row);
+    }
+
+    const balancedMoverSlug =
+      moverRoundOrder.find((slug) => {
+        const rows = moversByRound.get(slug) ?? [];
+        const risersCount = rows.filter((r) => (r.rankDeltaPrev ?? 0) > 0).length;
+        const fallersCount = rows.filter((r) => (r.rankDeltaPrev ?? 0) < 0).length;
+        if (risersCount === 0 || fallersCount === 0) return false;
+        return artistId === "artms" ? true : risersCount + fallersCount >= 3;
+      }) ??
+      moverRoundOrder.find((slug) => {
+        const rows = moversByRound.get(slug) ?? [];
+        return (
+          rows.some((r) => (r.rankDeltaPrev ?? 0) > 0) &&
+          rows.some((r) => (r.rankDeltaPrev ?? 0) < 0)
+        );
+      }) ??
+      moverRoundOrder[0] ??
+      null;
+
+    const latestMoverRoundSlug = balancedMoverSlug;
     const latestMoverRows = latestMoverRoundSlug
-      ? recentMoversRows.filter((r) => r.roundSlug === latestMoverRoundSlug)
+      ? (moversByRound.get(latestMoverRoundSlug) ?? [])
       : [];
 
     const biggestRisers = [...latestMoverRows]
@@ -307,6 +360,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         const m = memberById.get(r.memberId);
         return {
           ...r,
+          prevBuyersRank: r.uniqueBuyersRank + (r.rankDeltaPrev ?? 0),
           memberName: m?.name ?? r.memberId,
           memberCode: m?.code ?? "",
           hexColor: m?.hexColor ?? "#22AEFF",
@@ -321,6 +375,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         const m = memberById.get(r.memberId);
         return {
           ...r,
+          prevBuyersRank: r.uniqueBuyersRank + (r.rankDeltaPrev ?? 0),
           memberName: m?.name ?? r.memberId,
           memberCode: m?.code ?? "",
           hexColor: m?.hexColor ?? "#22AEFF",
@@ -340,6 +395,7 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .select({
         roundCount: sql<number>`count(*)`,
         popularityRoundCount: sql<number>`sum(case when ${saleRounds.includeInPopularity} = 1 then 1 else 0 end)`,
+        qualifyingPopularityRoundCount: sql<number>`sum(case when ${saleRounds.includeInPopularity} = 1 and ${saleRounds.uniqueBuyers} >= ${minBuyers} then 1 else 0 end)`,
         estGrossUsd: sql<number>`coalesce(sum(case when ${saleRounds.unitPriceUsd} > 0 and ${saleRounds.saleMechanic} != 'reward' and ${saleRounds.objektClass} NOT IN ('Welcome', 'Special', 'Zero', 'Premier') then ${saleRounds.totalMints} * ${saleRounds.unitPriceUsd} else 0 end), 0)`,
       })
       .from(saleRounds)
@@ -354,11 +410,28 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       .from(collections)
       .where(eq(collections.artistId, artistId));
 
+    const enrichedRounds = roundList.map((r) => {
+      const topSeller = roundTopByMints.get(r.slug) ?? null;
+      const topSellerByBuyers = roundTopByBuyers.get(r.slug) ?? null;
+      const isBuyersLowerBound = Boolean(
+        r.participatingMembers > 1 &&
+          topSellerByBuyers &&
+          r.uniqueBuyers > 0 &&
+          r.uniqueBuyers <= topSellerByBuyers.uniqueBuyers,
+      );
+      return {
+        ...r,
+        topSeller,
+        topSellerByBuyers,
+        isBuyersLowerBound,
+      };
+    });
+
     const dropScheduleData = await getArtistDropSchedule(
       db,
       env.DB,
       artistId,
-      roundList,
+      enrichedRounds,
     );
 
     return {
@@ -367,15 +440,14 @@ export const getArtistOverview = createServerFn({ method: "GET" })
         ...m,
         stats: memberStatsMap.get(m.id) ?? null,
       })),
-      rounds: roundList.map((r) => ({
-        ...r,
-        topSeller: roundTopByMints.get(r.slug) ?? null,
-        topSellerByBuyers: roundTopByBuyers.get(r.slug) ?? null,
-      })),
+      rounds: enrichedRounds,
       anomalies,
       movers: {
         roundSlug: latestMoverRoundSlug,
-        roundTitle: recentMoversRows[0]?.roundTitle ?? null,
+        roundTitle: latestMoverRows[0]?.roundTitle ?? null,
+        roundStartAt: latestMoverRows[0]?.startAt ?? null,
+        participatingMembers: latestMoverRows[0]?.participatingMembers ?? 0,
+        roundUniqueBuyers: latestMoverRows[0]?.roundUniqueBuyers ?? 0,
         risers: biggestRisers,
         fallers: biggestFallers,
       },
@@ -383,6 +455,17 @@ export const getArtistOverview = createServerFn({ method: "GET" })
       dropSchedule: dropScheduleData,
       syncState: syncRows,
       abstractLagMinutes,
+      calcMeta: {
+        minLeaderboardBuyers: minBuyers,
+        qualifyingPopularityRoundCount: Number(
+          roundTotals?.qualifyingPopularityRoundCount ?? 0,
+        ),
+        excludedRoundCount: Math.max(
+          0,
+          Number(roundTotals?.roundCount ?? 0) -
+            Number(roundTotals?.popularityRoundCount ?? 0),
+        ),
+      },
       totals: {
         roundCount: Number(roundTotals?.roundCount ?? 0),
         popularityRoundCount: Number(roundTotals?.popularityRoundCount ?? 0),
@@ -798,6 +881,7 @@ export const getMembersMatrix = createServerFn({ method: "GET" })
         slug: r.slug,
         title: r.title,
         season: r.season,
+        objektClass: r.objektClass,
         startAt: r.startAt,
         totalMints: r.totalMints,
         uniqueBuyers: r.uniqueBuyers,

@@ -225,7 +225,18 @@ export function computeArtistSeriesStats(
     percentile: number;
     relativeIndex: number;
     zScore: number;
+    participatingCount: number;
   }
+
+  /**
+   * Ensures rank deltas and 5-round baselines only compare rounds of comparable
+   * roster size (e.g. 24-member OT24 drops vs OT24 drops, 8-member drops vs 8-member
+   * drops) so an 8-member #1 never triggers a fake "+13 spots" jump vs a 24-member #14.
+   */
+  const isComparableRosterSize = (a: number, b: number): boolean => {
+    const tol = Math.max(2, Math.round(Math.min(a, b) * 0.25));
+    return Math.abs(a - b) <= tol;
+  };
 
   const memberHistory = new Map<string, HistoryPoint[]>();
 
@@ -249,19 +260,22 @@ export function computeArtistSeriesStats(
 
     for (const stat of baseStats) {
       const history = memberHistory.get(stat.memberId) ?? [];
+      const comparableHistory = history.filter((h) =>
+        isComparableRosterSize(h.participatingCount, participatingCount),
+      );
       const percentile =
         participatingCount > 1
           ? (participatingCount - stat.uniqueBuyersRank) / (participatingCount - 1)
           : 0.5;
 
       if (round.includeInPopularity && meetsVolumeThreshold) {
-        const prev = history[history.length - 1];
+        const prev = comparableHistory[comparableHistory.length - 1];
         if (prev) {
           stat.rankDeltaPrev = prev.rank - stat.uniqueBuyersRank;
         }
 
-        if (history.length >= 2) {
-          const prior5 = history.slice(-5);
+        if (comparableHistory.length >= 2) {
+          const prior5 = comparableHistory.slice(-5);
           const baselineRank = meanOf(prior5.map((h) => h.rank));
           const baselinePct = meanOf(prior5.map((h) => h.percentile));
           const baselineRelIdx = meanOf(prior5.map((h) => h.relativeIndex));
@@ -324,19 +338,19 @@ export function computeArtistSeriesStats(
           }
         }
 
-        const updatedHistory = [
-          ...history,
-          {
-            rank: stat.uniqueBuyersRank,
-            percentile,
-            relativeIndex: stat.uniqueBuyersRelativeIndex,
-            zScore: stat.zScore,
-          },
-        ];
+        const currentPoint: HistoryPoint = {
+          rank: stat.uniqueBuyersRank,
+          percentile,
+          relativeIndex: stat.uniqueBuyersRelativeIndex,
+          zScore: stat.zScore,
+          participatingCount,
+        };
+        const updatedHistory = [...history, currentPoint];
         memberHistory.set(stat.memberId, updatedHistory);
 
-        const last5 = updatedHistory.slice(-5);
-        const last10 = updatedHistory.slice(-10);
+        const updatedComparable = [...comparableHistory, currentPoint];
+        const last5 = updatedComparable.slice(-5);
+        const last10 = updatedComparable.slice(-10);
         stat.rolling5Rank = roundTo(meanOf(last5.map((h) => h.rank)), 2);
         stat.rolling10Rank = roundTo(meanOf(last10.map((h) => h.rank)), 2);
         stat.rolling5RelativeIndex = roundTo(

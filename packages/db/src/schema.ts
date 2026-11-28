@@ -745,6 +745,28 @@ export const processedLiveSpins = sqliteTable(
   ],
 );
 
+/**
+ * Rolling 45-day per-round distinct minter ledger maintained by live-sync so
+ * multi-member & multi-card drops (e.g. 101–108Z FCOs, 24-member DCOs) compute
+ * exact deduplicated `sale_rounds.unique_buyers` and per-member buyer counts
+ * in real time rather than falling back to single-collection maximums.
+ */
+export const liveRoundBuyers = sqliteTable(
+  "live_round_buyers",
+  {
+    roundSlug: text("round_slug").notNull(),
+    memberId: text("member_id").notNull(),
+    wallet: text("wallet").notNull(),
+    mintCount: integer("mint_count").notNull().default(1),
+    lastMintAt: text("last_mint_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.roundSlug, t.memberId, t.wallet] }),
+    index("idx_lrb_round_wallet").on(t.roundSlug, t.wallet),
+    index("idx_lrb_last_mint").on(t.lastMintAt),
+  ],
+);
+
 export type ArtistRow = typeof artists.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type CollectionRow = typeof collections.$inferSelect;
@@ -766,3 +788,4 @@ export type DropScheduleRow = typeof dropSchedule.$inferSelect;
 export type SeasonalLeaderboardCutoffRow = typeof seasonalLeaderboardCutoffs.$inferSelect;
 export type SeasonalWalletLeaderboardRow = typeof seasonalWalletLeaderboard.$inferSelect;
 export type ProcessedLiveSpinRow = typeof processedLiveSpins.$inferSelect;
+export type LiveRoundBuyerRow = typeof liveRoundBuyers.$inferSelect;

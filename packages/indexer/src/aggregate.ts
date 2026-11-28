@@ -132,12 +132,20 @@ export function inferAutoRoundGroup(
   }
 
   if (objektClass === "Premier" || (num >= 400 && num < 500)) {
+    const colUpper = collectionNo.toUpperCase();
+    const isSeasonalPremierReward = colUpper === "401Z" || colUpper === "402Z";
     return {
       slug: `${artistId}-${seasonLower}-pco-${collectionNo.toLowerCase()}`,
       title: `${season} PCO ${collectionNo}`,
-      saleMechanic: onOffline === "offline" ? "physical_scan" : "member_select",
-      includeInPopularity: onOffline === "online",
-      unitPriceUsd: onOffline === "online" ? 3.29 : null,
+      saleMechanic:
+        onOffline === "offline"
+          ? "physical_scan"
+          : isSeasonalPremierReward
+            ? "reward"
+            : "member_select",
+      includeInPopularity: onOffline === "online" && !isSeasonalPremierReward,
+      unitPriceUsd:
+        onOffline === "online" ? (isSeasonalPremierReward ? 0 : 3.29) : null,
     };
   }
 

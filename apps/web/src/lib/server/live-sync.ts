@@ -159,12 +159,20 @@ function inferAutoRoundGroup(
     };
   }
   if (objektClass === "Premier" || (num >= 400 && num < 500)) {
+    const colUpper = collectionNo.toUpperCase();
+    const isSeasonalPremierReward = colUpper === "401Z" || colUpper === "402Z";
     return {
       slug: `${artistId}-${seasonLower}-pco-${collectionNo.toLowerCase()}`,
       title: `${season} PCO ${collectionNo}`,
-      saleMechanic: onOffline === "offline" ? "physical_scan" : "member_select",
-      includeInPopularity: onOffline === "online",
-      unitPriceUsd: onOffline === "online" ? 3.29 : null,
+      saleMechanic:
+        onOffline === "offline"
+          ? "physical_scan"
+          : isSeasonalPremierReward
+            ? "reward"
+            : "member_select",
+      includeInPopularity: onOffline === "online" && !isSeasonalPremierReward,
+      unitPriceUsd:
+        onOffline === "online" ? (isSeasonalPremierReward ? 0 : 3.29) : null,
     };
   }
   if (objektClass === "Motion" || (num >= 500 && num < 600)) {
@@ -521,44 +529,174 @@ export async function recomputeSaleRoundsInD1(
     }
   }
 
+  // Load exact deduplicated unique buyers & top-wallet counts from rolling `live_round_buyers` ledger
+  const exactRoundBuyersMap = new Map<string, number>();
+  const exactMemberBuyersMap = new Map<
+    string,
+    { uniqueBuyers: number; topBuyerMints: number }
+  >();
+  if (validRounds.length > 0) {
+    try {
+      const targetSlugs = validRounds.map((r) => r.slug);
+      for (let i = 0; i < targetSlugs.length; i += 40) {
+        const slice = targetSlugs.slice(i, i + 40);
+        const placeholders = slice.map(() => "?").join(", ");
+        const [roundRes, memberRes] = await rawD1.batch([
+          rawD1
+            .prepare(
+              `SELECT round_slug, COUNT(DISTINCT wallet) AS cnt
+               FROM live_round_buyers
+               WHERE round_slug IN (${placeholders})
+               GROUP BY round_slug`,
+            )
+            .bind(...slice),
+          rawD1
+            .prepare(
+              `SELECT round_slug, member_id, COUNT(*) AS cnt, MAX(mint_count) AS top_mints
+               FROM live_round_buyers
+               WHERE round_slug IN (${placeholders})
+               GROUP BY round_slug, member_id`,
+            )
+            .bind(...slice),
+        ]);
+        for (const row of (roundRes?.results ?? []) as Array<{
+          round_slug: string;
+          cnt: number;
+        }>) {
+          exactRoundBuyersMap.set(row.round_slug, Number(row.cnt ?? 0));
+        }
+        for (const row of (memberRes?.results ?? []) as Array<{
+          round_slug: string;
+          member_id: string;
+          cnt: number;
+          top_mints: number;
+        }>) {
+          exactMemberBuyersMap.set(`${row.round_slug}|${row.member_id}`, {
+            uniqueBuyers: Number(row.cnt ?? 0),
+            topBuyerMints: Number(row.top_mints ?? 0),
+          });
+        }
+      }
+    } catch {
+      // Graceful before migration 0014 is applied
+    }
+  }
+
   const statsByRound = new Map<
     string,
     ReturnType<typeof computeArtistSeriesStats> extends Map<string, infer V> ? V : never
   >();
 
   for (const artistId of ["triples", "artms"] as const) {
-    const input: SaleRoundInput[] = validRounds
-      .filter((r) => r.artistId === artistId)
-      .map((r) => ({
-        slug: r.slug,
-        artistId: r.artistId,
-        startAt: r.startAt,
-        includeInPopularity: r.includeInPopularity,
-        memberMints: Array.from(r.memberMints.entries()).map(
-          ([memberId, mintCount]) => {
-            const prev = existingStatByKey.get(`${r.slug}|${memberId}`);
-            const estBuyers = Math.max(
-              prev?.uniqueBuyers ?? 0,
-              r.memberUniqueBuyers.get(memberId) ?? 1,
-            );
-            const topBuyerMints =
-              prev?.topBuyerSharePct !== null &&
-              prev?.topBuyerSharePct !== undefined &&
-              prev.mintCount === mintCount
-                ? Math.round((prev.topBuyerSharePct / 100) * mintCount)
-                : undefined;
-            return {
-              memberId,
-              mintCount,
-              uniqueBuyers: Math.min(mintCount, estBuyers),
-              topBuyerMints,
-            };
-          },
-        ),
-      }));
-    const computed = computeArtistSeriesStats(input);
+    const artistDirtyRounds = validRounds.filter((r) => r.artistId === artistId);
+    if (artistDirtyRounds.length === 0) continue;
+
+    const dirtySlugSet = new Set(artistDirtyRounds.map((r) => r.slug));
+
+    // Include recent historical popularity rounds as context so incremental live ticks
+    // compute exact rank deltas, rolling 5/10 baselines, and anomaly flags instead of
+    // running on a 1-round vacuum.
+    const historyRoundsMeta = existingRounds
+      .filter(
+        (r) =>
+          r.artistId === artistId &&
+          r.includeInPopularity &&
+          !dirtySlugSet.has(r.slug),
+      )
+      .sort((a, b) => b.startAt.localeCompare(a.startAt))
+      .slice(0, 30);
+
+    const historyStatsBySlug = new Map<
+      string,
+      Array<{
+        memberId: string;
+        mintCount: number;
+        uniqueBuyers: number;
+        topBuyerSharePct: number | null;
+      }>
+    >();
+    if (historyRoundsMeta.length > 0) {
+      const historySlugs = historyRoundsMeta.map((r) => r.slug);
+      const histRows = await db
+        .select({
+          roundSlug: saleRoundMemberStats.roundSlug,
+          memberId: saleRoundMemberStats.memberId,
+          mintCount: saleRoundMemberStats.mintCount,
+          uniqueBuyers: saleRoundMemberStats.uniqueBuyers,
+          topBuyerSharePct: saleRoundMemberStats.topBuyerSharePct,
+        })
+        .from(saleRoundMemberStats)
+        .where(inArray(saleRoundMemberStats.roundSlug, historySlugs));
+
+      for (const row of histRows) {
+        const arr = historyStatsBySlug.get(row.roundSlug) ?? [];
+        arr.push(row);
+        historyStatsBySlug.set(row.roundSlug, arr);
+      }
+    }
+
+    const historyInputs: SaleRoundInput[] = historyRoundsMeta
+      .map((r) => {
+        const rows = historyStatsBySlug.get(r.slug) ?? [];
+        return {
+          slug: r.slug,
+          artistId: r.artistId,
+          startAt: r.startAt,
+          includeInPopularity: true,
+          memberMints: rows.map((row) => ({
+            memberId: row.memberId,
+            mintCount: row.mintCount,
+            uniqueBuyers: row.uniqueBuyers,
+            topBuyerMints:
+              row.topBuyerSharePct !== null && row.topBuyerSharePct !== undefined
+                ? Math.round((row.topBuyerSharePct / 100) * row.mintCount)
+                : undefined,
+          })),
+        };
+      })
+      .filter((r) => r.memberMints.length >= 2);
+
+    const dirtyInputs: SaleRoundInput[] = artistDirtyRounds.map((r) => ({
+      slug: r.slug,
+      artistId: r.artistId,
+      startAt: r.startAt,
+      includeInPopularity: r.includeInPopularity,
+      memberMints: Array.from(r.memberMints.entries()).map(
+        ([memberId, mintCount]) => {
+          const prev = existingStatByKey.get(`${r.slug}|${memberId}`);
+          const exact = exactMemberBuyersMap.get(`${r.slug}|${memberId}`);
+          const prevBuyers = prev?.uniqueBuyers ?? 0;
+          const exactBuyers = exact?.uniqueBuyers ?? 0;
+          // NEVER let a partial post-migration `live_round_buyers` entry (e.g. 1 spin mint
+          // on a closed 2025 season) overwrite a higher historical deduplicated buyer count!
+          const estBuyers = Math.max(
+            prevBuyers,
+            exactBuyers,
+            r.memberUniqueBuyers.get(memberId) ?? 1,
+          );
+          const useExactTop = Boolean(exact && exactBuyers >= prevBuyers);
+          const topBuyerMints = useExactTop
+            ? exact!.topBuyerMints
+            : prev?.topBuyerSharePct !== null &&
+                prev?.topBuyerSharePct !== undefined &&
+                prev.mintCount === mintCount
+              ? Math.round((prev.topBuyerSharePct / 100) * mintCount)
+              : undefined;
+          return {
+            memberId,
+            mintCount,
+            uniqueBuyers: Math.min(mintCount, Math.max(1, estBuyers)),
+            topBuyerMints,
+          };
+        },
+      ),
+    }));
+
+    const computed = computeArtistSeriesStats([...historyInputs, ...dirtyInputs]);
     for (const [slug, rows] of computed.entries()) {
-      statsByRound.set(slug, rows);
+      if (dirtySlugSet.has(slug)) {
+        statsByRound.set(slug, rows);
+      }
     }
   }
 
@@ -605,7 +743,15 @@ export async function recomputeSaleRoundsInD1(
        unique_buyers_share_pct = excluded.unique_buyers_share_pct,
        relative_index = excluded.relative_index,
        unique_buyers_relative_index = excluded.unique_buyers_relative_index,
-       z_score = excluded.z_score`,
+       z_score = excluded.z_score,
+       rank_delta_prev = excluded.rank_delta_prev,
+       rolling5_rank = excluded.rolling5_rank,
+       rolling10_rank = excluded.rolling10_rank,
+       rolling5_relative_index = excluded.rolling5_relative_index,
+       rolling10_relative_index = excluded.rolling10_relative_index,
+       is_anomaly = excluded.is_anomaly,
+       anomaly_direction = excluded.anomaly_direction,
+       anomaly_reason = excluded.anomaly_reason`,
   );
 
   for (const r of validRounds) {
@@ -617,8 +763,10 @@ export async function recomputeSaleRoundsInD1(
       0,
       ...Array.from(r.memberUniqueBuyers.values()),
     );
+    const exactRoundBuyers = exactRoundBuyersMap.get(r.slug) ?? 0;
     const roundUniqueBuyers = Math.max(
       existingRoundBuyers.get(r.slug) ?? 0,
+      exactRoundBuyers,
       maxMemberBuyers,
     );
     stmts.push(
@@ -1841,6 +1989,16 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
     string,
     { slug: string; date: string; count: number; minters: Set<string> }
   >();
+  const roundBuyerDeltas = new Map<
+    string,
+    {
+      roundSlug: string;
+      memberId: string;
+      wallet: string;
+      count: number;
+      lastAt: string;
+    }
+  >();
 
   let trackedMintsAdded = 0;
   let processedCount = 0;
@@ -1895,6 +2053,31 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
         count: 1,
         minters: new Set([item.minter]),
       });
+    }
+
+    if (memberId) {
+      const autoRound = inferAutoRoundGroup(
+        meta.artistId,
+        meta.season,
+        meta.objektClass,
+        meta.collectionNo,
+        meta.onOffline,
+      );
+      const walletLower = item.minter.toLowerCase();
+      const rbKey = `${autoRound.slug}|${memberId}|${walletLower}`;
+      const rbPrev = roundBuyerDeltas.get(rbKey);
+      if (rbPrev) {
+        rbPrev.count++;
+        if (item.timestampIso > rbPrev.lastAt) rbPrev.lastAt = item.timestampIso;
+      } else {
+        roundBuyerDeltas.set(rbKey, {
+          roundSlug: autoRound.slug,
+          memberId,
+          wallet: walletLower,
+          count: 1,
+          lastAt: item.timestampIso,
+        });
+      }
     }
   }
 
@@ -2008,6 +2191,43 @@ export async function runEdgeLiveSync(env: Env): Promise<LiveSyncResult> {
 
   for (let i = 0; i < writeStmts.length; i += 80) {
     await env.DB.batch(writeStmts.slice(i, i + 80));
+  }
+
+  // Record exact distinct (round_slug, member_id, wallet) mints in rolling 45-day ledger
+  // so multi-card & multi-member drops compute true deduplicated unique buyer counts live.
+  if (roundBuyerDeltas.size > 0) {
+    try {
+      const upsertRoundBuyer = env.DB.prepare(
+        `INSERT INTO live_round_buyers (round_slug, member_id, wallet, mint_count, last_mint_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(round_slug, member_id, wallet) DO UPDATE SET
+           mint_count = live_round_buyers.mint_count + excluded.mint_count,
+           last_mint_at = MAX(live_round_buyers.last_mint_at, excluded.last_mint_at)`,
+      );
+      const rbStmts: D1PreparedStatement[] = [];
+      for (const rb of roundBuyerDeltas.values()) {
+        rbStmts.push(
+          upsertRoundBuyer.bind(
+            rb.roundSlug,
+            rb.memberId,
+            rb.wallet,
+            rb.count,
+            rb.lastAt,
+          ),
+        );
+      }
+      const rbCutoffIso = new Date(Date.now() - 45 * 86_400_000).toISOString();
+      rbStmts.push(
+        env.DB
+          .prepare("DELETE FROM live_round_buyers WHERE last_mint_at < ?")
+          .bind(rbCutoffIso),
+      );
+      for (let i = 0; i < rbStmts.length; i += 80) {
+        await env.DB.batch(rbStmts.slice(i, i + 80));
+      }
+    } catch {
+      // Graceful before migration 0014 is applied
+    }
   }
 
   // Process live COSMO Spins up to newCursorBlock, pair 90s Spin rewards, and auto-enrich any brand-new drops via Apollo

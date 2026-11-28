@@ -314,13 +314,16 @@ export function classifyApolloProvenance(
       desc,
     ) ||
     /(?:later|also)\s+sold\s+(?:on|in)\s+(?:the\s+)?cosmo/i.test(desc) ||
-    /cosmo\s+(?:app\s+)?shop/i.test(desc) && !/\b(?:not|never)\s+sold\b/i.test(desc) && !/^gifted\b/i.test(descLower);
+    (/cosmo\s+(?:app\s+)?shop/i.test(desc) &&
+      !/\b(?:not|never)\s+sold\b/i.test(desc) &&
+      !/^gifted\b/i.test(descLower) &&
+      !/randomly\s+obtained\s+from/i.test(desc));
 
   const hasGiftOrBonusVerb =
     /^(?:gifted|dropped|awarded|rewarded|given|distributed|airdropped)\b/i.test(
       desc,
     ) ||
-    /\b(?:set\s+owners?|set\s+completion|completion\s+(?:bonus|reward)|for\s+completing|grid\s+reward|full\s+set\s+bonus|participat(?:ed|ing)\s+in|pre-?voting|live\s+voting|1st\s+win|music\s+show|attend(?:ing|ed|ees|ance)|check-?in|lucky\s+draw\s+winner|giveaway|raffle|discord\s+event|mission\s+reward|free\s+(?:objekt|drop|gift|reward))\b/i.test(
+    /\b(?:set\s+owners?|set\s+completion|completion\s+(?:bonus|reward)|for\s+completing|grid\s+reward|full\s+set\s+bonus|participat(?:ed|ing)\s+in|pre-?voting|live\s+voting|1st\s+win|music\s+show|attend(?:ing|ed|ees|ance)|check-?in|lucky\s+draw\s+winner|giveaway|raffle|discord\s+event|mission\s+reward|free\s+(?:objekt|drop|gift|reward)|ranking\s+top\s+\d+)\b/i.test(
       desc,
     );
 
@@ -339,12 +342,12 @@ export function classifyApolloProvenance(
     };
   }
 
-  // Pure shop-event set-completion bonuses (e.g., ARTMS Autumn Breeze 371Z:
-  // eventType === "shop", description === "Gifted to Autumn Breeze Event 368-370Z set owners.")
-  const isSetCompletionBonus =
+  // Pure shop-event set-completion bonuses AND seasonal leaderboard/pack rewards
+  // (e.g., ARTMS Autumn Breeze 371Z, Divine02 305Z top-100 reward, 401Z/402Z Premier ranking/FCO-pack pulls)
+  const isSetCompletionOrRankingReward =
     /^gifted\b/i.test(desc) &&
     !hasExplicitCosmoSale &&
-    (/\b(?:set\s+owners?|owners?\s+of|completing|completion|collecting|all\s+\d+|bonus|participat|voting|attend|winner|subscribers?|members?|holders?|purchasing|buyers?)\b/i.test(
+    (/\b(?:set\s+owners?|owners?\s+of|completing|completion|collecting|all\s+\d+|bonus|participat|voting|attend|winner|subscribers?|members?|holders?|purchasing|buyers?|ranking\s+top\s+\d+|randomly\s+obtained)\b/i.test(
       desc,
     ) ||
       evType === "shop" ||
@@ -352,7 +355,7 @@ export function classifyApolloProvenance(
       evType === "tour" ||
       evType === "collaboration");
 
-  if (isSetCompletionBonus) {
+  if (isSetCompletionOrRankingReward) {
     return {
       provenanceClass: "free_reward",
       isFreeDistribution: true,

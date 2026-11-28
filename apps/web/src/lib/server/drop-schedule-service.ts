@@ -22,6 +22,7 @@ export interface RoundLinkCandidate {
   totalMints: number;
   uniqueBuyers: number;
   includeInPopularity: boolean;
+  isBuyersLowerBound?: boolean;
   apolloEventSlug?: string | null;
   apolloEventName?: string | null;
 }
@@ -344,6 +345,7 @@ export async function getArtistDropSchedule(
       linkedRoundTitle: matched?.title ?? null,
       linkedRoundMints: matched?.totalMints ?? null,
       linkedRoundBuyers: matched?.uniqueBuyers ?? null,
+      linkedRoundBuyersIsFloor: matched?.isBuyersLowerBound ?? false,
     };
   });
 

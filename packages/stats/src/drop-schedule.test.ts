@@ -4,7 +4,9 @@ import {
   computeDropProgressPct,
   formatDropCountdown,
   formatDropWindow,
+  isLongRunningSeasonalDrop,
   parseApolloEventsHtml,
+  selectRecentPastDropsPreview,
   type DropScheduleEntry,
 } from "./drop-schedule.js";
 
@@ -100,5 +102,66 @@ describe("drop-schedule", () => {
       Date.parse("2026-11-24T12:00:00.000Z"),
     );
     expect(pct).toBeCloseTo(50, 5);
+  });
+
+  it("distinguishes long-running seasonal editions from limited drops and deduplicates same-day seasonal closes in preview", () => {
+    expect(
+      isLongRunningSeasonalDrop({
+        eventType: "seasonal",
+        startAt: "2026-07-29T01:00:00.000Z",
+        endAt: "2027-02-19T04:50:00.000Z",
+      }),
+    ).toBe(true);
+    expect(
+      isLongRunningSeasonalDrop({
+        eventType: "seasonal",
+        startAt: "2026-11-26T01:00:00.000Z",
+        endAt: null,
+      }),
+    ).toBe(true);
+    expect(
+      isLongRunningSeasonalDrop({
+        eventType: "seasonal",
+        startAt: "2026-11-26T01:15:00.000Z",
+        endAt: "2026-12-02T02:45:00.000Z",
+      }),
+    ).toBe(false);
+
+    const makePast = (
+      slug: string,
+      eventType: string,
+      endAt: string,
+    ): DropScheduleEntry => ({
+      slug,
+      artistId: "triples",
+      name: slug,
+      description: null,
+      eventType,
+      startAt: "2026-05-26T01:00:00.000Z",
+      endAt,
+      twitterUrl: null,
+      imageUrl: null,
+      status: "past",
+      linkedRoundSlug: null,
+      linkedRoundTitle: null,
+      linkedRoundMints: null,
+      linkedRoundBuyers: null,
+    });
+
+    const preview = selectRecentPastDropsPreview(
+      [
+        makePast("cream02-3rd", "seasonal", "2026-11-26T01:00:00.000Z"),
+        makePast("cream02-2nd", "seasonal", "2026-11-26T01:00:00.000Z"),
+        makePast("cream02-1st", "seasonal", "2026-11-26T01:00:00.000Z"),
+        makePast("msnz-1st-anniv", "shop", "2026-11-25T02:30:00.000Z"),
+        makePast("hatchi-2nd-anniv", "shop", "2026-11-21T01:00:00.000Z"),
+      ],
+      3,
+    );
+    expect(preview.map((p) => p.slug)).toEqual([
+      "cream02-3rd",
+      "msnz-1st-anniv",
+      "hatchi-2nd-anniv",
+    ]);
   });
 });

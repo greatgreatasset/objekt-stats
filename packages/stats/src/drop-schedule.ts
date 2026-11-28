@@ -28,6 +28,7 @@ export interface DropScheduleEntry extends ParsedDropScheduleItem {
   linkedRoundTitle: string | null;
   linkedRoundMints: number | null;
   linkedRoundBuyers: number | null;
+  linkedRoundBuyersIsFloor?: boolean;
 }
 
 export interface ClassifiedDropSchedule {
@@ -298,4 +299,57 @@ export function computeDropProgressPct(
   if (Number.isNaN(s) || Number.isNaN(e) || e <= s) return null;
   const pct = ((nowMs - s) / (e - s)) * 100;
   return Math.max(0, Math.min(100, pct));
+}
+
+/**
+ * Identifies multi-month open seasonal editions (e.g. Atom02 2nd Edition running 200+ days,
+ * or open-ended Divine02 1st Edition) vs. limited-time drops (e.g. 24h shop or 6-day Motion drops).
+ */
+export function isLongRunningSeasonalDrop(
+  entry: Pick<DropScheduleEntry, "eventType" | "startAt" | "endAt">,
+): boolean {
+  if (entry.eventType.toLowerCase() !== "seasonal") return false;
+  if (!entry.endAt) return true;
+  if (!entry.startAt) return false;
+  const s = Date.parse(entry.startAt);
+  const e = Date.parse(entry.endAt);
+  if (Number.isNaN(s) || Number.isNaN(e)) return false;
+  return e - s > 30 * 86_400_000;
+}
+
+/**
+ * Selects a balanced overview preview of recent past drops so simultaneous end-of-season
+ * editions (e.g. Cream02 1st/2nd/3rd Edition all closing together) don't crowd out
+ * recent limited-time shop drops. The full Past tab still shows every entry chronologically.
+ */
+export function selectRecentPastDropsPreview(
+  past: DropScheduleEntry[],
+  limit = 3,
+): DropScheduleEntry[] {
+  if (past.length <= limit) return past;
+
+  const picked: DropScheduleEntry[] = [];
+  const deferred: DropScheduleEntry[] = [];
+  const seenSeasonalEndDays = new Set<string>();
+
+  for (const item of past) {
+    if (picked.length >= limit) break;
+    const isSeasonal = item.eventType.toLowerCase() === "seasonal";
+    const endDay = (item.endAt ?? item.startAt ?? "").slice(0, 10);
+    if (isSeasonal && endDay && seenSeasonalEndDays.has(endDay)) {
+      deferred.push(item);
+      continue;
+    }
+    if (isSeasonal && endDay) {
+      seenSeasonalEndDays.add(endDay);
+    }
+    picked.push(item);
+  }
+
+  for (const item of deferred) {
+    if (picked.length >= limit) break;
+    picked.push(item);
+  }
+
+  return picked;
 }

@@ -258,6 +258,50 @@ describe("computeArtistSeriesStats", () => {
     expect(surge.anomalyDirection).toBe("surge");
     expect(surge.anomalyReason).not.toMatch(/dropped|fell/i);
   });
+
+  it("compares rank deltas and anomaly baselines only against comparable roster sizes (8-member vs 24-member)", () => {
+    const makeFull24 = (slug: string, startAt: string): SaleRoundInput => ({
+      slug,
+      artistId: "triples",
+      startAt,
+      includeInPopularity: true,
+      memberMints: Array.from({ length: 24 }, (_, i) => ({
+        memberId: i === 15 ? "triples-seoyeon" : `triples-m${i + 1}`,
+        mintCount: (500 - i * 8) * 2,
+        uniqueBuyers: 500 - i * 8,
+      })),
+    });
+
+    const unit8: SaleRoundInput = {
+      slug: "unit-8-fco",
+      artistId: "triples",
+      startAt: "2026-11-26T01:00:00Z",
+      includeInPopularity: true,
+      memberMints: [
+        { memberId: "triples-seoyeon", mintCount: 8400, uniqueBuyers: 471 },
+        { memberId: "triples-m1", mintCount: 7400, uniqueBuyers: 417 },
+        { memberId: "triples-m2", mintCount: 5100, uniqueBuyers: 273 },
+        { memberId: "triples-m3", mintCount: 4800, uniqueBuyers: 281 },
+        { memberId: "triples-m4", mintCount: 4200, uniqueBuyers: 239 },
+        { memberId: "triples-m5", mintCount: 4100, uniqueBuyers: 211 },
+        { memberId: "triples-m6", mintCount: 3900, uniqueBuyers: 207 },
+        { memberId: "triples-m7", mintCount: 3600, uniqueBuyers: 171 },
+      ],
+    };
+
+    const series = computeArtistSeriesStats([
+      makeFull24("ot24-1", "2026-10-01T00:00:00Z"),
+      makeFull24("ot24-2", "2026-11-01T00:00:00Z"),
+      unit8,
+    ]);
+
+    const seoyeonUnit = series
+      .get("unit-8-fco")
+      ?.find((s) => s.memberId === "triples-seoyeon")!;
+    // Must NOT subtract 8-member #1 from 24-member #16 to emit fake +15 rank jump / anomaly
+    expect(seoyeonUnit.rankDeltaPrev).toBeNull();
+    expect(seoyeonUnit.isAnomaly).toBe(false);
+  });
 });
 
 describe("correlateEventsForMemberRound", () => {
